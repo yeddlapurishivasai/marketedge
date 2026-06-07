@@ -7,7 +7,7 @@ import {
 } from '../api';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  LineChart, Line, ScatterChart, Scatter, ZAxis, Cell
+  LineChart, Line
 } from 'recharts';
 import {
   ChevronLeft, Play, TrendingUp, Target, Zap, ArrowDownRight,
@@ -233,16 +233,6 @@ export default function AnalysisPage() {
   const lineData = history.map(h => ({
     date: new Date(h.runDate).toLocaleDateString(),
     stage2: h.totalStage2
-  }));
-
-  const scatterData = rotation.map(r => ({
-    x: Number(r.avgRSScore),
-    y: Number(r.avgRSDelta2w),
-    z: r.stockCount,
-    name: r.sectorName,
-    quadrant: r.quadrant,
-    accum: r.accumulatingCount,
-    dist: r.distributingCount
   }));
 
   return (
