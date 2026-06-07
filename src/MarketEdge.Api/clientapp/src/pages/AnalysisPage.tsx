@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { Market, Sector, Stage2Summary, SectorRotation, Stage2History, StageAnalysisResult } from '../api';
+import type { Market, Sector, Stage2Summary, SectorRotation, SectorRotationHistory, Stage2History, StageAnalysisResult } from '../api';
 import {
   fetchSectors, fetchStage2Summary, fetchSectorRotation, fetchStage2History,
-  fetchJobRuns, triggerAnalysis, fetchStage2Stocks
+  fetchJobRuns, triggerAnalysis, fetchStage2Stocks, fetchRotationHistory
 } from '../api';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -30,6 +30,100 @@ function formatMarketCap(value?: number): string {
   return value.toFixed(0);
 }
 
+// Custom SVG Quadrant Chart with colored backgrounds and sector labels
+function QuadrantChart({ data, currentDate }: { data: SectorRotation[]; currentDate?: string }) {
+  const W = 900, H = 600;
+  const pad = { top: 30, right: 30, bottom: 50, left: 60 };
+  const cw = W - pad.left - pad.right;
+  const ch = H - pad.top - pad.bottom;
+
+  if (!data.length) return <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>No rotation data available</div>;
+
+  // Compute bounds symmetrically around 0
+  const xs = data.map(d => Number(d.avgRSScore));
+  const ys = data.map(d => Number(d.avgRSDelta2w));
+  const xMax = Math.max(Math.abs(Math.min(...xs)), Math.abs(Math.max(...xs)), 5) * 1.2;
+  const yMax = Math.max(Math.abs(Math.min(...ys)), Math.abs(Math.max(...ys)), 5) * 1.2;
+
+  const toX = (v: number) => pad.left + ((v + xMax) / (2 * xMax)) * cw;
+  const toY = (v: number) => pad.top + ((yMax - v) / (2 * yMax)) * ch;
+
+  const cx = toX(0), cy = toY(0);
+
+  const [hovered, setHovered] = useState<string | null>(null);
+
+  return (
+    <div style={{ position: 'relative' }}>
+      {currentDate && (
+        <div style={{ position: 'absolute', top: 8, right: 12, fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+          {new Date(currentDate).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
+        </div>
+      )}
+      <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} style={{ fontFamily: 'inherit' }}>
+        {/* Quadrant backgrounds */}
+        <rect x={pad.left} y={pad.top} width={cx - pad.left} height={cy - pad.top} fill="#dcfce7" opacity={0.5} /> {/* Improving: top-left */}
+        <rect x={cx} y={pad.top} width={pad.left + cw - cx} height={cy - pad.top} fill="#bbf7d0" opacity={0.5} /> {/* Leading: top-right */}
+        <rect x={pad.left} y={cy} width={cx - pad.left} height={pad.top + ch - cy} fill="#fce4ec" opacity={0.5} /> {/* Lagging: bottom-left */}
+        <rect x={cx} y={cy} width={pad.left + cw - cx} height={pad.top + ch - cy} fill="#fef9c3" opacity={0.5} /> {/* Weakening: bottom-right */}
+
+        {/* Quadrant labels */}
+        <text x={pad.left + (cx - pad.left) / 2} y={pad.top + (cy - pad.top) / 2} textAnchor="middle" fontSize="28" fill="#22c55e" opacity={0.2} fontWeight="bold">Improving</text>
+        <text x={cx + (pad.left + cw - cx) / 2} y={pad.top + (cy - pad.top) / 2} textAnchor="middle" fontSize="28" fill="#16a34a" opacity={0.2} fontWeight="bold">Leading</text>
+        <text x={pad.left + (cx - pad.left) / 2} y={cy + (pad.top + ch - cy) / 2} textAnchor="middle" fontSize="28" fill="#ef4444" opacity={0.2} fontWeight="bold">Lagging</text>
+        <text x={cx + (pad.left + cw - cx) / 2} y={cy + (pad.top + ch - cy) / 2} textAnchor="middle" fontSize="28" fill="#f59e0b" opacity={0.2} fontWeight="bold">Weakening</text>
+
+        {/* Axes */}
+        <line x1={pad.left} y1={cy} x2={pad.left + cw} y2={cy} stroke="var(--border)" strokeWidth={1.5} strokeDasharray="4 2" />
+        <line x1={cx} y1={pad.top} x2={cx} y2={pad.top + ch} stroke="var(--border)" strokeWidth={1.5} strokeDasharray="4 2" />
+
+        {/* Axis labels */}
+        <text x={pad.left + cw} y={cy - 6} textAnchor="end" fontSize="11" fill="var(--text-muted)">Relative Strength →</text>
+        <text x={cx + 6} y={pad.top + 14} textAnchor="start" fontSize="11" fill="var(--text-muted)">↑ Momentum</text>
+
+        {/* Data points with labels */}
+        {data.map((d) => {
+          const px = toX(Number(d.avgRSScore));
+          const py = toY(Number(d.avgRSDelta2w));
+          const isHov = hovered === d.sectorName;
+          const color = QUADRANT_COLORS[d.quadrant] || '#888';
+          return (
+            <g key={d.sectorId} onMouseEnter={() => setHovered(d.sectorName)} onMouseLeave={() => setHovered(null)} style={{ cursor: 'pointer' }}>
+              <circle cx={px} cy={py} r={isHov ? 7 : 5} fill={color} stroke="#fff" strokeWidth={1.5} opacity={isHov ? 1 : 0.8} />
+              <text x={px + 8} y={py + 4} fontSize={isHov ? 11 : 9} fill="var(--text)" fontWeight={isHov ? 600 : 400} opacity={0.9}>
+                {d.sectorName.length > 25 ? d.sectorName.slice(0, 22) + '…' : d.sectorName}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+
+      {/* Tooltip on hover */}
+      {hovered && (() => {
+        const d = data.find(x => x.sectorName === hovered);
+        if (!d) return null;
+        return (
+          <div style={{
+            position: 'absolute', top: 40, left: 70,
+            background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8,
+            padding: '10px 14px', fontSize: '0.8rem', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', zIndex: 10
+          }}>
+            <strong>{d.sectorName}</strong>
+            <div style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
+              RS: {Number(d.avgRSScore).toFixed(2)} | Mom: {Number(d.avgRSDelta2w).toFixed(2)}
+            </div>
+            <div style={{ color: 'var(--text-secondary)' }}>
+              Stocks: {d.stockCount} | <span style={{ color: QUADRANT_COLORS[d.quadrant] }}>{d.quadrant}</span>
+            </div>
+            <div style={{ color: 'var(--text-secondary)' }}>
+              Accum: {d.accumulatingCount} | Dist: {d.distributingCount}
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
 export default function AnalysisPage() {
   const { market } = useParams<{ market: string }>();
   const navigate = useNavigate();
@@ -51,6 +145,9 @@ export default function AnalysisPage() {
   const [stocks, setStocks] = useState<StageAnalysisResult[]>([]);
   const [classFilter, setClassFilter] = useState('');
   const [stocksLoading, setStocksLoading] = useState(false);
+  const [rotationHistory, setRotationHistory] = useState<SectorRotationHistory[]>([]);
+  const [timelineIdx, setTimelineIdx] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -67,6 +164,9 @@ export default function AnalysisPage() {
         setLatestRunId(runs[0].id);
         const rot = await fetchSectorRotation(m, runs[0].id).catch(() => []);
         setRotation(rot);
+        const rotHist = await fetchRotationHistory(m, 12).catch(() => []);
+        setRotationHistory(rotHist);
+        if (rotHist.length > 0) setTimelineIdx(rotHist.length - 1);
       }
     } catch { /* ignore */ }
     setLoading(false);
@@ -106,6 +206,21 @@ export default function AnalysisPage() {
   useEffect(() => {
     if (tab === 'stocks' && latestRunId) loadStocks(classFilter);
   }, [tab, classFilter, latestRunId, loadStocks]);
+
+  // Timeline animation
+  useEffect(() => {
+    if (!isPlaying || rotationHistory.length <= 1) return;
+    const interval = setInterval(() => {
+      setTimelineIdx(prev => {
+        if (prev >= rotationHistory.length - 1) {
+          setIsPlaying(false);
+          return prev;
+        }
+        return prev + 1;
+      });
+    }, 1500);
+    return () => clearInterval(interval);
+  }, [isPlaying, rotationHistory.length]);
 
   if (loading) return <div className="loading"><div className="spinner" />Loading analysis...</div>;
 
@@ -422,50 +537,48 @@ export default function AnalysisPage() {
                 <Target size={18} style={{ marginRight: 8 }} />
                 Sector Rotation — Relative Strength vs Momentum
               </h3>
-              <div className="quadrant-labels">
-                <span className="ql-improving">↗ Improving</span>
-                <span className="ql-leading">⬆ Leading</span>
-                <span className="ql-lagging">↙ Lagging</span>
-                <span className="ql-weakening">↘ Weakening</span>
-              </div>
-              <ResponsiveContainer width="100%" height={500}>
-                <ScatterChart margin={{ top: 20, right: 40, bottom: 40, left: 40 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis
-                    type="number" dataKey="x" name="RS Score"
-                    stroke="var(--text-muted)" label={{ value: 'Relative Strength →', position: 'bottom', offset: 20, fill: 'var(--text-secondary)' }}
-                  />
-                  <YAxis
-                    type="number" dataKey="y" name="RS Momentum"
-                    stroke="var(--text-muted)" label={{ value: 'Momentum →', angle: -90, position: 'left', offset: 10, fill: 'var(--text-secondary)' }}
-                  />
-                  <ZAxis type="number" dataKey="z" range={[100, 1000]} name="Stocks" />
-                  <Tooltip
-                    contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 }}
-                    content={({ payload }) => {
-                      if (!payload?.length) return null;
-                      const d = payload[0].payload;
-                      return (
-                        <div style={{ padding: 12, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 }}>
-                          <strong>{d.name}</strong>
-                          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: 4 }}>
-                            <div>RS: {d.x.toFixed(2)} | Mom: {d.y.toFixed(2)}</div>
-                            <div>Stocks: {d.z} | <span style={{ color: QUADRANT_COLORS[d.quadrant] }}>{d.quadrant}</span></div>
-                            <div>Accumulating: {d.accum} | Distributing: {d.dist}</div>
-                          </div>
-                        </div>
-                      );
+
+              {/* Quadrant chart with colored backgrounds */}
+              <QuadrantChart
+                data={rotationHistory.length > 0 ? (rotationHistory[timelineIdx]?.sectors || []) : rotation}
+                currentDate={rotationHistory[timelineIdx]?.runDate}
+              />
+
+              {/* Timeline slider */}
+              {rotationHistory.length > 1 && (
+                <div style={{ margin: '16px 0', display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <button
+                    onClick={() => {
+                      if (isPlaying) {
+                        setIsPlaying(false);
+                      } else {
+                        setIsPlaying(true);
+                        setTimelineIdx(0);
+                      }
                     }}
+                    style={{ background: 'var(--surface-hover)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px', cursor: 'pointer', color: 'var(--text)' }}
+                  >
+                    {isPlaying ? '⏸' : '▶'}
+                  </button>
+                  <input
+                    type="range"
+                    min={0}
+                    max={rotationHistory.length - 1}
+                    value={timelineIdx}
+                    onChange={e => { setTimelineIdx(Number(e.target.value)); setIsPlaying(false); }}
+                    style={{ flex: 1 }}
                   />
-                  <Scatter data={scatterData}>
-                    {scatterData.map((entry, idx) => (
-                      <Cell key={idx} fill={QUADRANT_COLORS[entry.quadrant] || '#888'} fillOpacity={0.7} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', minWidth: 220, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    {rotationHistory.map((rh, i) => (
+                      <span key={i} style={{ fontWeight: i === timelineIdx ? 700 : 400, color: i === timelineIdx ? 'var(--primary)' : 'var(--text-muted)' }}>
+                        {i === 0 || i === rotationHistory.length - 1 || i === timelineIdx
+                          ? new Date(rh.runDate).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+                          : ''}
+                      </span>
                     ))}
-                  </Scatter>
-                  {/* Reference lines at 0 */}
-                  <CartesianGrid />
-                </ScatterChart>
-              </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
 
               {/* Sector rotation table */}
               <div className="table-container" style={{ marginTop: 24 }}>

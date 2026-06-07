@@ -247,3 +247,15 @@ export async function fetchStage2History(market: Market, maxRuns = 10): Promise<
   if (!res.ok) throw new Error('Failed to fetch history');
   return res.json();
 }
+
+export interface SectorRotationHistory {
+  runId: number;
+  runDate: string;
+  sectors: SectorRotation[];
+}
+
+export async function fetchRotationHistory(market: Market, maxRuns = 12): Promise<SectorRotationHistory[]> {
+  const res = await fetch(`${BASE}/${market}/analysis/rotation-history?maxRuns=${maxRuns}`);
+  if (!res.ok) throw new Error('Failed to fetch rotation history');
+  return res.json();
+}

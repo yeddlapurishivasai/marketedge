@@ -109,3 +109,12 @@ public class Stage2HistoryDto
     public int TotalStage2 { get; set; }
     public List<SectorStage2CountDto> BySector { get; set; } = new();
 }
+
+// --- Sector Rotation History (for animated timeline) ---
+
+public class SectorRotationHistoryDto
+{
+    public int RunId { get; set; }
+    public DateTime RunDate { get; set; }
+    public List<SectorRotationDto> Sectors { get; set; } = new();
+}

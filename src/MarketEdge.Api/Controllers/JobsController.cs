@@ -82,4 +82,14 @@ public class JobsController : ControllerBase
         var history = await _jobService.GetStage2HistoryAsync(market, maxRuns);
         return Ok(history);
     }
+
+    [HttpGet("api/{market}/analysis/rotation-history")]
+    public async Task<IActionResult> GetRotationHistory(string market, [FromQuery] int maxRuns = 12)
+    {
+        if (market != "india" && market != "us")
+            return BadRequest("Market must be 'india' or 'us'");
+
+        var history = await _jobService.GetSectorRotationHistoryAsync(market, maxRuns);
+        return Ok(history);
+    }
 }

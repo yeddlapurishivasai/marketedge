@@ -15,6 +15,7 @@ public interface IJobService
     Task<List<StageAnalysisResultDto>> GetStage2StocksAsync(int runId, string? classification = null, int? sectorId = null);
     Task<List<SectorRotationDto>> GetSectorRotationAsync(int runId);
     Task<List<Stage2HistoryDto>> GetStage2HistoryAsync(string market, int maxRuns = 10);
+    Task<List<SectorRotationHistoryDto>> GetSectorRotationHistoryAsync(string market, int maxRuns = 12);
 }
 
 public class JobService : IJobService
@@ -255,6 +256,48 @@ public class JobService : IJobService
                     SectorName = g.Key,
                     Stage2Count = g.Count()
                 })
+                .ToList()
+        }).OrderBy(h => h.RunDate).ToList();
+    }
+
+    public async Task<List<SectorRotationHistoryDto>> GetSectorRotationHistoryAsync(string market, int maxRuns = 12)
+    {
+        var runs = await _db.JobRuns
+            .Where(j => j.JobType == "stage2_analysis" && j.Market == market && j.Status == "completed")
+            .OrderByDescending(j => j.CompletedAt)
+            .Take(maxRuns)
+            .ToListAsync();
+
+        if (!runs.Any()) return new List<SectorRotationHistoryDto>();
+
+        var runIds = runs.Select(r => r.Id).ToList();
+        var allResults = market == "india"
+            ? await _db.IndianStageAnalysisResults
+                .Where(r => runIds.Contains(r.RunId) && r.RSScore != null && r.RSDelta2w != null)
+                .ToListAsync<StageAnalysisResultBase>()
+            : await _db.USStageAnalysisResults
+                .Where(r => runIds.Contains(r.RunId) && r.RSScore != null && r.RSDelta2w != null)
+                .ToListAsync<StageAnalysisResultBase>();
+
+        return runs.Select(run => new SectorRotationHistoryDto
+        {
+            RunId = run.Id,
+            RunDate = run.CompletedAt ?? run.CreatedAt,
+            Sectors = allResults
+                .Where(r => r.RunId == run.Id)
+                .GroupBy(r => new { r.SectorId, r.SectorName })
+                .Select(g => new SectorRotationDto
+                {
+                    SectorId = g.Key.SectorId,
+                    SectorName = g.Key.SectorName,
+                    AvgRSScore = g.Average(r => r.RSScore ?? 0),
+                    AvgRSDelta2w = g.Average(r => r.RSDelta2w ?? 0),
+                    Quadrant = GetQuadrant(g.Average(r => r.RSScore ?? 0), g.Average(r => r.RSDelta2w ?? 0)),
+                    StockCount = g.Count(),
+                    AccumulatingCount = g.Count(r => r.ADClassification == "accumulating"),
+                    DistributingCount = g.Count(r => r.ADClassification == "distributing")
+                })
+                .OrderByDescending(s => s.AvgRSScore)
                 .ToList()
         }).OrderBy(h => h.RunDate).ToList();
     }
