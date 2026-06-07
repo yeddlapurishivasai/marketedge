@@ -95,6 +95,20 @@ def _build_metrics(
     }
 
 
+class RunCancelled(Exception):
+    """Raised when a run is cancelled by the user."""
+    pass
+
+
+def _check_cancelled(conn: Any, run_id: int) -> None:
+    """Check if the run has been cancelled in the DB; raise if so."""
+    row = conn.cursor().execute(
+        "SELECT Status FROM dbo.JobRuns WHERE Id = ?", run_id
+    ).fetchone()
+    if row and row.Status == "cancelled":
+        raise RunCancelled(f"Run {run_id} was cancelled by user")
+
+
 def _fetch_single_market_cap(symbol: str, market: str) -> int | None:
     """Fetch market cap for a single stock."""
     from stage_analysis import _to_yfinance_symbol
@@ -218,7 +232,8 @@ def process_message(message_content: str) -> None:
         run_timeout = Config.MAX_RUN_TIMEOUT
 
         for sector_idx, (sector_id, sector_stocks) in enumerate(sector_list):
-            # Check timeout before each sector
+            # Check cancellation and timeout before each sector
+            _check_cancelled(conn, run_id)
             elapsed = time.monotonic() - run_start_time
             if elapsed > run_timeout:
                 raise TimeoutError(
@@ -381,6 +396,10 @@ def process_message(message_content: str) -> None:
             error="",
         )
         logger.info("Completed run %s with %s results", run_id, len(all_results))
+    except RunCancelled:
+        logger.info("Run %s was cancelled by user — stopping gracefully", run_id)
+        _set_listener_status(state="idle", current_run_id=None, current_market=None)
+        return
     except Exception as exc:
         logger.exception("Failed to process run %s", run_id)
         _set_listener_status(last_error=str(exc))
