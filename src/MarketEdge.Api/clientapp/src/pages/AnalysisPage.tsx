@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { Market, Sector, Stage2Summary, SectorRotation, SectorRotationHistory, Stage2History, StageAnalysisResult } from '../api';
 import {
@@ -11,7 +11,7 @@ import {
 } from 'recharts';
 import {
   ChevronLeft, Play, TrendingUp, Target, Zap, ArrowDownRight,
-  ArrowUpRight, Minus, Filter
+  ArrowUpRight, Minus, Filter, BarChart2
 } from 'lucide-react';
 
 const QUADRANT_COLORS: Record<string, string> = {
@@ -28,6 +28,99 @@ function formatMarketCap(value?: number): string {
   if (value >= 1e7) return `${(value / 1e7).toFixed(1)}Cr`;
   if (value >= 1e6) return `${(value / 1e6).toFixed(1)}M`;
   return value.toFixed(0);
+}
+
+// Sort state type
+type SortDir = 'asc' | 'desc' | null;
+type SortState = { key: string; dir: SortDir };
+
+function useSortableData<T>(items: T[], defaultSort?: SortState) {
+  const [sort, setSort] = useState<SortState>(defaultSort || { key: '', dir: null });
+
+  const sorted = useMemo(() => {
+    if (!sort.key || !sort.dir) return items;
+    return [...items].sort((a, b) => {
+      const av = (a as Record<string, unknown>)[sort.key];
+      const bv = (b as Record<string, unknown>)[sort.key];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (typeof av === 'number' && typeof bv === 'number') return sort.dir === 'asc' ? av - bv : bv - av;
+      const as = String(av).toLowerCase(), bs = String(bv).toLowerCase();
+      return sort.dir === 'asc' ? as.localeCompare(bs) : bs.localeCompare(as);
+    });
+  }, [items, sort]);
+
+  const toggle = (key: string) => {
+    setSort(prev => {
+      if (prev.key !== key) return { key, dir: 'desc' };
+      if (prev.dir === 'desc') return { key, dir: 'asc' };
+      return { key: '', dir: null };
+    });
+  };
+
+  return { sorted, sort, toggle };
+}
+
+function SortableHeader({ label, sortKey, sort, onSort }: { label: string; sortKey: string; sort: SortState; onSort: (k: string) => void }) {
+  const arrow = sort.key === sortKey ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+  return (
+    <th onClick={() => onSort(sortKey)} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+      {label}{arrow}
+    </th>
+  );
+}
+
+// Convert symbol to TradingView format
+function toTradingViewSymbol(symbol: string, market: Market): string {
+  if (market === 'india') {
+    // For Indian stocks use BSE exchange prefix
+    return `BSE:${symbol}`;
+  }
+  // US stocks — use NASDAQ prefix (works for most; TradingView auto-resolves)
+  return `NASDAQ:${symbol}`;
+}
+
+// TradingView Chart Modal
+function TradingViewModal({ symbol, market, onClose }: { symbol: string; market: Market; onClose: () => void }) {
+  const tvSymbol = toTradingViewSymbol(symbol, market);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 900, width: '95vw' }}>
+        <div className="modal-header">
+          <h3 className="modal-title">{symbol} — Daily Chart</h3>
+          <button className="modal-close" onClick={onClose}>×</button>
+        </div>
+        <div className="modal-body" style={{ padding: 0, height: 520 }}>
+          <iframe
+            src={`https://s.tradingview.com/widgetembed/?frameElementId=tv_chart&symbol=${encodeURIComponent(tvSymbol)}&interval=D&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=f1f3f6&studies=MAExp%4010&studies=MAExp%4020&studies=MAExp%4050&studies=Volume%40tv-basicstudies&theme=dark&style=1&timezone=exchange&withdateranges=1&showpopupbutton=0&studies_overrides=%7B%7D&overrides=%7B%7D&enabled_features=[]&disabled_features=[]&locale=en&utm_source=localhost&utm_medium=widget_new&utm_campaign=chart`}
+            style={{ width: '100%', height: '100%', border: 'none' }}
+            title={`TradingView chart for ${symbol}`}
+            allowFullScreen
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Chart button next to symbol
+function ChartButton({ symbol, onClick }: { symbol: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title={`Open chart for ${symbol}`}
+      style={{
+        background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px',
+        color: 'var(--primary)', opacity: 0.7, display: 'inline-flex', alignItems: 'center'
+      }}
+      onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+      onMouseLeave={e => (e.currentTarget.style.opacity = '0.7')}
+    >
+      <BarChart2 size={14} />
+    </button>
+  );
 }
 
 // Custom SVG Quadrant Chart with colored backgrounds and sector labels
@@ -148,6 +241,12 @@ export default function AnalysisPage() {
   const [rotationHistory, setRotationHistory] = useState<SectorRotationHistory[]>([]);
   const [timelineIdx, setTimelineIdx] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [chartSymbol, setChartSymbol] = useState<string | null>(null);
+
+  const top25Sort = useSortableData(summary?.top25 || [], { key: 'rsScore', dir: 'desc' });
+  const sectorSort = useSortableData(summary?.bySector || []);
+  const rotationSort = useSortableData(rotation);
+  const stocksSort = useSortableData(stocks);
 
   const load = useCallback(async () => {
     try {
@@ -460,22 +559,24 @@ export default function AnalysisPage() {
                 <thead>
                   <tr>
                     <th>#</th>
-                    <th>Symbol</th>
-                    <th>Company</th>
-                    <th>Sector</th>
-                    <th>Price</th>
-                    <th>RS Score</th>
-                    <th>RS Rank</th>
-                    <th>Momentum</th>
-                    <th>Quadrant</th>
-                    <th>A/D</th>
-                    <th>Classification</th>
+                    <th></th>
+                    <SortableHeader label="Symbol" sortKey="symbol" sort={top25Sort.sort} onSort={top25Sort.toggle} />
+                    <SortableHeader label="Company" sortKey="companyName" sort={top25Sort.sort} onSort={top25Sort.toggle} />
+                    <SortableHeader label="Sector" sortKey="sectorName" sort={top25Sort.sort} onSort={top25Sort.toggle} />
+                    <SortableHeader label="Price" sortKey="closePrice" sort={top25Sort.sort} onSort={top25Sort.toggle} />
+                    <SortableHeader label="RS Score" sortKey="rsScore" sort={top25Sort.sort} onSort={top25Sort.toggle} />
+                    <SortableHeader label="RS Rank" sortKey="rsRank" sort={top25Sort.sort} onSort={top25Sort.toggle} />
+                    <SortableHeader label="Momentum" sortKey="momentumScore" sort={top25Sort.sort} onSort={top25Sort.toggle} />
+                    <SortableHeader label="Quadrant" sortKey="quadrant" sort={top25Sort.sort} onSort={top25Sort.toggle} />
+                    <SortableHeader label="A/D" sortKey="adClassification" sort={top25Sort.sort} onSort={top25Sort.toggle} />
+                    <SortableHeader label="Classification" sortKey="classification" sort={top25Sort.sort} onSort={top25Sort.toggle} />
                   </tr>
                 </thead>
                 <tbody>
-                  {summary.top25.map((s, i) => (
+                  {top25Sort.sorted.map((s, i) => (
                     <tr key={s.id}>
                       <td>{i + 1}</td>
+                      <td><ChartButton symbol={s.symbol} onClick={() => setChartSymbol(s.symbol)} /></td>
                       <td className="cell-symbol">{s.symbol}</td>
                       <td>{s.companyName.length > 30 ? s.companyName.slice(0, 27) + '...' : s.companyName}</td>
                       <td className="cell-muted">{s.sectorName}</td>
@@ -509,15 +610,15 @@ export default function AnalysisPage() {
               <table className="table">
                 <thead>
                   <tr>
-                    <th>Sector</th>
-                    <th>Stage 2</th>
-                    <th>Total</th>
+                    <SortableHeader label="Sector" sortKey="sectorName" sort={sectorSort.sort} onSort={sectorSort.toggle} />
+                    <SortableHeader label="Stage 2" sortKey="stage2Count" sort={sectorSort.sort} onSort={sectorSort.toggle} />
+                    <SortableHeader label="Total" sortKey="totalCount" sort={sectorSort.sort} onSort={sectorSort.toggle} />
                     <th>% in Stage 2</th>
                     <th>Bar</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {summary.bySector.map(s => (
+                  {sectorSort.sorted.map(s => (
                     <tr key={s.sectorName}>
                       <td style={{ fontWeight: 500 }}>{s.sectorName}</td>
                       <td style={{ fontWeight: 600, color: 'var(--primary)' }}>{s.stage2Count}</td>
@@ -593,17 +694,17 @@ export default function AnalysisPage() {
                 <table className="table">
                   <thead>
                     <tr>
-                      <th>Sector</th>
-                      <th>Quadrant</th>
-                      <th>Avg RS</th>
-                      <th>Avg Momentum</th>
-                      <th>Stocks</th>
-                      <th>Accumulating</th>
-                      <th>Distributing</th>
+                      <SortableHeader label="Sector" sortKey="sectorName" sort={rotationSort.sort} onSort={rotationSort.toggle} />
+                      <SortableHeader label="Quadrant" sortKey="quadrant" sort={rotationSort.sort} onSort={rotationSort.toggle} />
+                      <SortableHeader label="Avg RS" sortKey="avgRSScore" sort={rotationSort.sort} onSort={rotationSort.toggle} />
+                      <SortableHeader label="Avg Momentum" sortKey="avgRSDelta2w" sort={rotationSort.sort} onSort={rotationSort.toggle} />
+                      <SortableHeader label="Stocks" sortKey="stockCount" sort={rotationSort.sort} onSort={rotationSort.toggle} />
+                      <SortableHeader label="Accumulating" sortKey="accumulatingCount" sort={rotationSort.sort} onSort={rotationSort.toggle} />
+                      <SortableHeader label="Distributing" sortKey="distributingCount" sort={rotationSort.sort} onSort={rotationSort.toggle} />
                     </tr>
                   </thead>
                   <tbody>
-                    {rotation.map(r => (
+                    {rotationSort.sorted.map(r => (
                       <tr key={r.sectorId}>
                         <td style={{ fontWeight: 500 }}>{r.sectorName}</td>
                         <td>
@@ -651,22 +752,24 @@ export default function AnalysisPage() {
                   <table className="table">
                     <thead>
                       <tr>
-                        <th>Symbol</th>
-                        <th>Company</th>
-                        <th>Sector</th>
-                        <th>Price</th>
-                        <th>Mkt Cap</th>
-                        <th>RS</th>
-                        <th>Rank</th>
-                        <th>Momentum</th>
-                        <th>Quadrant</th>
-                        <th>A/D</th>
-                        <th>Class</th>
+                        <th></th>
+                        <SortableHeader label="Symbol" sortKey="symbol" sort={stocksSort.sort} onSort={stocksSort.toggle} />
+                        <SortableHeader label="Company" sortKey="companyName" sort={stocksSort.sort} onSort={stocksSort.toggle} />
+                        <SortableHeader label="Sector" sortKey="sectorName" sort={stocksSort.sort} onSort={stocksSort.toggle} />
+                        <SortableHeader label="Price" sortKey="closePrice" sort={stocksSort.sort} onSort={stocksSort.toggle} />
+                        <SortableHeader label="Mkt Cap" sortKey="marketCap" sort={stocksSort.sort} onSort={stocksSort.toggle} />
+                        <SortableHeader label="RS" sortKey="rsScore" sort={stocksSort.sort} onSort={stocksSort.toggle} />
+                        <SortableHeader label="Rank" sortKey="rsRank" sort={stocksSort.sort} onSort={stocksSort.toggle} />
+                        <SortableHeader label="Momentum" sortKey="momentumScore" sort={stocksSort.sort} onSort={stocksSort.toggle} />
+                        <SortableHeader label="Quadrant" sortKey="quadrant" sort={stocksSort.sort} onSort={stocksSort.toggle} />
+                        <SortableHeader label="A/D" sortKey="adClassification" sort={stocksSort.sort} onSort={stocksSort.toggle} />
+                        <SortableHeader label="Class" sortKey="classification" sort={stocksSort.sort} onSort={stocksSort.toggle} />
                       </tr>
                     </thead>
                     <tbody>
-                      {stocks.map(s => (
+                      {stocksSort.sorted.map(s => (
                         <tr key={s.id}>
+                          <td><ChartButton symbol={s.symbol} onClick={() => setChartSymbol(s.symbol)} /></td>
                           <td className="cell-symbol">{s.symbol}</td>
                           <td>{s.companyName.length > 25 ? s.companyName.slice(0, 22) + '...' : s.companyName}</td>
                           <td className="cell-muted">{s.sectorName}</td>
@@ -694,6 +797,11 @@ export default function AnalysisPage() {
             </>
           )}
         </>
+      )}
+
+      {/* TradingView Chart Modal */}
+      {chartSymbol && (
+        <TradingViewModal symbol={chartSymbol} market={m} onClose={() => setChartSymbol(null)} />
       )}
     </div>
   );
