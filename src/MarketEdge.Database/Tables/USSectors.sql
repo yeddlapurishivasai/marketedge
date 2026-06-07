@@ -1,0 +1,8 @@
+CREATE TABLE [dbo].[USSectors]
+(
+    [Id] INT IDENTITY(1,1) NOT NULL,
+    [SectorName] NVARCHAR(200) NOT NULL,
+    [CreatedAt] DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    CONSTRAINT [PK_USSectors] PRIMARY KEY CLUSTERED ([Id]),
+    CONSTRAINT [UQ_USSectors_SectorName] UNIQUE ([SectorName])
+);
