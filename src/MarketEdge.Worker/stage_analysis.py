@@ -108,7 +108,14 @@ def fetch_benchmark_data(market: str) -> pd.DataFrame:
     )
     benchmark_data = benchmark_data.dropna(how="all").tail(60)
 
-    if benchmark_data.empty or "Close" not in benchmark_data.columns:
+    if benchmark_data.empty:
+        raise ValueError(f"Unable to fetch benchmark data for market {market}")
+
+    # yfinance may return MultiIndex columns even for single ticker
+    if isinstance(benchmark_data.columns, pd.MultiIndex):
+        benchmark_data = benchmark_data.droplevel("Ticker", axis=1)
+
+    if "Close" not in benchmark_data.columns:
         raise ValueError(f"Unable to fetch benchmark data for market {market}")
 
     return benchmark_data
@@ -152,16 +159,42 @@ def calculate_stage2(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> 
     stock_frame = stock_data.sort_index().copy()
     benchmark_frame = benchmark_data.sort_index().copy()
 
-    close = stock_frame["Close"].astype(float)
-    open_price = stock_frame["Open"].astype(float) if "Open" in stock_frame.columns else close
-    volume = stock_frame["Volume"].fillna(0).astype(float) if "Volume" in stock_frame.columns else pd.Series(0, index=stock_frame.index, dtype=float)
+    # Ensure columns are flat (not MultiIndex)
+    if isinstance(stock_frame.columns, pd.MultiIndex):
+        stock_frame.columns = stock_frame.columns.droplevel(0)
+    if isinstance(benchmark_frame.columns, pd.MultiIndex):
+        benchmark_frame.columns = benchmark_frame.columns.droplevel(0)
+
+    close = stock_frame["Close"].squeeze()
+    if isinstance(close, pd.DataFrame):
+        close = close.iloc[:, 0]
+    close = close.astype(float)
+
+    open_price = stock_frame["Open"].squeeze().astype(float) if "Open" in stock_frame.columns else close
+    if isinstance(open_price, pd.DataFrame):
+        open_price = open_price.iloc[:, 0]
+
+    volume = stock_frame["Volume"].fillna(0).squeeze().astype(float) if "Volume" in stock_frame.columns else pd.Series(0, index=stock_frame.index, dtype=float)
+    if isinstance(volume, pd.DataFrame):
+        volume = volume.iloc[:, 0]
 
     ma10_series = close.rolling(10).mean()
     ma30_series = close.rolling(30).mean()
     ma10 = float(ma10_series.iloc[-1]) if pd.notna(ma10_series.iloc[-1]) else None
     ma30 = float(ma30_series.iloc[-1]) if pd.notna(ma30_series.iloc[-1]) else None
 
-    aligned_close, aligned_benchmark = close.align(benchmark_frame["Close"].astype(float), join="inner")
+    benchmark_close = benchmark_frame["Close"].squeeze()
+    if isinstance(benchmark_close, pd.DataFrame):
+        benchmark_close = benchmark_close.iloc[:, 0]
+    benchmark_close = benchmark_close.astype(float)
+
+    aligned_close, aligned_benchmark = close.align(benchmark_close, join="inner")
+    # Deduplicate index to prevent multi-value iloc issues
+    if aligned_close.index.duplicated().any():
+        mask = ~aligned_close.index.duplicated(keep="last")
+        aligned_close = aligned_close[mask]
+        aligned_benchmark = aligned_benchmark[mask]
+
     rs_score = None
     rs_momentum = None
     quadrant = None
@@ -170,10 +203,13 @@ def calculate_stage2(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> 
         rs_line = aligned_close / aligned_benchmark
         if len(rs_line) >= 52:
             rs_line_sma52 = rs_line.rolling(52).mean()
-            latest_sma52 = rs_line_sma52.iloc[-1]
-            if pd.notna(latest_sma52) and latest_sma52 != 0:
-                rs_score = float(((rs_line.iloc[-1] / latest_sma52) - 1) * 100)
-        rs_momentum = float(((rs_line.iloc[-1] / rs_line.iloc[-5]) - 1) * 100) if rs_line.iloc[-5] != 0 else None
+            latest_sma52 = float(rs_line_sma52.iloc[-1])
+            latest_rs = float(rs_line.iloc[-1])
+            if not pd.isna(latest_sma52) and latest_sma52 != 0:
+                rs_score = float(((latest_rs / latest_sma52) - 1) * 100)
+        rs_val_now = float(rs_line.iloc[-1])
+        rs_val_prev = float(rs_line.iloc[-5])
+        rs_momentum = float(((rs_val_now / rs_val_prev) - 1) * 100) if rs_val_prev != 0 else None
 
     roc_12w = float(((close.iloc[-1] / close.iloc[-13]) - 1) * 100) if len(close) >= 13 and close.iloc[-13] != 0 else None
     roc_26w = float(((close.iloc[-1] / close.iloc[-27]) - 1) * 100) if len(close) >= 27 and close.iloc[-27] != 0 else None

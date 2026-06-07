@@ -22,6 +22,8 @@ public class TriggerAnalysisRequest
 {
     public decimal? MinMarketCap { get; set; }
     public decimal? MaxMarketCap { get; set; }
+    public List<int>? SectorIds { get; set; }
+    public int? Limit { get; set; }
 }
 
 // --- Stage Analysis Results ---

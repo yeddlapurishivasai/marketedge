@@ -140,6 +140,8 @@ export async function fetchJobRun(id: number): Promise<JobRun> {
 export interface TriggerAnalysisRequest {
   minMarketCap?: number;
   maxMarketCap?: number;
+  sectorIds?: number[];
+  limit?: number;
 }
 
 export async function triggerAnalysis(market: Market, request?: TriggerAnalysisRequest): Promise<{ runId: number }> {

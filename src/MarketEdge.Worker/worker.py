@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 import math
@@ -11,11 +12,12 @@ from azure.storage.queue import QueueClient
 
 from config import Config
 from db import (
+    clear_run_results,
     get_connection,
     get_ever_stage2_symbols,
     get_previous_stage2_symbols,
     get_stocks,
-    save_results,
+    save_single_result,
     update_job_status,
 )
 from stage_analysis import (
@@ -93,11 +95,20 @@ def _build_metrics(
 
 
 def process_message(message_content: str) -> None:
-    payload = json.loads(message_content)
+    # .NET API sends base64-encoded JSON
+    try:
+        decoded = base64.b64decode(message_content).decode("utf-8")
+        payload = json.loads(decoded)
+    except Exception:
+        payload = json.loads(message_content)
     market = str(payload["market"]).lower()
     run_id = int(payload["runId"])
     min_market_cap = _coerce_number(payload.get("minMarketCap"))
     max_market_cap = _coerce_number(payload.get("maxMarketCap"))
+    sector_ids = payload.get("sectorIds")  # list[int] or None
+    limit = payload.get("limit")  # int or None
+    if limit is not None:
+        limit = int(limit)
 
     _set_listener_status(
         queue_listener="running",
@@ -108,7 +119,7 @@ def process_message(message_content: str) -> None:
         last_message_at=_utcnow().isoformat(),
     )
 
-    logger.info("Processing run %s for market %s", run_id, market)
+    logger.info("Processing run %s for market %s (sectors=%s, limit=%s)", run_id, market, sector_ids, limit)
     conn = None
 
     try:
@@ -123,9 +134,12 @@ def process_message(message_content: str) -> None:
             error="",
         )
 
-        stocks = get_stocks(conn, market)
+        # Clear any previous results for this run (supports re-runs)
+        clear_run_results(conn, market, run_id)
+
+        stocks = get_stocks(conn, market, sector_ids=sector_ids, limit=limit)
         if not stocks:
-            raise ValueError(f"No stocks found for market {market}")
+            raise ValueError(f"No stocks found for market {market} with given filters")
 
         total_stocks = len(stocks)
         market_caps: dict[str, Any] = {}
@@ -215,7 +229,6 @@ def process_message(message_content: str) -> None:
             else:
                 result = {
                     "run_id": run_id,
-                    "market": market,
                     "symbol": stock["symbol"],
                     "company_name": stock["company_name"],
                     "sector_id": stock["sector_id"],
@@ -226,6 +239,9 @@ def process_message(message_content: str) -> None:
                 if result["is_stage2"]:
                     current_stage2_symbols.add(stock["symbol"])
                 results.append(result)
+
+                # Save each result immediately (incremental)
+                save_single_result(conn, market, result)
 
             if index == len(stocks) or index % max(1, len(stocks) // 10) == 0:
                 progress = 70 + int(index / len(stocks) * 20)
@@ -255,11 +271,28 @@ def process_message(message_content: str) -> None:
             ever_stage2_symbols,
         )
 
+        # Update classifications in DB for each result
+        results_table = "IndianStageAnalysisResults" if market == "india" else "USStageAnalysisResults"
+        cursor = conn.cursor()
         for result in results:
-            result["classification"] = classifications.get(result["symbol"])
+            cls = classifications.get(result["symbol"])
+            result["classification"] = cls
+            if cls:
+                cursor.execute(
+                    f"UPDATE dbo.{results_table} SET Classification = ? WHERE RunId = ? AND Symbol = ?",
+                    cls, run_id, result["symbol"],
+                )
+        conn.commit()
 
+        # Compute RS ranks and update in DB
         compute_rs_ranks(results)
-        save_results(conn, results)
+        for result in results:
+            if result.get("rs_rank") is not None:
+                cursor.execute(
+                    f"UPDATE dbo.{results_table} SET RSRank = ? WHERE RunId = ? AND Symbol = ?",
+                    result["rs_rank"], run_id, result["symbol"],
+                )
+        conn.commit()
 
         metrics = _build_metrics(
             market,

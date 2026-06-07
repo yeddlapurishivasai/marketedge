@@ -12,7 +12,8 @@ public class MarketEdgeDbContext : DbContext
     public DbSet<USSector> USSectors => Set<USSector>();
     public DbSet<USStock> USStocks => Set<USStock>();
     public DbSet<JobRun> JobRuns => Set<JobRun>();
-    public DbSet<StageAnalysisResult> StageAnalysisResults => Set<StageAnalysisResult>();
+    public DbSet<IndianStageAnalysisResult> IndianStageAnalysisResults => Set<IndianStageAnalysisResult>();
+    public DbSet<USStageAnalysisResult> USStageAnalysisResults => Set<USStageAnalysisResult>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -27,31 +28,31 @@ public class MarketEdgeDbContext : DbContext
             .HasForeignKey(st => st.SectorId);
 
         modelBuilder.Entity<JobRun>()
-            .HasMany(j => j.StageAnalysisResults)
+            .HasMany(j => j.IndianStageAnalysisResults)
             .WithOne(r => r.JobRun)
             .HasForeignKey(r => r.RunId);
 
-        modelBuilder.Entity<StageAnalysisResult>()
-            .Property(r => r.ClosePrice).HasColumnType("decimal(18,4)");
-        modelBuilder.Entity<StageAnalysisResult>()
-            .Property(r => r.MA10).HasColumnType("decimal(18,4)");
-        modelBuilder.Entity<StageAnalysisResult>()
-            .Property(r => r.MA30).HasColumnType("decimal(18,4)");
-        modelBuilder.Entity<StageAnalysisResult>()
-            .Property(r => r.MarketCap).HasColumnType("decimal(22,2)");
-        modelBuilder.Entity<StageAnalysisResult>()
-            .Property(r => r.RSScore).HasColumnType("decimal(10,4)");
-        modelBuilder.Entity<StageAnalysisResult>()
-            .Property(r => r.RSMomentum).HasColumnType("decimal(10,4)");
-        modelBuilder.Entity<StageAnalysisResult>()
-            .Property(r => r.MomentumScore).HasColumnType("decimal(10,4)");
-        modelBuilder.Entity<StageAnalysisResult>()
-            .Property(r => r.ROC12w).HasColumnType("decimal(10,4)");
-        modelBuilder.Entity<StageAnalysisResult>()
-            .Property(r => r.ROC26w).HasColumnType("decimal(10,4)");
-        modelBuilder.Entity<StageAnalysisResult>()
-            .Property(r => r.ROC52w).HasColumnType("decimal(10,4)");
-        modelBuilder.Entity<StageAnalysisResult>()
-            .Property(r => r.ADRatio).HasColumnType("decimal(5,4)");
+        modelBuilder.Entity<JobRun>()
+            .HasMany(j => j.USStageAnalysisResults)
+            .WithOne(r => r.JobRun)
+            .HasForeignKey(r => r.RunId);
+
+        ConfigureDecimalProperties<IndianStageAnalysisResult>(modelBuilder);
+        ConfigureDecimalProperties<USStageAnalysisResult>(modelBuilder);
+    }
+
+    private static void ConfigureDecimalProperties<T>(ModelBuilder modelBuilder) where T : StageAnalysisResultBase
+    {
+        modelBuilder.Entity<T>().Property(r => r.ClosePrice).HasColumnType("decimal(18,4)");
+        modelBuilder.Entity<T>().Property(r => r.MA10).HasColumnType("decimal(18,4)");
+        modelBuilder.Entity<T>().Property(r => r.MA30).HasColumnType("decimal(18,4)");
+        modelBuilder.Entity<T>().Property(r => r.MarketCap).HasColumnType("decimal(22,2)");
+        modelBuilder.Entity<T>().Property(r => r.RSScore).HasColumnType("decimal(10,4)");
+        modelBuilder.Entity<T>().Property(r => r.RSMomentum).HasColumnType("decimal(10,4)");
+        modelBuilder.Entity<T>().Property(r => r.MomentumScore).HasColumnType("decimal(10,4)");
+        modelBuilder.Entity<T>().Property(r => r.ROC12w).HasColumnType("decimal(10,4)");
+        modelBuilder.Entity<T>().Property(r => r.ROC26w).HasColumnType("decimal(10,4)");
+        modelBuilder.Entity<T>().Property(r => r.ROC52w).HasColumnType("decimal(10,4)");
+        modelBuilder.Entity<T>().Property(r => r.ADRatio).HasColumnType("decimal(5,4)");
     }
 }

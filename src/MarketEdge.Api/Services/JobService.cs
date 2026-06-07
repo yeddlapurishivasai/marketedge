@@ -55,6 +55,8 @@ public class JobService : IJobService
         var parameters = new Dictionary<string, object?>();
         if (request?.MinMarketCap != null) parameters["minMarketCap"] = request.MinMarketCap;
         if (request?.MaxMarketCap != null) parameters["maxMarketCap"] = request.MaxMarketCap;
+        if (request?.SectorIds != null && request.SectorIds.Count > 0) parameters["sectorIds"] = request.SectorIds;
+        if (request?.Limit != null) parameters["limit"] = request.Limit;
 
         var job = new JobRun
         {
@@ -76,6 +78,8 @@ public class JobService : IJobService
             triggeredBy = "manual",
             minMarketCap = request?.MinMarketCap,
             maxMarketCap = request?.MaxMarketCap,
+            sectorIds = request?.SectorIds,
+            limit = request?.Limit,
             timestamp = DateTime.UtcNow
         });
 
@@ -94,9 +98,9 @@ public class JobService : IJobService
 
         if (latestRun == null) return null;
 
-        var results = await _db.StageAnalysisResults
-            .Where(r => r.RunId == latestRun.Id)
-            .ToListAsync();
+        var results = market == "india"
+            ? await _db.IndianStageAnalysisResults.Where(r => r.RunId == latestRun.Id).ToListAsync<StageAnalysisResultBase>()
+            : await _db.USStageAnalysisResults.Where(r => r.RunId == latestRun.Id).ToListAsync<StageAnalysisResultBase>();
 
         var stage2 = results.Where(r => r.IsStage2).ToList();
 
@@ -131,7 +135,13 @@ public class JobService : IJobService
 
     public async Task<List<StageAnalysisResultDto>> GetStage2StocksAsync(int runId, string? classification = null, int? sectorId = null)
     {
-        var query = _db.StageAnalysisResults.Where(r => r.RunId == runId);
+        // Determine market from the job run
+        var job = await _db.JobRuns.FindAsync(runId);
+        if (job == null) return new List<StageAnalysisResultDto>();
+
+        IQueryable<StageAnalysisResultBase> query = job.Market == "india"
+            ? _db.IndianStageAnalysisResults.Where(r => r.RunId == runId)
+            : _db.USStageAnalysisResults.Where(r => r.RunId == runId);
 
         if (!string.IsNullOrEmpty(classification))
         {
@@ -157,9 +167,12 @@ public class JobService : IJobService
 
     public async Task<List<SectorRotationDto>> GetSectorRotationAsync(int runId)
     {
-        var results = await _db.StageAnalysisResults
-            .Where(r => r.RunId == runId && r.RSScore != null && r.RSMomentum != null)
-            .ToListAsync();
+        var job = await _db.JobRuns.FindAsync(runId);
+        if (job == null) return new List<SectorRotationDto>();
+
+        var results = job.Market == "india"
+            ? await _db.IndianStageAnalysisResults.Where(r => r.RunId == runId && r.RSScore != null && r.RSMomentum != null).ToListAsync<StageAnalysisResultBase>()
+            : await _db.USStageAnalysisResults.Where(r => r.RunId == runId && r.RSScore != null && r.RSMomentum != null).ToListAsync<StageAnalysisResultBase>();
 
         return results
             .GroupBy(r => new { r.SectorId, r.SectorName })
@@ -187,9 +200,9 @@ public class JobService : IJobService
             .ToListAsync();
 
         var runIds = runs.Select(r => r.Id).ToList();
-        var allResults = await _db.StageAnalysisResults
-            .Where(r => runIds.Contains(r.RunId) && r.IsStage2)
-            .ToListAsync();
+        var allResults = market == "india"
+            ? await _db.IndianStageAnalysisResults.Where(r => runIds.Contains(r.RunId) && r.IsStage2).ToListAsync<StageAnalysisResultBase>()
+            : await _db.USStageAnalysisResults.Where(r => runIds.Contains(r.RunId) && r.IsStage2).ToListAsync<StageAnalysisResultBase>();
 
         return runs.Select(run => new Stage2HistoryDto
         {
@@ -240,7 +253,7 @@ public class JobService : IJobService
         };
     }
 
-    private static StageAnalysisResultDto MapResult(StageAnalysisResult r)
+    private static StageAnalysisResultDto MapResult(StageAnalysisResultBase r)
     {
         return new StageAnalysisResultDto
         {

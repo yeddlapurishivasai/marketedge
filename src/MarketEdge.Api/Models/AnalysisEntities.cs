@@ -19,16 +19,15 @@ public class JobRun
     public DateTime? CompletedAt { get; set; }
     public DateTime CreatedAt { get; set; }
 
-    public ICollection<StageAnalysisResult> StageAnalysisResults { get; set; } = new List<StageAnalysisResult>();
+    public ICollection<IndianStageAnalysisResult> IndianStageAnalysisResults { get; set; } = new List<IndianStageAnalysisResult>();
+    public ICollection<USStageAnalysisResult> USStageAnalysisResults { get; set; } = new List<USStageAnalysisResult>();
 }
 
-[Table("StageAnalysisResults")]
-public class StageAnalysisResult
+public abstract class StageAnalysisResultBase
 {
     [Key]
     public int Id { get; set; }
     public int RunId { get; set; }
-    public string Market { get; set; } = string.Empty;
     public string Symbol { get; set; } = string.Empty;
     public string CompanyName { get; set; } = string.Empty;
     public int SectorId { get; set; }
@@ -57,7 +56,18 @@ public class StageAnalysisResult
     public string? ADClassification { get; set; }
 
     public DateTime CreatedAt { get; set; }
+}
 
+[Table("IndianStageAnalysisResults")]
+public class IndianStageAnalysisResult : StageAnalysisResultBase
+{
+    [ForeignKey(nameof(RunId))]
+    public JobRun JobRun { get; set; } = null!;
+}
+
+[Table("USStageAnalysisResults")]
+public class USStageAnalysisResult : StageAnalysisResultBase
+{
     [ForeignKey(nameof(RunId))]
     public JobRun JobRun { get; set; } = null!;
 }

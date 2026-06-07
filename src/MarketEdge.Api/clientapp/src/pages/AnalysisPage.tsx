@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { Market, Stage2Summary, SectorRotation, Stage2History, StageAnalysisResult } from '../api';
+import type { Market, Sector, Stage2Summary, SectorRotation, Stage2History, StageAnalysisResult } from '../api';
 import {
-  fetchStage2Summary, fetchSectorRotation, fetchStage2History,
+  fetchSectors, fetchStage2Summary, fetchSectorRotation, fetchStage2History,
   fetchJobRuns, triggerAnalysis, fetchStage2Stocks
 } from '../api';
 import {
@@ -44,6 +44,9 @@ export default function AnalysisPage() {
   const [showTriggerModal, setShowTriggerModal] = useState(false);
   const [minMcap, setMinMcap] = useState('');
   const [maxMcap, setMaxMcap] = useState('');
+  const [limitVal, setLimitVal] = useState('');
+  const [selectedSectorIds, setSelectedSectorIds] = useState<number[]>([]);
+  const [allSectors, setAllSectors] = useState<Sector[]>([]);
   const [latestRunId, setLatestRunId] = useState<number | null>(null);
   const [stocks, setStocks] = useState<StageAnalysisResult[]>([]);
   const [classFilter, setClassFilter] = useState('');
@@ -51,13 +54,15 @@ export default function AnalysisPage() {
 
   const load = useCallback(async () => {
     try {
-      const [s, h, runs] = await Promise.all([
+      const [s, h, runs, sectors] = await Promise.all([
         fetchStage2Summary(m).catch(() => null),
         fetchStage2History(m).catch(() => []),
-        fetchJobRuns({ market: m, jobType: 'stage2_analysis', pageSize: 1 }).catch(() => [])
+        fetchJobRuns({ market: m, jobType: 'stage2_analysis', pageSize: 1 }).catch(() => []),
+        fetchSectors(m).catch(() => [])
       ]);
       setSummary(s);
       setHistory(h);
+      setAllSectors(sectors);
       if (runs.length > 0 && runs[0].status === 'completed') {
         setLatestRunId(runs[0].id);
         const rot = await fetchSectorRotation(m, runs[0].id).catch(() => []);
@@ -72,13 +77,17 @@ export default function AnalysisPage() {
   const handleTrigger = async () => {
     setTriggering(true);
     try {
-      const req: { minMarketCap?: number; maxMarketCap?: number } = {};
+      const req: { minMarketCap?: number; maxMarketCap?: number; sectorIds?: number[]; limit?: number } = {};
       if (minMcap) req.minMarketCap = parseFloat(minMcap);
       if (maxMcap) req.maxMarketCap = parseFloat(maxMcap);
+      if (selectedSectorIds.length > 0) req.sectorIds = selectedSectorIds;
+      if (limitVal) req.limit = parseInt(limitVal);
       await triggerAnalysis(m, req);
       setShowTriggerModal(false);
       setMinMcap('');
       setMaxMcap('');
+      setLimitVal('');
+      setSelectedSectorIds([]);
       navigate(`/${m}/jobs`);
     } catch { /* ignore */ }
     setTriggering(false);
@@ -152,8 +161,49 @@ export default function AnalysisPage() {
             </div>
             <div className="modal-body">
               <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: 16 }}>
-                Configure market cap filter (optional). Leave blank to analyze all stocks.
+                Configure filters for the analysis run. Leave fields blank for defaults.
               </p>
+
+              {/* Sector Selection */}
+              <div className="form-group">
+                <label className="form-label">Sectors (select one or more, leave empty for all)</label>
+                <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
+                  {allSectors.map(s => (
+                    <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', cursor: 'pointer', fontSize: '0.85rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedSectorIds.includes(s.id)}
+                        onChange={e => {
+                          if (e.target.checked) setSelectedSectorIds(prev => [...prev, s.id]);
+                          else setSelectedSectorIds(prev => prev.filter(id => id !== s.id));
+                        }}
+                      />
+                      {s.sectorName} <span style={{ color: 'var(--text-secondary)', marginLeft: 'auto' }}>({s.stockCount})</span>
+                    </label>
+                  ))}
+                </div>
+                {selectedSectorIds.length > 0 && (
+                  <div style={{ marginTop: 4, fontSize: '0.8rem', color: 'var(--primary)' }}>
+                    {selectedSectorIds.length} sector(s) selected
+                    <button style={{ marginLeft: 8, fontSize: '0.75rem', color: 'var(--danger)', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
+                      onClick={() => setSelectedSectorIds([])}>Clear</button>
+                  </div>
+                )}
+              </div>
+
+              {/* Limit */}
+              <div className="form-group">
+                <label className="form-label">Stock Limit (max stocks to analyze)</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  placeholder="Leave blank for all stocks in selected sectors"
+                  value={limitVal}
+                  onChange={e => setLimitVal(e.target.value)}
+                />
+              </div>
+
+              {/* Market Cap */}
               <div className="form-group">
                 <label className="form-label">Min Market Cap ({m === 'india' ? '₹' : '$'})</label>
                 <input

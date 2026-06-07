@@ -1,8 +1,7 @@
-CREATE TABLE [dbo].[StageAnalysisResults]
+CREATE TABLE [dbo].[IndianStageAnalysisResults]
 (
     [Id] INT IDENTITY(1,1) NOT NULL,
     [RunId] INT NOT NULL,
-    [Market] NVARCHAR(10) NOT NULL,
     [Symbol] NVARCHAR(50) NOT NULL,
     [CompanyName] NVARCHAR(500) NOT NULL,
     [SectorId] INT NOT NULL,
@@ -38,13 +37,13 @@ CREATE TABLE [dbo].[StageAnalysisResults]
 
     [CreatedAt] DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
 
-    CONSTRAINT [PK_StageAnalysisResults] PRIMARY KEY CLUSTERED ([Id]),
-    CONSTRAINT [FK_StageAnalysisResults_JobRuns] FOREIGN KEY ([RunId]) REFERENCES [dbo].[JobRuns]([Id]),
-    CONSTRAINT [CK_StageAnalysisResults_Classification] CHECK ([Classification] IN ('continuing', 'new', 'reentry', 'removed')),
-    CONSTRAINT [CK_StageAnalysisResults_Quadrant] CHECK ([Quadrant] IN ('leading', 'weakening', 'lagging', 'improving')),
-    CONSTRAINT [CK_StageAnalysisResults_ADClassification] CHECK ([ADClassification] IN ('accumulating', 'distributing', 'neutral')),
-    INDEX [IX_StageAnalysisResults_RunId] NONCLUSTERED ([RunId]),
-    INDEX [IX_StageAnalysisResults_Symbol] NONCLUSTERED ([Symbol]),
-    INDEX [IX_StageAnalysisResults_IsStage2] NONCLUSTERED ([IsStage2]) INCLUDE ([RunId], [Symbol], [Classification]),
-    INDEX [IX_StageAnalysisResults_RunId_IsStage2] NONCLUSTERED ([RunId], [IsStage2]) INCLUDE ([Symbol], [SectorName], [RSScore], [MomentumScore])
+    CONSTRAINT [PK_IndianStageAnalysisResults] PRIMARY KEY CLUSTERED ([Id]),
+    CONSTRAINT [FK_IndianStageAnalysisResults_JobRuns] FOREIGN KEY ([RunId]) REFERENCES [dbo].[JobRuns]([Id]),
+    CONSTRAINT [CK_IndianStageAnalysisResults_Classification] CHECK ([Classification] IN ('continuing', 'new', 'reentry', 'removed')),
+    CONSTRAINT [CK_IndianStageAnalysisResults_Quadrant] CHECK ([Quadrant] IN ('leading', 'weakening', 'lagging', 'improving')),
+    CONSTRAINT [CK_IndianStageAnalysisResults_ADClassification] CHECK ([ADClassification] IN ('accumulating', 'distributing', 'neutral')),
+    INDEX [IX_IndianStageAnalysisResults_RunId] NONCLUSTERED ([RunId]),
+    INDEX [IX_IndianStageAnalysisResults_Symbol] NONCLUSTERED ([Symbol]),
+    INDEX [IX_IndianStageAnalysisResults_IsStage2] NONCLUSTERED ([IsStage2]) INCLUDE ([RunId], [Symbol], [Classification]),
+    INDEX [IX_IndianStageAnalysisResults_RunId_IsStage2] NONCLUSTERED ([RunId], [IsStage2]) INCLUDE ([Symbol], [SectorName], [RSScore], [MomentumScore])
 )
