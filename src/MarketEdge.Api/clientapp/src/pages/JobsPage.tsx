@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { Market, JobRun } from '../api';
-import { fetchJobRuns, fetchJobRun } from '../api';
+import { fetchJobRuns, fetchJobRun, cancelJobRun } from '../api';
 import {
   ChevronLeft, RefreshCw, Clock, CheckCircle2, XCircle,
-  Loader2, AlertCircle, Activity
+  Loader2, AlertCircle, Activity, StopCircle
 } from 'lucide-react';
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
@@ -84,6 +84,18 @@ export default function JobsPage() {
     }
   };
 
+  const handleCancel = async (runId: number) => {
+    if (!confirm(`Cancel job run #${runId}?`)) return;
+    try {
+      await cancelJobRun(runId);
+      await load();
+      if (selectedRun?.id === runId) {
+        const updated = await fetchJobRun(runId);
+        setSelectedRun(updated);
+      }
+    } catch { /* ignore */ }
+  };
+
   if (loading) return <div className="loading"><div className="spinner" />Loading jobs...</div>;
 
   return (
@@ -152,6 +164,7 @@ export default function JobsPage() {
                   <th>Progress</th>
                   <th>Started</th>
                   <th>Duration</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -177,6 +190,18 @@ export default function JobsPage() {
                     </td>
                     <td className="cell-muted">{run.startedAt ? formatDate(run.startedAt) : '—'}</td>
                     <td className="cell-muted">{formatDuration(run.durationSeconds)}</td>
+                    <td>
+                      {(run.status === 'running' || run.status === 'queued') && (
+                        <button
+                          className="btn btn-outline btn-sm"
+                          style={{ color: 'var(--danger)', borderColor: 'var(--danger)', padding: '2px 8px' }}
+                          onClick={e => { e.stopPropagation(); handleCancel(run.id); }}
+                          title="Cancel this job"
+                        >
+                          <StopCircle size={14} />
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -192,6 +217,15 @@ export default function JobsPage() {
               <span className={`status-badge ${STATUS_CLASS[selectedRun.status]}`}>
                 {STATUS_ICON[selectedRun.status]} {selectedRun.status}
               </span>
+              {(selectedRun.status === 'running' || selectedRun.status === 'queued') && (
+                <button
+                  className="btn btn-outline btn-sm"
+                  style={{ color: 'var(--danger)', borderColor: 'var(--danger)', marginLeft: 'auto' }}
+                  onClick={() => handleCancel(selectedRun.id)}
+                >
+                  <StopCircle size={14} /> Cancel
+                </button>
+              )}
             </div>
 
             <div className="run-detail-body">

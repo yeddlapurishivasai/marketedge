@@ -135,6 +135,11 @@ export async function fetchJobRun(id: number): Promise<JobRun> {
   return res.json();
 }
 
+export async function cancelJobRun(id: number): Promise<void> {
+  const res = await fetch(`${BASE}/jobs/${id}/cancel`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to cancel job run');
+}
+
 // ── Stage 2 Analysis ──
 
 export interface TriggerAnalysisRequest {

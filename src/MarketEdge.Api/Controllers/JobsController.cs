@@ -31,6 +31,14 @@ public class JobsController : ControllerBase
         return run == null ? NotFound() : Ok(run);
     }
 
+    [HttpPost("api/jobs/{id}/cancel")]
+    public async Task<IActionResult> CancelRun(int id)
+    {
+        var cancelled = await _jobService.CancelRunAsync(id);
+        if (!cancelled) return NotFound("Run not found or already finished");
+        return Ok(new { cancelled = true });
+    }
+
     // ── Stage 2 Analysis ──
 
     [HttpPost("api/{market}/analysis/trigger")]

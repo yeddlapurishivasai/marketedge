@@ -11,6 +11,7 @@ public interface IJobService
     Task<List<JobRunDto>> GetRunsAsync(string? market = null, string? jobType = null, int page = 1, int pageSize = 20);
     Task<JobRunDto?> GetRunByIdAsync(int id);
     Task<int> TriggerStageAnalysisAsync(string market, TriggerAnalysisRequest? request);
+    Task<bool> CancelRunAsync(int id);
     Task<Stage2SummaryDto?> GetLatestStage2SummaryAsync(string market);
     Task<List<StageAnalysisResultDto>> GetStage2StocksAsync(int runId, string? classification = null, int? sectorId = null);
     Task<List<SectorRotationDto>> GetSectorRotationAsync(int runId);
@@ -149,6 +150,19 @@ public class JobService : IJobService
         await _queueClient.SendMessageAsync(Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(message)));
 
         return job.Id;
+    }
+
+    public async Task<bool> CancelRunAsync(int id)
+    {
+        var job = await _db.JobRuns.FindAsync(id);
+        if (job == null) return false;
+        if (job.Status is "completed" or "failed" or "cancelled") return false;
+
+        job.Status = "cancelled";
+        job.ErrorMessage = "Cancelled by user";
+        job.CompletedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return true;
     }
 
     public async Task<Stage2SummaryDto?> GetLatestStage2SummaryAsync(string market)
