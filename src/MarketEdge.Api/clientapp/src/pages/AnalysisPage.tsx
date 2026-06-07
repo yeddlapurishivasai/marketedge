@@ -272,6 +272,24 @@ export default function AnalysisPage() {
               {/* Sector Selection */}
               <div className="form-group">
                 <label className="form-label">Sectors (select one or more, leave empty for all)</label>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+                    onClick={() => setSelectedSectorIds(allSectors.map(s => s.id))}
+                  >
+                    Select All
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+                    onClick={() => setSelectedSectorIds([])}
+                  >
+                    Deselect All
+                  </button>
+                </div>
                 <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
                   {allSectors.map(s => (
                     <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', cursor: 'pointer', fontSize: '0.85rem' }}>
