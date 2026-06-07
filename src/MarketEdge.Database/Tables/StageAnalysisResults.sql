@@ -16,17 +16,23 @@ CREATE TABLE [dbo].[IndianStageAnalysisResults]
     -- Stage 2 determination
     [IsStage2] BIT NOT NULL DEFAULT 0,
     [Classification] NVARCHAR(20) NULL,
+    [WeeksInStage2] INT NULL,
 
-    -- Relative Strength
+    -- Relative Strength (Mansfield RS vs benchmark)
     [RSScore] DECIMAL(10,4) NULL,
     [RSRank] INT NULL,
-    [RSMomentum] DECIMAL(10,4) NULL,
+    [RS1w] DECIMAL(10,4) NULL,
+    [RS2w] DECIMAL(10,4) NULL,
+    [RS3w] DECIMAL(10,4) NULL,
+    [RSDelta1w] DECIMAL(10,4) NULL,
+    [RSDelta2w] DECIMAL(10,4) NULL,
+    [RSDelta3w] DECIMAL(10,4) NULL,
 
-    -- Momentum
+    -- Momentum (short-term for swing/positional)
     [MomentumScore] DECIMAL(10,4) NULL,
-    [ROC12w] DECIMAL(10,4) NULL,
-    [ROC26w] DECIMAL(10,4) NULL,
-    [ROC52w] DECIMAL(10,4) NULL,
+    [ROC1w] DECIMAL(10,4) NULL,
+    [ROC2w] DECIMAL(10,4) NULL,
+    [ROC3w] DECIMAL(10,4) NULL,
 
     -- Sector Rotation
     [Quadrant] NVARCHAR(20) NULL,

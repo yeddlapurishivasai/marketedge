@@ -142,6 +142,7 @@ export interface TriggerAnalysisRequest {
   maxMarketCap?: number;
   sectorIds?: number[];
   limit?: number;
+  force?: boolean;
 }
 
 export async function triggerAnalysis(market: Market, request?: TriggerAnalysisRequest): Promise<{ runId: number }> {
@@ -167,13 +168,19 @@ export interface StageAnalysisResult {
   marketCap?: number;
   isStage2: boolean;
   classification?: string;
+  weeksInStage2?: number;
   rsScore?: number;
   rsRank?: number;
-  rsMomentum?: number;
+  rs1w?: number;
+  rs2w?: number;
+  rs3w?: number;
+  rsDelta1w?: number;
+  rsDelta2w?: number;
+  rsDelta3w?: number;
   momentumScore?: number;
-  roc12w?: number;
-  roc26w?: number;
-  roc52w?: number;
+  roc1w?: number;
+  roc2w?: number;
+  roc3w?: number;
   quadrant?: string;
   adRatio?: number;
   adClassification?: string;
@@ -215,7 +222,7 @@ export interface SectorRotation {
   sectorName: string;
   sectorId: number;
   avgRSScore: number;
-  avgRSMomentum: number;
+  avgRSDelta2w: number;
   quadrant: string;
   stockCount: number;
   accumulatingCount: number;

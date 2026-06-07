@@ -196,7 +196,12 @@ def calculate_stage2(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> 
         aligned_benchmark = aligned_benchmark[mask]
 
     rs_score = None
-    rs_momentum = None
+    rs_1w = None
+    rs_2w = None
+    rs_3w = None
+    rs_delta_1w = None
+    rs_delta_2w = None
+    rs_delta_3w = None
     quadrant = None
 
     if not aligned_close.empty and len(aligned_close) >= 5:
@@ -207,24 +212,35 @@ def calculate_stage2(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> 
             latest_rs = float(rs_line.iloc[-1])
             if not pd.isna(latest_sma52) and latest_sma52 != 0:
                 rs_score = float(((latest_rs / latest_sma52) - 1) * 100)
-        rs_val_now = float(rs_line.iloc[-1])
-        rs_val_prev = float(rs_line.iloc[-5])
-        rs_momentum = float(((rs_val_now / rs_val_prev) - 1) * 100) if rs_val_prev != 0 else None
 
-    roc_12w = float(((close.iloc[-1] / close.iloc[-13]) - 1) * 100) if len(close) >= 13 and close.iloc[-13] != 0 else None
-    roc_26w = float(((close.iloc[-1] / close.iloc[-27]) - 1) * 100) if len(close) >= 27 and close.iloc[-27] != 0 else None
-    roc_52w = float(((close.iloc[-1] / close.iloc[-53]) - 1) * 100) if len(close) >= 53 and close.iloc[-53] != 0 else None
+        # RS values at 1w, 2w, 3w ago (raw RS line values as Mansfield scores)
+        rs_val_now = float(rs_line.iloc[-1])
+        if len(rs_line) >= 2:
+            rs_1w = float(rs_line.iloc[-2])  # RS value 1 week ago
+            rs_delta_1w = float(((rs_val_now / rs_1w) - 1) * 100) if rs_1w != 0 else None
+        if len(rs_line) >= 3:
+            rs_2w = float(rs_line.iloc[-3])  # RS value 2 weeks ago
+            rs_delta_2w = float(((rs_val_now / rs_2w) - 1) * 100) if rs_2w != 0 else None
+        if len(rs_line) >= 4:
+            rs_3w = float(rs_line.iloc[-4])  # RS value 3 weeks ago
+            rs_delta_3w = float(((rs_val_now / rs_3w) - 1) * 100) if rs_3w != 0 else None
+
+    # Price momentum: 1w, 2w, 3w ROC (suited for swing & positional)
+    roc_1w = float(((close.iloc[-1] / close.iloc[-2]) - 1) * 100) if len(close) >= 2 and close.iloc[-2] != 0 else None
+    roc_2w = float(((close.iloc[-1] / close.iloc[-3]) - 1) * 100) if len(close) >= 3 and close.iloc[-3] != 0 else None
+    roc_3w = float(((close.iloc[-1] / close.iloc[-4]) - 1) * 100) if len(close) >= 4 and close.iloc[-4] != 0 else None
 
     momentum_score = None
-    if roc_12w is not None and roc_26w is not None and roc_52w is not None:
-        momentum_score = float((0.4 * roc_12w) + (0.3 * roc_26w) + (0.3 * roc_52w))
+    if roc_1w is not None and roc_2w is not None and roc_3w is not None:
+        momentum_score = float((0.4 * roc_1w) + (0.3 * roc_2w) + (0.3 * roc_3w))
 
-    if rs_score is not None and rs_momentum is not None:
-        if rs_score > 0 and rs_momentum > 0:
+    # Quadrant based on RS Score (X) and RS Delta 2w (Y) for faster signal
+    if rs_score is not None and rs_delta_2w is not None:
+        if rs_score > 0 and rs_delta_2w > 0:
             quadrant = "leading"
-        elif rs_score > 0 and rs_momentum <= 0:
+        elif rs_score > 0 and rs_delta_2w <= 0:
             quadrant = "weakening"
-        elif rs_score <= 0 and rs_momentum <= 0:
+        elif rs_score <= 0 and rs_delta_2w <= 0:
             quadrant = "lagging"
         else:
             quadrant = "improving"
@@ -271,11 +287,16 @@ def calculate_stage2(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> 
         "ma30": ma30,
         "is_stage2": is_stage2,
         "rs_score": rs_score,
-        "rs_momentum": rs_momentum,
+        "rs_1w": rs_1w,
+        "rs_2w": rs_2w,
+        "rs_3w": rs_3w,
+        "rs_delta_1w": rs_delta_1w,
+        "rs_delta_2w": rs_delta_2w,
+        "rs_delta_3w": rs_delta_3w,
         "momentum_score": momentum_score,
-        "roc_12w": roc_12w,
-        "roc_26w": roc_26w,
-        "roc_52w": roc_52w,
+        "roc_1w": roc_1w,
+        "roc_2w": roc_2w,
+        "roc_3w": roc_3w,
         "quadrant": quadrant,
         "ad_ratio": ad_ratio,
         "ad_classification": ad_classification,

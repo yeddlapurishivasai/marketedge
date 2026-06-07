@@ -122,7 +122,7 @@ export default function AnalysisPage() {
 
   const scatterData = rotation.map(r => ({
     x: Number(r.avgRSScore),
-    y: Number(r.avgRSMomentum),
+    y: Number(r.avgRSDelta2w),
     z: r.stockCount,
     name: r.sectorName,
     quadrant: r.quadrant,
@@ -491,8 +491,8 @@ export default function AnalysisPage() {
                         <td style={{ color: Number(r.avgRSScore) > 0 ? 'var(--success)' : 'var(--danger)' }}>
                           {Number(r.avgRSScore).toFixed(2)}
                         </td>
-                        <td style={{ color: Number(r.avgRSMomentum) > 0 ? 'var(--success)' : 'var(--danger)' }}>
-                          {Number(r.avgRSMomentum).toFixed(2)}
+                        <td style={{ color: Number(r.avgRSDelta2w) > 0 ? 'var(--success)' : 'var(--danger)' }}>
+                          {Number(r.avgRSDelta2w).toFixed(2)}
                         </td>
                         <td>{r.stockCount}</td>
                         <td style={{ color: 'var(--success)' }}>{r.accumulatingCount}</td>

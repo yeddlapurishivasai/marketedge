@@ -24,6 +24,11 @@ public class TriggerAnalysisRequest
     public decimal? MaxMarketCap { get; set; }
     public List<int>? SectorIds { get; set; }
     public int? Limit { get; set; }
+    /// <summary>
+    /// When true, forces a new run even if one already exists for this week.
+    /// The previous same-week run will be superseded.
+    /// </summary>
+    public bool Force { get; set; }
 }
 
 // --- Stage Analysis Results ---
@@ -42,13 +47,19 @@ public class StageAnalysisResultDto
     public decimal? MarketCap { get; set; }
     public bool IsStage2 { get; set; }
     public string? Classification { get; set; }
+    public int? WeeksInStage2 { get; set; }
     public decimal? RSScore { get; set; }
     public int? RSRank { get; set; }
-    public decimal? RSMomentum { get; set; }
+    public decimal? RS1w { get; set; }
+    public decimal? RS2w { get; set; }
+    public decimal? RS3w { get; set; }
+    public decimal? RSDelta1w { get; set; }
+    public decimal? RSDelta2w { get; set; }
+    public decimal? RSDelta3w { get; set; }
     public decimal? MomentumScore { get; set; }
-    public decimal? ROC12w { get; set; }
-    public decimal? ROC26w { get; set; }
-    public decimal? ROC52w { get; set; }
+    public decimal? ROC1w { get; set; }
+    public decimal? ROC2w { get; set; }
+    public decimal? ROC3w { get; set; }
     public string? Quadrant { get; set; }
     public decimal? ADRatio { get; set; }
     public string? ADClassification { get; set; }
@@ -61,7 +72,7 @@ public class SectorRotationDto
     public string SectorName { get; set; } = string.Empty;
     public int SectorId { get; set; }
     public decimal AvgRSScore { get; set; }
-    public decimal AvgRSMomentum { get; set; }
+    public decimal AvgRSDelta2w { get; set; }
     public string Quadrant { get; set; } = string.Empty;
     public int StockCount { get; set; }
     public int AccumulatingCount { get; set; }

@@ -48,11 +48,16 @@ public class MarketEdgeDbContext : DbContext
         modelBuilder.Entity<T>().Property(r => r.MA30).HasColumnType("decimal(18,4)");
         modelBuilder.Entity<T>().Property(r => r.MarketCap).HasColumnType("decimal(22,2)");
         modelBuilder.Entity<T>().Property(r => r.RSScore).HasColumnType("decimal(10,4)");
-        modelBuilder.Entity<T>().Property(r => r.RSMomentum).HasColumnType("decimal(10,4)");
+        modelBuilder.Entity<T>().Property(r => r.RS1w).HasColumnType("decimal(10,4)");
+        modelBuilder.Entity<T>().Property(r => r.RS2w).HasColumnType("decimal(10,4)");
+        modelBuilder.Entity<T>().Property(r => r.RS3w).HasColumnType("decimal(10,4)");
+        modelBuilder.Entity<T>().Property(r => r.RSDelta1w).HasColumnType("decimal(10,4)");
+        modelBuilder.Entity<T>().Property(r => r.RSDelta2w).HasColumnType("decimal(10,4)");
+        modelBuilder.Entity<T>().Property(r => r.RSDelta3w).HasColumnType("decimal(10,4)");
         modelBuilder.Entity<T>().Property(r => r.MomentumScore).HasColumnType("decimal(10,4)");
-        modelBuilder.Entity<T>().Property(r => r.ROC12w).HasColumnType("decimal(10,4)");
-        modelBuilder.Entity<T>().Property(r => r.ROC26w).HasColumnType("decimal(10,4)");
-        modelBuilder.Entity<T>().Property(r => r.ROC52w).HasColumnType("decimal(10,4)");
+        modelBuilder.Entity<T>().Property(r => r.ROC1w).HasColumnType("decimal(10,4)");
+        modelBuilder.Entity<T>().Property(r => r.ROC2w).HasColumnType("decimal(10,4)");
+        modelBuilder.Entity<T>().Property(r => r.ROC3w).HasColumnType("decimal(10,4)");
         modelBuilder.Entity<T>().Property(r => r.ADRatio).HasColumnType("decimal(5,4)");
     }
 }

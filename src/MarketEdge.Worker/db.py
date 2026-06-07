@@ -127,12 +127,13 @@ def save_single_result(conn: pyodbc.Connection, market: str, result: dict[str, A
         INSERT INTO dbo.{table} (
             RunId, Symbol, CompanyName, SectorId, SectorName,
             ClosePrice, MA10, MA30, MarketCap,
-            IsStage2, Classification,
-            RSScore, RSRank, RSMomentum,
-            MomentumScore, ROC12w, ROC26w, ROC52w,
+            IsStage2, Classification, WeeksInStage2,
+            RSScore, RSRank, RS1w, RS2w, RS3w,
+            RSDelta1w, RSDelta2w, RSDelta3w,
+            MomentumScore, ROC1w, ROC2w, ROC3w,
             Quadrant, ADRatio, ADClassification
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     params = (
@@ -147,13 +148,19 @@ def save_single_result(conn: pyodbc.Connection, market: str, result: dict[str, A
         result.get("market_cap"),
         int(bool(result.get("is_stage2"))),
         result.get("classification"),
+        result.get("weeks_in_stage2"),
         result.get("rs_score"),
         result.get("rs_rank"),
-        result.get("rs_momentum"),
+        result.get("rs_1w"),
+        result.get("rs_2w"),
+        result.get("rs_3w"),
+        result.get("rs_delta_1w"),
+        result.get("rs_delta_2w"),
+        result.get("rs_delta_3w"),
         result.get("momentum_score"),
-        result.get("roc_12w"),
-        result.get("roc_26w"),
-        result.get("roc_52w"),
+        result.get("roc_1w"),
+        result.get("roc_2w"),
+        result.get("roc_3w"),
         result.get("quadrant"),
         result.get("ad_ratio"),
         result.get("ad_classification"),
@@ -217,3 +224,66 @@ def get_ever_stage2_symbols(conn: pyodbc.Connection, market: str) -> set[str]:
     ).fetchall()
     return {row.Symbol for row in rows}
 
+
+def get_consecutive_stage2_weeks(conn: pyodbc.Connection, market: str, symbols: list[str]) -> dict[str, int]:
+    """
+    For each symbol, count consecutive prior completed runs where it was in Stage 2.
+    Returns dict of symbol -> weeks_count (0 if not previously in stage 2).
+    """
+    if not symbols:
+        return {}
+
+    table = _results_table(market)
+    cursor = conn.cursor()
+
+    # Get all completed run IDs ordered newest first
+    runs = cursor.execute(
+        """
+        SELECT Id FROM dbo.JobRuns
+        WHERE JobType = 'stage2_analysis' AND Market = ? AND Status = 'completed'
+        ORDER BY COALESCE(CompletedAt, CreatedAt) DESC, Id DESC
+        """,
+        market,
+    ).fetchall()
+
+    if not runs:
+        return {s: 0 for s in symbols}
+
+    run_ids = [r.Id for r in runs]
+
+    # For each symbol, check consecutive stage2 from most recent run backwards
+    result: dict[str, int] = {}
+    placeholders = ",".join("?" * len(run_ids))
+    symbol_placeholders = ",".join("?" * len(symbols))
+
+    rows = cursor.execute(
+        f"""
+        SELECT sar.Symbol, sar.RunId, sar.IsStage2
+        FROM dbo.{table} sar
+        WHERE sar.RunId IN ({placeholders})
+          AND sar.Symbol IN ({symbol_placeholders})
+        ORDER BY sar.Symbol
+        """,
+        *run_ids,
+        *symbols,
+    ).fetchall()
+
+    # Build lookup: symbol -> {run_id: is_stage2}
+    from collections import defaultdict
+    symbol_runs: dict[str, dict[int, bool]] = defaultdict(dict)
+    for row in rows:
+        symbol_runs[row.Symbol][row.RunId] = bool(row.IsStage2)
+
+    for symbol in symbols:
+        count = 0
+        runs_for_symbol = symbol_runs.get(symbol, {})
+        for rid in run_ids:
+            if rid in runs_for_symbol:
+                if runs_for_symbol[rid]:
+                    count += 1
+                else:
+                    break  # Streak broken
+            # If symbol wasn't in that run, skip it (different sector filter)
+        result[symbol] = count
+
+    return result

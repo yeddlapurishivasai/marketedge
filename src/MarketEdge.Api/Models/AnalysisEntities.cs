@@ -40,15 +40,21 @@ public abstract class StageAnalysisResultBase
 
     public bool IsStage2 { get; set; }
     public string? Classification { get; set; }
+    public int? WeeksInStage2 { get; set; }
 
     public decimal? RSScore { get; set; }
     public int? RSRank { get; set; }
-    public decimal? RSMomentum { get; set; }
+    public decimal? RS1w { get; set; }
+    public decimal? RS2w { get; set; }
+    public decimal? RS3w { get; set; }
+    public decimal? RSDelta1w { get; set; }
+    public decimal? RSDelta2w { get; set; }
+    public decimal? RSDelta3w { get; set; }
 
     public decimal? MomentumScore { get; set; }
-    public decimal? ROC12w { get; set; }
-    public decimal? ROC26w { get; set; }
-    public decimal? ROC52w { get; set; }
+    public decimal? ROC1w { get; set; }
+    public decimal? ROC2w { get; set; }
+    public decimal? ROC3w { get; set; }
 
     public string? Quadrant { get; set; }
 

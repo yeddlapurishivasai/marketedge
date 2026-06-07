@@ -14,6 +14,7 @@ from config import Config
 from db import (
     clear_run_results,
     get_connection,
+    get_consecutive_stage2_weeks,
     get_ever_stage2_symbols,
     get_previous_stage2_symbols,
     get_stocks,
@@ -124,6 +125,16 @@ def process_message(message_content: str) -> None:
 
     try:
         conn = get_connection()
+
+        # Idempotency: skip if this run is already completed or cancelled
+        cursor = conn.cursor()
+        row = cursor.execute(
+            "SELECT Status FROM dbo.JobRuns WHERE Id = ?", run_id
+        ).fetchone()
+        if row and row.Status in ("completed", "cancelled"):
+            logger.info("Run %s already %s — skipping (idempotent)", run_id, row.Status)
+            return
+
         update_job_status(
             conn,
             run_id,
@@ -144,27 +155,28 @@ def process_message(message_content: str) -> None:
         total_stocks = len(stocks)
         market_caps: dict[str, Any] = {}
 
+        # Always fetch market caps for all stocks
+        market_caps = fetch_market_caps(
+            [stock["symbol"] for stock in stocks],
+            market,
+            batch_delay=max(Config.YFINANCE_BATCH_DELAY, 1.0),
+        )
+        for stock in stocks:
+            stock["market_cap"] = market_caps.get(stock["symbol"])
+
+        # Apply market cap filters if specified
         if min_market_cap is not None or max_market_cap is not None:
-            market_caps = fetch_market_caps(
-                [stock["symbol"] for stock in stocks],
-                market,
-                batch_delay=max(Config.YFINANCE_BATCH_DELAY, 1.0),
-            )
             filtered_stocks: list[dict[str, Any]] = []
             for stock in stocks:
-                market_cap = market_caps.get(stock["symbol"])
-                stock["market_cap"] = market_cap
-                if market_cap is None:
+                mc = stock["market_cap"]
+                if mc is None:
                     continue
-                if min_market_cap is not None and market_cap < min_market_cap:
+                if min_market_cap is not None and mc < min_market_cap:
                     continue
-                if max_market_cap is not None and market_cap > max_market_cap:
+                if max_market_cap is not None and mc > max_market_cap:
                     continue
                 filtered_stocks.append(stock)
             stocks = filtered_stocks
-        else:
-            for stock in stocks:
-                stock["market_cap"] = None
 
         filtered_count = len(stocks)
         if not stocks:
@@ -234,6 +246,7 @@ def process_message(message_content: str) -> None:
                     "sector_id": stock["sector_id"],
                     "sector_name": stock["sector_name"],
                     "market_cap": stock.get("market_cap") or market_caps.get(stock["symbol"]),
+                    "weeks_in_stage2": 0,  # Updated later after classification
                     **analysis,
                 }
                 if result["is_stage2"]:
@@ -292,6 +305,21 @@ def process_message(message_content: str) -> None:
                     f"UPDATE dbo.{results_table} SET RSRank = ? WHERE RunId = ? AND Symbol = ?",
                     result["rs_rank"], run_id, result["symbol"],
                 )
+        conn.commit()
+
+        # Compute WeeksInStage2: consecutive prior weeks + 1 if currently in stage 2
+        stage2_symbols_list = list(current_stage2_symbols)
+        prior_weeks = get_consecutive_stage2_weeks(conn, market, stage2_symbols_list)
+        for result in results:
+            sym = result["symbol"]
+            if result.get("is_stage2"):
+                result["weeks_in_stage2"] = prior_weeks.get(sym, 0) + 1
+            else:
+                result["weeks_in_stage2"] = 0
+            cursor.execute(
+                f"UPDATE dbo.{results_table} SET WeeksInStage2 = ? WHERE RunId = ? AND Symbol = ?",
+                result["weeks_in_stage2"], run_id, sym,
+            )
         conn.commit()
 
         metrics = _build_metrics(

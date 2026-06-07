@@ -52,6 +52,44 @@ public class JobService : IJobService
 
     public async Task<int> TriggerStageAnalysisAsync(string market, TriggerAnalysisRequest? request)
     {
+        // Idempotency: check if a run already exists for this market in the current ISO week
+        var now = DateTime.UtcNow;
+        var startOfWeek = now.Date.AddDays(-(int)now.DayOfWeek + (int)DayOfWeek.Monday);
+        if (now.DayOfWeek == DayOfWeek.Sunday) startOfWeek = startOfWeek.AddDays(-7);
+
+        if (request?.Force != true)
+        {
+            var existingRun = await _db.JobRuns
+                .Where(j => j.JobType == "stage2_analysis"
+                    && j.Market == market
+                    && j.CreatedAt >= startOfWeek
+                    && (j.Status == "completed" || j.Status == "running" || j.Status == "queued"))
+                .OrderByDescending(j => j.CreatedAt)
+                .FirstOrDefaultAsync();
+
+            if (existingRun != null)
+            {
+                return existingRun.Id;
+            }
+        }
+        else
+        {
+            // Force mode: cancel any queued/running same-week runs
+            var staleRuns = await _db.JobRuns
+                .Where(j => j.JobType == "stage2_analysis"
+                    && j.Market == market
+                    && j.CreatedAt >= startOfWeek
+                    && (j.Status == "queued" || j.Status == "running"))
+                .ToListAsync();
+
+            foreach (var stale in staleRuns)
+            {
+                stale.Status = "cancelled";
+                stale.CompletedAt = now;
+            }
+            if (staleRuns.Count > 0) await _db.SaveChangesAsync();
+        }
+
         var parameters = new Dictionary<string, object?>();
         if (request?.MinMarketCap != null) parameters["minMarketCap"] = request.MinMarketCap;
         if (request?.MaxMarketCap != null) parameters["maxMarketCap"] = request.MaxMarketCap;
@@ -171,8 +209,8 @@ public class JobService : IJobService
         if (job == null) return new List<SectorRotationDto>();
 
         var results = job.Market == "india"
-            ? await _db.IndianStageAnalysisResults.Where(r => r.RunId == runId && r.RSScore != null && r.RSMomentum != null).ToListAsync<StageAnalysisResultBase>()
-            : await _db.USStageAnalysisResults.Where(r => r.RunId == runId && r.RSScore != null && r.RSMomentum != null).ToListAsync<StageAnalysisResultBase>();
+            ? await _db.IndianStageAnalysisResults.Where(r => r.RunId == runId && r.RSScore != null && r.RSDelta2w != null).ToListAsync<StageAnalysisResultBase>()
+            : await _db.USStageAnalysisResults.Where(r => r.RunId == runId && r.RSScore != null && r.RSDelta2w != null).ToListAsync<StageAnalysisResultBase>();
 
         return results
             .GroupBy(r => new { r.SectorId, r.SectorName })
@@ -181,8 +219,8 @@ public class JobService : IJobService
                 SectorId = g.Key.SectorId,
                 SectorName = g.Key.SectorName,
                 AvgRSScore = g.Average(r => r.RSScore ?? 0),
-                AvgRSMomentum = g.Average(r => r.RSMomentum ?? 0),
-                Quadrant = GetQuadrant(g.Average(r => r.RSScore ?? 0), g.Average(r => r.RSMomentum ?? 0)),
+                AvgRSDelta2w = g.Average(r => r.RSDelta2w ?? 0),
+                Quadrant = GetQuadrant(g.Average(r => r.RSScore ?? 0), g.Average(r => r.RSDelta2w ?? 0)),
                 StockCount = g.Count(),
                 AccumulatingCount = g.Count(r => r.ADClassification == "accumulating"),
                 DistributingCount = g.Count(r => r.ADClassification == "distributing")
@@ -269,13 +307,19 @@ public class JobService : IJobService
             MarketCap = r.MarketCap,
             IsStage2 = r.IsStage2,
             Classification = r.Classification,
+            WeeksInStage2 = r.WeeksInStage2,
             RSScore = r.RSScore,
             RSRank = r.RSRank,
-            RSMomentum = r.RSMomentum,
+            RS1w = r.RS1w,
+            RS2w = r.RS2w,
+            RS3w = r.RS3w,
+            RSDelta1w = r.RSDelta1w,
+            RSDelta2w = r.RSDelta2w,
+            RSDelta3w = r.RSDelta3w,
             MomentumScore = r.MomentumScore,
-            ROC12w = r.ROC12w,
-            ROC26w = r.ROC26w,
-            ROC52w = r.ROC52w,
+            ROC1w = r.ROC1w,
+            ROC2w = r.ROC2w,
+            ROC3w = r.ROC3w,
             Quadrant = r.Quadrant,
             ADRatio = r.ADRatio,
             ADClassification = r.ADClassification
