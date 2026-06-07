@@ -276,11 +276,13 @@ export default function AnalysisPage() {
   const handleTrigger = async () => {
     setTriggering(true);
     try {
-      const req: { minMarketCap?: number; maxMarketCap?: number; sectorIds?: number[]; limit?: number } = {};
+      const req: { minMarketCap?: number; maxMarketCap?: number; sectorIds?: number[]; limit?: number; force?: boolean } = {};
       if (minMcap) req.minMarketCap = parseFloat(minMcap);
       if (maxMcap) req.maxMarketCap = parseFloat(maxMcap);
       if (selectedSectorIds.length > 0) req.sectorIds = selectedSectorIds;
       if (limitVal) req.limit = parseInt(limitVal);
+      // Always force when explicitly triggering from UI with parameters
+      req.force = true;
       await triggerAnalysis(m, req);
       setShowTriggerModal(false);
       setMinMcap('');
