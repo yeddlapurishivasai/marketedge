@@ -214,8 +214,18 @@ def process_message(message_content: str) -> None:
         total_filtered = 0
         stock_delay = max(Config.YFINANCE_BATCH_DELAY / 2, 1.0)
         sector_delay = Config.YFINANCE_BATCH_DELAY * 3
+        run_start_time = time.monotonic()
+        run_timeout = Config.MAX_RUN_TIMEOUT
 
         for sector_idx, (sector_id, sector_stocks) in enumerate(sector_list):
+            # Check timeout before each sector
+            elapsed = time.monotonic() - run_start_time
+            if elapsed > run_timeout:
+                raise TimeoutError(
+                    f"Run exceeded timeout of {run_timeout}s "
+                    f"(elapsed {elapsed:.0f}s, processed {total_processed} stocks in {sector_idx} sectors)"
+                )
+
             sector_name = sector_stocks[0]["sector_name"]
             logger.info(
                 "=== Sector %s/%s: %s (id=%s, %s stocks) ===",
@@ -420,7 +430,10 @@ def start_queue_listener() -> None:
                 queue_client = _create_queue_client()
 
             message = next(
-                queue_client.receive_messages(messages_per_page=1, visibility_timeout=300),
+                queue_client.receive_messages(
+                    messages_per_page=1,
+                    visibility_timeout=Config.QUEUE_VISIBILITY_TIMEOUT,
+                ),
                 None,
             )
 

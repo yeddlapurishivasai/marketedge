@@ -52,3 +52,7 @@ class Config:
     YFINANCE_BATCH_SIZE = _get_int("YFINANCE_BATCH_SIZE", 50)
     YFINANCE_BATCH_DELAY = _get_float("YFINANCE_BATCH_DELAY", 4.0)
     YFINANCE_MAX_RETRIES = _get_int("YFINANCE_MAX_RETRIES", 3)
+    # Max run timeout in seconds (default 4 hours = 14400s)
+    MAX_RUN_TIMEOUT = _get_int("MAX_RUN_TIMEOUT", 14400)
+    # Queue visibility timeout — must exceed MAX_RUN_TIMEOUT (default 5 hours)
+    QUEUE_VISIBILITY_TIMEOUT = _get_int("QUEUE_VISIBILITY_TIMEOUT", 18000)
