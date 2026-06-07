@@ -126,6 +126,9 @@ def fetch_market_caps(symbols: list[str], market: str, batch_delay: float = 2.0)
     if not symbols:
         return results
 
+    total_chunks = math.ceil(len(symbols) / MAX_MARKET_CAP_WORKERS)
+    logger.info("Fetching market caps for %s symbols (%s chunks)", len(symbols), total_chunks)
+
     def load_market_cap(symbol: str) -> tuple[str, int | None]:
         yf_symbol = _to_yfinance_symbol(symbol, market)
         try:
@@ -138,8 +141,12 @@ def fetch_market_caps(symbols: list[str], market: str, batch_delay: float = 2.0)
             logger.warning("Failed to fetch market cap for %s: %s", symbol, exc)
             return symbol, None
 
+    chunk_idx = 0
     for index in range(0, len(symbols), MAX_MARKET_CAP_WORKERS):
+        chunk_idx += 1
         chunk = symbols[index : index + MAX_MARKET_CAP_WORKERS]
+        if chunk_idx % 50 == 0 or chunk_idx == 1:
+            logger.info("Market cap progress: chunk %s/%s (%s symbols done)", chunk_idx, total_chunks, len(results))
         with ThreadPoolExecutor(max_workers=MAX_MARKET_CAP_WORKERS) as executor:
             futures = {executor.submit(load_market_cap, symbol): symbol for symbol in chunk}
             for future in as_completed(futures):

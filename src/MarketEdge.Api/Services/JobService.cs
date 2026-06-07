@@ -94,7 +94,30 @@ public class JobService : IJobService
         var parameters = new Dictionary<string, object?>();
         if (request?.MinMarketCap != null) parameters["minMarketCap"] = request.MinMarketCap;
         if (request?.MaxMarketCap != null) parameters["maxMarketCap"] = request.MaxMarketCap;
-        if (request?.SectorIds != null && request.SectorIds.Count > 0) parameters["sectorIds"] = request.SectorIds;
+        if (request?.SectorIds != null && request.SectorIds.Count > 0)
+        {
+            // Resolve sector names for display
+            List<string> sectorNames;
+            int totalSectors;
+            if (market == "india")
+            {
+                sectorNames = await _db.IndianSectors
+                    .Where(s => request.SectorIds.Contains(s.Id))
+                    .Select(s => s.SectorName).ToListAsync();
+                totalSectors = await _db.IndianSectors.CountAsync();
+            }
+            else
+            {
+                sectorNames = await _db.USSectors
+                    .Where(s => request.SectorIds.Contains(s.Id))
+                    .Select(s => s.SectorName).ToListAsync();
+                totalSectors = await _db.USSectors.CountAsync();
+            }
+            if (sectorNames.Count == totalSectors)
+                parameters["sectors"] = "All Sectors";
+            else
+                parameters["sectors"] = string.Join(", ", sectorNames);
+        }
         if (request?.Limit != null) parameters["limit"] = request.Limit;
 
         var job = new JobRun

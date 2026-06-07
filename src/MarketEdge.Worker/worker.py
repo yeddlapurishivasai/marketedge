@@ -95,6 +95,46 @@ def _build_metrics(
     }
 
 
+def _fetch_single_market_cap(symbol: str, market: str) -> int | None:
+    """Fetch market cap for a single stock."""
+    from stage_analysis import _to_yfinance_symbol
+    import yfinance as yf
+    yf_symbol = _to_yfinance_symbol(symbol, market)
+    try:
+        fast_info = yf.Ticker(yf_symbol).fast_info
+        mc = fast_info.get("market_cap") or fast_info.get("marketCap")
+        return mc
+    except Exception as exc:
+        logger.warning("Failed to fetch market cap for %s: %s", symbol, exc)
+        return None
+
+
+def _fetch_single_price_data(symbol: str, market: str) -> Any:
+    """Fetch weekly price data for a single stock."""
+    from stage_analysis import _to_yfinance_symbol, WEEKLY_LOOKBACK_PERIOD, WEEKLY_INTERVAL, _extract_symbol_frame
+    import yfinance as yf
+    yf_symbol = _to_yfinance_symbol(symbol, market)
+    for attempt in range(Config.YFINANCE_MAX_RETRIES):
+        try:
+            raw = yf.download(
+                tickers=yf_symbol,
+                period=WEEKLY_LOOKBACK_PERIOD,
+                interval=WEEKLY_INTERVAL,
+                auto_adjust=False,
+                progress=False,
+                threads=False,
+            )
+            frame = _extract_symbol_frame(raw, yf_symbol, 1)
+            if frame.empty or "Close" not in frame.columns:
+                return None
+            return frame
+        except Exception as exc:
+            logger.warning("Price fetch attempt %s/%s for %s: %s", attempt + 1, Config.YFINANCE_MAX_RETRIES, symbol, exc)
+            if attempt < Config.YFINANCE_MAX_RETRIES - 1:
+                time.sleep(Config.YFINANCE_BATCH_DELAY * (2 ** attempt))
+    return None
+
+
 def process_message(message_content: str) -> None:
     # .NET API sends base64-encoded JSON
     try:
@@ -148,134 +188,122 @@ def process_message(message_content: str) -> None:
         # Clear any previous results for this run (supports re-runs)
         clear_run_results(conn, market, run_id)
 
-        stocks = get_stocks(conn, market, sector_ids=sector_ids, limit=limit)
-        if not stocks:
+        # Fetch all stocks and group by sector
+        all_stocks = get_stocks(conn, market, sector_ids=sector_ids, limit=limit)
+        if not all_stocks:
             raise ValueError(f"No stocks found for market {market} with given filters")
 
-        total_stocks = len(stocks)
-        market_caps: dict[str, Any] = {}
+        total_stocks = len(all_stocks)
+        sectors_map: dict[int, list[dict[str, Any]]] = {}
+        for stock in all_stocks:
+            sid = stock["sector_id"]
+            sectors_map.setdefault(sid, []).append(stock)
 
-        # Always fetch market caps for all stocks
-        market_caps = fetch_market_caps(
-            [stock["symbol"] for stock in stocks],
-            market,
-            batch_delay=max(Config.YFINANCE_BATCH_DELAY, 1.0),
-        )
-        for stock in stocks:
-            stock["market_cap"] = market_caps.get(stock["symbol"])
+        sector_list = list(sectors_map.items())
+        total_sectors = len(sector_list)
+        logger.info("Found %s stocks across %s sectors", total_stocks, total_sectors)
 
-        # Apply market cap filters if specified
-        if min_market_cap is not None or max_market_cap is not None:
-            filtered_stocks: list[dict[str, Any]] = []
-            for stock in stocks:
-                mc = stock["market_cap"]
-                if mc is None:
-                    continue
-                if min_market_cap is not None and mc < min_market_cap:
-                    continue
-                if max_market_cap is not None and mc > max_market_cap:
-                    continue
-                filtered_stocks.append(stock)
-            stocks = filtered_stocks
-
-        filtered_count = len(stocks)
-        if not stocks:
-            raise ValueError("No stocks remain after applying market cap filters")
-
-        update_job_status(
-            conn,
-            run_id,
-            "running",
-            progress=10,
-            metrics=_build_metrics(
-                market,
-                total_stocks,
-                filtered_count,
-                min_market_cap=min_market_cap,
-                max_market_cap=max_market_cap,
-            ),
-        )
-
+        # Fetch benchmark once
         benchmark_data = fetch_benchmark_data(market)
-        symbols = [stock["symbol"] for stock in stocks]
-        total_batches = max(1, math.ceil(len(symbols) / Config.YFINANCE_BATCH_SIZE))
-        price_data: dict[str, Any] = {}
 
-        for batch_number in range(total_batches):
-            batch_symbols = symbols[
-                batch_number * Config.YFINANCE_BATCH_SIZE : (batch_number + 1) * Config.YFINANCE_BATCH_SIZE
-            ]
-            batch_data = fetch_price_data(
-                batch_symbols,
-                market,
-                batch_size=Config.YFINANCE_BATCH_SIZE,
-                batch_delay=Config.YFINANCE_BATCH_DELAY,
-                max_retries=Config.YFINANCE_MAX_RETRIES,
-            )
-            price_data.update(batch_data)
-            progress = 10 + int((batch_number + 1) / total_batches * 60)
-            update_job_status(
-                conn,
-                run_id,
-                "running",
-                progress=progress,
-                metrics=_build_metrics(
-                    market,
-                    total_stocks,
-                    filtered_count,
-                    price_data_count=len(price_data),
-                    min_market_cap=min_market_cap,
-                    max_market_cap=max_market_cap,
-                ),
-            )
-
+        # Process stock by stock within each sector
+        all_results: list[dict[str, Any]] = []
         current_stage2_symbols: set[str] = set()
-        results: list[dict[str, Any]] = []
-        skipped_stocks = 0
+        total_processed = 0
+        total_skipped = 0
+        total_filtered = 0
+        stock_delay = max(Config.YFINANCE_BATCH_DELAY / 2, 1.0)
+        sector_delay = Config.YFINANCE_BATCH_DELAY * 3
 
-        for index, stock in enumerate(stocks, start=1):
-            analysis = calculate_stage2(price_data.get(stock["symbol"]), benchmark_data)
-            if analysis is None:
-                skipped_stocks += 1
-                logger.warning("Skipping %s due to insufficient or missing data", stock["symbol"])
-            else:
+        for sector_idx, (sector_id, sector_stocks) in enumerate(sector_list):
+            sector_name = sector_stocks[0]["sector_name"]
+            logger.info(
+                "=== Sector %s/%s: %s (id=%s, %s stocks) ===",
+                sector_idx + 1, total_sectors, sector_name, sector_id, len(sector_stocks),
+            )
+
+            for stock_idx, stock in enumerate(sector_stocks):
+                symbol = stock["symbol"]
+
+                # 1. Fetch market cap for this stock
+                mc = _fetch_single_market_cap(symbol, market)
+                stock["market_cap"] = mc
+                time.sleep(stock_delay)
+
+                # 2. Apply market cap filter
+                if min_market_cap is not None or max_market_cap is not None:
+                    if mc is None:
+                        total_processed += 1
+                        continue
+                    if min_market_cap is not None and mc < min_market_cap:
+                        total_processed += 1
+                        continue
+                    if max_market_cap is not None and mc > max_market_cap:
+                        total_processed += 1
+                        continue
+
+                total_filtered += 1
+
+                # 3. Fetch price data for this stock
+                price_frame = _fetch_single_price_data(symbol, market)
+                time.sleep(stock_delay)
+
+                # 4. Analyze
+                total_processed += 1
+                analysis = calculate_stage2(price_frame, benchmark_data)
+                if analysis is None:
+                    total_skipped += 1
+                    logger.warning("Skipping %s — insufficient data", symbol)
+                    continue
+
                 result = {
                     "run_id": run_id,
-                    "symbol": stock["symbol"],
+                    "symbol": symbol,
                     "company_name": stock["company_name"],
                     "sector_id": stock["sector_id"],
                     "sector_name": stock["sector_name"],
-                    "market_cap": stock.get("market_cap") or market_caps.get(stock["symbol"]),
-                    "weeks_in_stage2": 0,  # Updated later after classification
+                    "market_cap": mc,
+                    "weeks_in_stage2": 0,
                     **analysis,
                 }
                 if result["is_stage2"]:
-                    current_stage2_symbols.add(stock["symbol"])
-                results.append(result)
+                    current_stage2_symbols.add(symbol)
+                all_results.append(result)
 
-                # Save each result immediately (incremental)
+                # 5. Save immediately
                 save_single_result(conn, market, result)
 
-            if index == len(stocks) or index % max(1, len(stocks) // 10) == 0:
-                progress = 70 + int(index / len(stocks) * 20)
-                update_job_status(
-                    conn,
-                    run_id,
-                    "running",
-                    progress=progress,
-                    metrics=_build_metrics(
-                        market,
-                        total_stocks,
-                        filtered_count,
-                        stage2_count=len(current_stage2_symbols),
-                        processed_stocks=index,
-                        price_data_count=len(price_data),
-                        skipped_stocks=skipped_stocks,
-                        min_market_cap=min_market_cap,
-                        max_market_cap=max_market_cap,
-                    ),
-                )
+                # 6. Log every 10 stocks
+                if (stock_idx + 1) % 10 == 0 or stock_idx == len(sector_stocks) - 1:
+                    logger.info(
+                        "  %s: %s/%s stocks, %s Stage 2 so far",
+                        sector_name, stock_idx + 1, len(sector_stocks), len(current_stage2_symbols),
+                    )
 
+            # Update progress after each sector
+            progress = int((sector_idx + 1) / total_sectors * 90)
+            update_job_status(
+                conn, run_id, "running", progress=progress,
+                metrics=_build_metrics(
+                    market, total_stocks, total_filtered,
+                    stage2_count=len(current_stage2_symbols),
+                    processed_stocks=total_processed,
+                    price_data_count=len(all_results) + total_skipped,
+                    skipped_stocks=total_skipped,
+                    min_market_cap=min_market_cap, max_market_cap=max_market_cap,
+                ),
+            )
+            logger.info(
+                "Sector %s/%s complete — %s processed, %s Stage 2",
+                sector_idx + 1, total_sectors, total_processed, len(current_stage2_symbols),
+            )
+
+            # Throttle between sectors
+            if sector_idx < total_sectors - 1:
+                logger.info("Pausing %ss between sectors...", sector_delay)
+                time.sleep(sector_delay)
+
+        # --- Post-processing (classifications, ranks, weeks) ---
         previous_stage2_symbols = get_previous_stage2_symbols(conn, market)
         ever_stage2_symbols = get_ever_stage2_symbols(conn, market)
         classifications = classify_stocks(
@@ -284,10 +312,9 @@ def process_message(message_content: str) -> None:
             ever_stage2_symbols,
         )
 
-        # Update classifications in DB for each result
         results_table = "IndianStageAnalysisResults" if market == "india" else "USStageAnalysisResults"
         cursor = conn.cursor()
-        for result in results:
+        for result in all_results:
             cls = classifications.get(result["symbol"])
             result["classification"] = cls
             if cls:
@@ -297,9 +324,8 @@ def process_message(message_content: str) -> None:
                 )
         conn.commit()
 
-        # Compute RS ranks and update in DB
-        compute_rs_ranks(results)
-        for result in results:
+        compute_rs_ranks(all_results)
+        for result in all_results:
             if result.get("rs_rank") is not None:
                 cursor.execute(
                     f"UPDATE dbo.{results_table} SET RSRank = ? WHERE RunId = ? AND Symbol = ?",
@@ -307,10 +333,9 @@ def process_message(message_content: str) -> None:
                 )
         conn.commit()
 
-        # Compute WeeksInStage2: consecutive prior weeks + 1 if currently in stage 2
         stage2_symbols_list = list(current_stage2_symbols)
         prior_weeks = get_consecutive_stage2_weeks(conn, market, stage2_symbols_list)
-        for result in results:
+        for result in all_results:
             sym = result["symbol"]
             if result.get("is_stage2"):
                 result["weeks_in_stage2"] = prior_weeks.get(sym, 0) + 1
@@ -323,21 +348,18 @@ def process_message(message_content: str) -> None:
         conn.commit()
 
         metrics = _build_metrics(
-            market,
-            total_stocks,
-            filtered_count,
+            market, total_stocks, total_filtered,
             stage2_count=len(current_stage2_symbols),
-            processed_stocks=len(stocks),
-            price_data_count=len(price_data),
-            skipped_stocks=skipped_stocks,
-            min_market_cap=min_market_cap,
-            max_market_cap=max_market_cap,
+            processed_stocks=total_processed,
+            price_data_count=len(all_results) + total_skipped,
+            skipped_stocks=total_skipped,
+            min_market_cap=min_market_cap, max_market_cap=max_market_cap,
         )
-        metrics["resultCount"] = len(results)
-        metrics["newCount"] = sum(1 for value in classifications.values() if value == "new")
-        metrics["reentryCount"] = sum(1 for value in classifications.values() if value == "reentry")
-        metrics["continuingCount"] = sum(1 for value in classifications.values() if value == "continuing")
-        metrics["removedCount"] = sum(1 for value in classifications.values() if value == "removed")
+        metrics["resultCount"] = len(all_results)
+        metrics["newCount"] = sum(1 for v in classifications.values() if v == "new")
+        metrics["reentryCount"] = sum(1 for v in classifications.values() if v == "reentry")
+        metrics["continuingCount"] = sum(1 for v in classifications.values() if v == "continuing")
+        metrics["removedCount"] = sum(1 for v in classifications.values() if v == "removed")
 
         update_job_status(
             conn,
@@ -348,7 +370,7 @@ def process_message(message_content: str) -> None:
             completed_at=_utcnow(),
             error="",
         )
-        logger.info("Completed run %s with %s results", run_id, len(results))
+        logger.info("Completed run %s with %s results", run_id, len(all_results))
     except Exception as exc:
         logger.exception("Failed to process run %s", run_id)
         _set_listener_status(last_error=str(exc))
