@@ -121,7 +121,7 @@ def fetch_benchmark_data(market: str) -> pd.DataFrame:
     return benchmark_data
 
 
-def fetch_market_caps(symbols: list[str], market: str, batch_delay: float = 1.0) -> dict[str, int | None]:
+def fetch_market_caps(symbols: list[str], market: str, batch_delay: float = 2.0) -> dict[str, int | None]:
     results: dict[str, int | None] = {}
     if not symbols:
         return results
