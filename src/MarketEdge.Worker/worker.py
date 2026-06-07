@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from threading import Lock
 from typing import Any
 
+import pandas as pd
 from azure.core.exceptions import AzureError, ResourceExistsError
 from azure.storage.queue import QueueClient
 
@@ -125,7 +126,7 @@ def _fetch_single_market_cap(symbol: str, market: str) -> int | None:
 
 def _fetch_single_price_data(symbol: str, market: str) -> Any:
     """Fetch weekly price data for a single stock."""
-    from stage_analysis import _to_yfinance_symbol, WEEKLY_LOOKBACK_PERIOD, WEEKLY_INTERVAL, _extract_symbol_frame
+    from stage_analysis import _to_yfinance_symbol, WEEKLY_LOOKBACK_PERIOD, WEEKLY_INTERVAL
     import yfinance as yf
     yf_symbol = _to_yfinance_symbol(symbol, market)
     for attempt in range(Config.YFINANCE_MAX_RETRIES):
@@ -138,7 +139,12 @@ def _fetch_single_price_data(symbol: str, market: str) -> Any:
                 progress=False,
                 threads=False,
             )
-            frame = _extract_symbol_frame(raw, yf_symbol, 1)
+            if raw.empty:
+                return None
+            # yfinance returns MultiIndex (Price, Ticker) even for single tickers
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw = raw.droplevel("Ticker", axis=1)
+            frame = raw.dropna(how="all").tail(60)
             if frame.empty or "Close" not in frame.columns:
                 return None
             return frame
