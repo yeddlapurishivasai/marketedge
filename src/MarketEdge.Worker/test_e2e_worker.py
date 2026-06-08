@@ -14,11 +14,18 @@ import argparse
 import json
 import sys
 import time
+from datetime import datetime, timezone
 
 from config import Config
 from db import get_connection, get_stocks, save_single_result, update_job_status, clear_run_results
 from stage_analysis import calculate_stage2, fetch_benchmark_data
 from worker import _fetch_single_market_cap, _fetch_single_price_data
+
+
+def _get_week_number() -> str:
+    now = datetime.now(timezone.utc)
+    year, week, _ = now.isocalendar()
+    return f"{year}-W{week:02d}"
 
 
 def main():
@@ -58,10 +65,11 @@ def main():
     # 3. Create a test job run
     print("\n[2] Creating test job run...")
     cursor = conn.cursor()
+    week_number = _get_week_number()
     cursor.execute(
-        "INSERT INTO dbo.JobRuns (JobType, Market, Status, Progress, CreatedAt) "
-        "VALUES (?, ?, 'running', 0, GETUTCDATE())",
-        "stage2_analysis", market,
+        "INSERT INTO dbo.JobRuns (JobType, Market, WeekNumber, Status, Progress, CreatedAt) "
+        "VALUES (?, ?, ?, 'running', 0, GETUTCDATE())",
+        "stage2_analysis", market, week_number,
     )
     conn.commit()
     cursor.execute("SELECT @@IDENTITY")
@@ -118,8 +126,8 @@ def main():
 
         # Save to DB
         save_single_result(conn, market, result)
-        print(f"    Stage2={result['is_stage2']}, RS={result.get('rs_score', 0):.2f}, "
-              f"Momentum={result.get('momentum_score', 0):.2f}")
+        print(f"    Stage2={result['is_stage2']}, RS={result.get('rs_score') or 0:.2f}, "
+              f"Momentum={result.get('momentum_score') or 0:.2f}")
         print(f"    Saved to DB")
 
     # 6. Summary

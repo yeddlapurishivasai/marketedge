@@ -121,7 +121,14 @@ def update_job_status(
 
 def save_single_result(conn: pyodbc.Connection, market: str, result: dict[str, Any]) -> None:
     """Save a single stock analysis result immediately after processing."""
+    import math
     table = _results_table(market)
+
+    def _clean(v: Any) -> Any:
+        """Convert NaN/inf to None for SQL Server compatibility."""
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            return None
+        return v
 
     insert_query = f"""
         INSERT INTO dbo.{table} (
@@ -142,27 +149,27 @@ def save_single_result(conn: pyodbc.Connection, market: str, result: dict[str, A
         result["company_name"],
         result["sector_id"],
         result["sector_name"],
-        result.get("close_price"),
-        result.get("ma10"),
-        result.get("ma30"),
-        result.get("market_cap"),
+        _clean(result.get("close_price")),
+        _clean(result.get("ma10")),
+        _clean(result.get("ma30")),
+        _clean(result.get("market_cap")),
         int(bool(result.get("is_stage2"))),
         result.get("classification"),
         result.get("weeks_in_stage2"),
-        result.get("rs_score"),
+        _clean(result.get("rs_score")),
         result.get("rs_rank"),
-        result.get("rs_1w"),
-        result.get("rs_2w"),
-        result.get("rs_3w"),
-        result.get("rs_delta_1w"),
-        result.get("rs_delta_2w"),
-        result.get("rs_delta_3w"),
-        result.get("momentum_score"),
-        result.get("roc_1w"),
-        result.get("roc_2w"),
-        result.get("roc_3w"),
+        _clean(result.get("rs_1w")),
+        _clean(result.get("rs_2w")),
+        _clean(result.get("rs_3w")),
+        _clean(result.get("rs_delta_1w")),
+        _clean(result.get("rs_delta_2w")),
+        _clean(result.get("rs_delta_3w")),
+        _clean(result.get("momentum_score")),
+        _clean(result.get("roc_1w")),
+        _clean(result.get("roc_2w")),
+        _clean(result.get("roc_3w")),
         result.get("quadrant"),
-        result.get("ad_ratio"),
+        _clean(result.get("ad_ratio")),
         result.get("ad_classification"),
     )
 

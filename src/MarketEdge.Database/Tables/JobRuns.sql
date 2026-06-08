@@ -3,7 +3,7 @@ CREATE TABLE [dbo].[JobRuns]
     [Id] INT IDENTITY(1,1) NOT NULL,
     [JobType] NVARCHAR(50) NOT NULL,
     [Market] NVARCHAR(10) NOT NULL,
-    [WeekNumber] NVARCHAR(10) NOT NULL,
+    [WeekNumber] NVARCHAR(10) NOT NULL DEFAULT '',
     [Status] NVARCHAR(20) NOT NULL DEFAULT 'queued',
     [Progress] INT NOT NULL DEFAULT 0,
     [Parameters] NVARCHAR(MAX) NULL,
