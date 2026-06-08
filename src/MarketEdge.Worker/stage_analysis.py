@@ -166,11 +166,21 @@ def calculate_stage2(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> 
     stock_frame = stock_data.sort_index().copy()
     benchmark_frame = benchmark_data.sort_index().copy()
 
-    # Ensure columns are flat (not MultiIndex)
+    # Ensure columns are flat (not MultiIndex from yfinance)
     if isinstance(stock_frame.columns, pd.MultiIndex):
-        stock_frame.columns = stock_frame.columns.droplevel(0)
+        if "Ticker" in stock_frame.columns.names:
+            stock_frame = stock_frame.droplevel("Ticker", axis=1)
+        else:
+            stock_frame.columns = stock_frame.columns.droplevel(0)
+        if stock_frame.columns.duplicated().any():
+            stock_frame = stock_frame.loc[:, ~stock_frame.columns.duplicated()]
     if isinstance(benchmark_frame.columns, pd.MultiIndex):
-        benchmark_frame.columns = benchmark_frame.columns.droplevel(0)
+        if "Ticker" in benchmark_frame.columns.names:
+            benchmark_frame = benchmark_frame.droplevel("Ticker", axis=1)
+        else:
+            benchmark_frame.columns = benchmark_frame.columns.droplevel(0)
+        if benchmark_frame.columns.duplicated().any():
+            benchmark_frame = benchmark_frame.loc[:, ~benchmark_frame.columns.duplicated()]
 
     close = stock_frame["Close"].squeeze()
     if isinstance(close, pd.DataFrame):

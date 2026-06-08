@@ -281,7 +281,12 @@ def process_message(message_content: str) -> None:
 
                 # 4. Analyze
                 total_processed += 1
-                analysis = calculate_stage2(price_frame, benchmark_data)
+                try:
+                    analysis = calculate_stage2(price_frame, benchmark_data)
+                except Exception as exc:
+                    total_skipped += 1
+                    logger.warning("Skipping %s — analysis error: %s", symbol, exc)
+                    continue
                 if analysis is None:
                     total_skipped += 1
                     logger.warning("Skipping %s — insufficient data", symbol)
