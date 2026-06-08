@@ -311,8 +311,8 @@ def process_message(message_content: str) -> None:
                         sector_name, stock_idx + 1, len(sector_stocks), len(current_stage2_symbols),
                     )
 
-            # Update progress after each sector
-            progress = int((sector_idx + 1) / total_sectors * 90)
+            # Update progress after each sector (stock-based, not sector-based)
+            progress = min(int(total_processed / total_stocks * 90), 90)
             update_job_status(
                 conn, run_id, "running", progress=progress,
                 metrics=_build_metrics(

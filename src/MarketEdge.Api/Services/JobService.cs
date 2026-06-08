@@ -54,17 +54,16 @@ public class JobService : IJobService
 
     public async Task<int> TriggerStageAnalysisAsync(string market, TriggerAnalysisRequest? request)
     {
-        // Idempotency: check if a run already exists for this market in the current ISO week
         var now = DateTime.UtcNow;
-        var startOfWeek = now.Date.AddDays(-(int)now.DayOfWeek + (int)DayOfWeek.Monday);
-        if (now.DayOfWeek == DayOfWeek.Sunday) startOfWeek = startOfWeek.AddDays(-7);
+        var weekNumber = GetIsoWeekNumber(now);
 
         if (request?.Force != true)
         {
+            // Idempotency: return existing run for this week if it exists
             var existingRun = await _db.JobRuns
                 .Where(j => j.JobType == "stage2_analysis"
                     && j.Market == market
-                    && j.CreatedAt >= startOfWeek
+                    && j.WeekNumber == weekNumber
                     && (j.Status == "completed" || j.Status == "running" || j.Status == "queued"))
                 .OrderByDescending(j => j.CreatedAt)
                 .FirstOrDefaultAsync();
@@ -76,20 +75,32 @@ public class JobService : IJobService
         }
         else
         {
-            // Force mode: cancel any queued/running same-week runs
-            var staleRuns = await _db.JobRuns
+            // Force mode: cancel queued/running and delete completed same-week runs
+            var sameWeekRuns = await _db.JobRuns
                 .Where(j => j.JobType == "stage2_analysis"
                     && j.Market == market
-                    && j.CreatedAt >= startOfWeek
-                    && (j.Status == "queued" || j.Status == "running"))
+                    && j.WeekNumber == weekNumber)
                 .ToListAsync();
 
-            foreach (var stale in staleRuns)
+            var toCancel = sameWeekRuns.Where(j => j.Status is "queued" or "running").ToList();
+            foreach (var stale in toCancel)
             {
                 stale.Status = "cancelled";
                 stale.CompletedAt = now;
             }
-            if (staleRuns.Count > 0) await _db.SaveChangesAsync();
+
+            var toDelete = sameWeekRuns.Where(j => j.Status == "completed").ToList();
+            if (toDelete.Count > 0)
+            {
+                var resultsTable = market == "india" ? "IndianStageAnalysisResults" : "USStageAnalysisResults";
+                var oldIds = toDelete.Select(r => r.Id).ToList();
+                await _db.Database.ExecuteSqlRawAsync(
+                    $"DELETE FROM dbo.{resultsTable} WHERE RunId IN ({string.Join(",", oldIds)})");
+                _db.JobRuns.RemoveRange(toDelete);
+            }
+
+            if (toCancel.Count > 0 || toDelete.Count > 0)
+                await _db.SaveChangesAsync();
         }
 
         var parameters = new Dictionary<string, object?>();
@@ -125,6 +136,7 @@ public class JobService : IJobService
         {
             JobType = "stage2_analysis",
             Market = market,
+            WeekNumber = weekNumber,
             Status = "queued",
             Progress = 0,
             Parameters = parameters.Count > 0 ? JsonSerializer.Serialize(parameters) : null,
@@ -404,5 +416,15 @@ public class JobService : IJobService
             ADRatio = r.ADRatio,
             ADClassification = r.ADClassification
         };
+    }
+
+    private static string GetIsoWeekNumber(DateTime date)
+    {
+        var cal = System.Globalization.CultureInfo.InvariantCulture.Calendar;
+        var week = cal.GetWeekOfYear(date, System.Globalization.CalendarWeekRule.FirstFourDayWeek, DayOfWeek.Monday);
+        var year = date.Year;
+        if (week >= 52 && date.Month == 1) year--;
+        if (week == 1 && date.Month == 12) year++;
+        return $"{year}-W{week:D2}";
     }
 }

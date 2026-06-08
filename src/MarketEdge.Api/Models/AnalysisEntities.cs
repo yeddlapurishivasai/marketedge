@@ -10,6 +10,7 @@ public class JobRun
     public int Id { get; set; }
     public string JobType { get; set; } = string.Empty;
     public string Market { get; set; } = string.Empty;
+    public string WeekNumber { get; set; } = string.Empty;
     public string Status { get; set; } = "queued";
     public int Progress { get; set; }
     public string? Parameters { get; set; }
