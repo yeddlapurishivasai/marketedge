@@ -6,7 +6,7 @@ namespace MarketEdge.Api.Services;
 
 public interface ISectorService
 {
-    Task<List<SectorDto>> GetSectorsAsync(string market);
+    Task<List<SectorDto>> GetSectorsAsync(string market, bool testSampleOnly = false);
     Task<SectorDto?> GetSectorByIdAsync(string market, int id);
     Task<SectorDto> CreateSectorAsync(string market, CreateSectorRequest request);
     Task<bool> RenameSectorAsync(string market, int id, string newName);
@@ -18,27 +18,31 @@ public class SectorService : ISectorService
     private readonly MarketEdgeDbContext _db;
     public SectorService(MarketEdgeDbContext db) => _db = db;
 
-    public async Task<List<SectorDto>> GetSectorsAsync(string market)
+    public async Task<List<SectorDto>> GetSectorsAsync(string market, bool testSampleOnly = false)
     {
         if (market == "us")
         {
-            return await _db.USSectors
+            var query = _db.USSectors.AsQueryable();
+            if (testSampleOnly) query = query.Where(s => s.Stocks.Any(st => st.IsTestSample));
+            return await query
                 .Select(s => new SectorDto
                 {
                     Id = s.Id,
                     SectorName = s.SectorName,
-                    StockCount = s.Stocks.Count
+                    StockCount = testSampleOnly ? s.Stocks.Count(st => st.IsTestSample) : s.Stocks.Count
                 })
                 .OrderBy(s => s.SectorName)
                 .ToListAsync();
         }
 
-        return await _db.IndianSectors
+        var inQuery = _db.IndianSectors.AsQueryable();
+        if (testSampleOnly) inQuery = inQuery.Where(s => s.Stocks.Any(st => st.IsTestSample));
+        return await inQuery
             .Select(s => new SectorDto
             {
                 Id = s.Id,
                 SectorName = s.SectorName,
-                StockCount = s.Stocks.Count
+                StockCount = testSampleOnly ? s.Stocks.Count(st => st.IsTestSample) : s.Stocks.Count
             })
             .OrderBy(s => s.SectorName)
             .ToListAsync();

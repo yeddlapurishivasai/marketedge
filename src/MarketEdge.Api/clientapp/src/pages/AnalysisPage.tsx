@@ -243,15 +243,13 @@ export default function AnalysisPage() {
 
   const load = useCallback(async () => {
     try {
-      const [s, h, runs, sectors] = await Promise.all([
+      const [s, h, runs] = await Promise.all([
         fetchStage2Summary(m).catch(() => null),
         fetchStage2History(m).catch(() => []),
-        fetchJobRuns({ market: m, jobType: 'stage2_analysis', pageSize: 1 }).catch(() => []),
-        fetchSectors(m).catch(() => [])
+        fetchJobRuns({ market: m, jobType: 'stage2_analysis', pageSize: 1 }).catch(() => [])
       ]);
       setSummary(s);
       setHistory(h);
-      setAllSectors(sectors);
       if (runs.length > 0 && runs[0].status === 'completed') {
         setLatestRunId(runs[0].id);
         const rot = await fetchSectorRotation(m, runs[0].id).catch(() => []);
@@ -265,6 +263,16 @@ export default function AnalysisPage() {
   }, [m]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Load sectors with counts scoped to the selected run mode; prune selections no longer available.
+  useEffect(() => {
+    fetchSectors(m, testSampleOnly)
+      .then(secs => {
+        setAllSectors(secs);
+        setSelectedSectorIds(prev => prev.filter(id => secs.some(s => s.id === id)));
+      })
+      .catch(() => setAllSectors([]));
+  }, [m, testSampleOnly]);
 
   const handleTrigger = async () => {
     setTriggering(true);
@@ -437,39 +445,44 @@ export default function AnalysisPage() {
                 )}
               </div>
 
-              {/* Limit */}
-              <div className="form-group">
-                <label className="form-label">Stock Limit (max stocks to analyze)</label>
-                <input
-                  className="form-input"
-                  type="number"
-                  placeholder="Leave blank for all stocks in selected sectors"
-                  value={limitVal}
-                  onChange={e => setLimitVal(e.target.value)}
-                />
-              </div>
+              {/* Full-universe-only filters (not applicable in sample mode) */}
+              {!testSampleOnly && (
+                <>
+                  {/* Limit */}
+                  <div className="form-group">
+                    <label className="form-label">Stock Limit (max stocks to analyze)</label>
+                    <input
+                      className="form-input"
+                      type="number"
+                      placeholder="Leave blank for all stocks in selected sectors"
+                      value={limitVal}
+                      onChange={e => setLimitVal(e.target.value)}
+                    />
+                  </div>
 
-              {/* Market Cap */}
-              <div className="form-group">
-                <label className="form-label">Min Market Cap ({m === 'india' ? '₹' : '$'})</label>
-                <input
-                  className="form-input"
-                  type="number"
-                  placeholder={m === 'india' ? 'e.g., 50000000000 (₹5000 Cr)' : 'e.g., 10000000000 ($10B)'}
-                  value={minMcap}
-                  onChange={e => setMinMcap(e.target.value)}
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Max Market Cap ({m === 'india' ? '₹' : '$'})</label>
-                <input
-                  className="form-input"
-                  type="number"
-                  placeholder="Leave blank for no upper limit"
-                  value={maxMcap}
-                  onChange={e => setMaxMcap(e.target.value)}
-                />
-              </div>
+                  {/* Market Cap */}
+                  <div className="form-group">
+                    <label className="form-label">Min Market Cap ({m === 'india' ? '₹' : '$'})</label>
+                    <input
+                      className="form-input"
+                      type="number"
+                      placeholder={m === 'india' ? 'e.g., 50000000000 (₹5000 Cr)' : 'e.g., 10000000000 ($10B)'}
+                      value={minMcap}
+                      onChange={e => setMinMcap(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Max Market Cap ({m === 'india' ? '₹' : '$'})</label>
+                    <input
+                      className="form-input"
+                      type="number"
+                      placeholder="Leave blank for no upper limit"
+                      value={maxMcap}
+                      onChange={e => setMaxMcap(e.target.value)}
+                    />
+                  </div>
+                </>
+              )}
             </div>
             <div className="modal-footer">
               <button className="btn btn-outline" onClick={() => setShowTriggerModal(false)}>Cancel</button>

@@ -27,8 +27,9 @@ export type Market = 'india' | 'us';
 
 const BASE = '/api';
 
-export async function fetchSectors(market: Market): Promise<Sector[]> {
-  const res = await fetch(`${BASE}/${market}/sectors`);
+export async function fetchSectors(market: Market, testSampleOnly = false): Promise<Sector[]> {
+  const qs = testSampleOnly ? '?testSampleOnly=true' : '';
+  const res = await fetch(`${BASE}/${market}/sectors${qs}`);
   if (!res.ok) throw new Error('Failed to fetch sectors');
   return res.json();
 }
