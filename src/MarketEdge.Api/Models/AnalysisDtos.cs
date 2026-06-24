@@ -31,6 +31,12 @@ public class TriggerAnalysisRequest
     /// </summary>
     public bool? TestSampleOnly { get; set; }
     /// <summary>
+    /// Optional ISO week (format YYYY-Www) to run analysis for. When omitted, the current
+    /// week is used. A past week triggers a point-in-time run (prices fetched only up to
+    /// that week's close). Future weeks are rejected.
+    /// </summary>
+    public string? WeekNumber { get; set; }
+    /// <summary>
     /// When true, restricts the run to symbols in the selected universe that do NOT yet
     /// have a result row for the current week (i.e. failed/pending tickers from an earlier
     /// run). Results are upserted, so completed symbols are left untouched.

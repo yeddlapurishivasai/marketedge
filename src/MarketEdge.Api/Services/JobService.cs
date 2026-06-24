@@ -57,6 +57,18 @@ public class JobService : IJobService
         var now = DateTime.UtcNow;
         var weekNumber = GetIsoWeekNumber(now);
 
+        // Optional target-week override (e.g. re-running a previous week point-in-time).
+        if (!string.IsNullOrWhiteSpace(request?.WeekNumber))
+        {
+            var requested = request.WeekNumber.Trim();
+            if (!System.Text.RegularExpressions.Regex.IsMatch(requested, @"^\d{4}-W\d{2}$"))
+                throw new ArgumentException($"Invalid week '{requested}'. Expected format YYYY-Www.");
+            // Week strings are zero-padded fixed-width, so ordinal compare == chronological.
+            if (string.CompareOrdinal(requested, weekNumber) > 0)
+                throw new ArgumentException($"Week '{requested}' is in the future.");
+            weekNumber = requested;
+        }
+
         // One in-flight run per (week, market): if a run is already queued or running
         // for this week, return it instead of starting a duplicate. Completed runs are
         // an append-only audit log — they never block a new run, and results are

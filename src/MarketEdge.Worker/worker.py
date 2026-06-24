@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from threading import Lock
 from typing import Any
 
@@ -32,6 +32,7 @@ from stage_analysis import (
     fetch_benchmark_data,
     fetch_market_caps,
     fetch_price_data,
+    week_exclusive_end,
 )
 
 logging.basicConfig(
@@ -127,21 +128,38 @@ def _fetch_single_market_cap(symbol: str, market: str) -> int | None:
         return None
 
 
-def _fetch_single_price_data(symbol: str, market: str) -> Any:
-    """Fetch weekly price data for a single stock."""
-    from stage_analysis import _to_yfinance_symbol, WEEKLY_LOOKBACK_PERIOD, WEEKLY_INTERVAL
+def _fetch_single_price_data(symbol: str, market: str, end_date: Any = None) -> Any:
+    """Fetch weekly price data for a single stock.
+
+    When ``end_date`` is provided, fetches a bounded window ending at that date
+    (point-in-time for a past week) instead of the default relative lookback period.
+    """
+    from stage_analysis import _to_yfinance_symbol, WEEKLY_LOOKBACK_PERIOD, WEEKLY_INTERVAL, WEEKLY_LOOKBACK_DAYS
+    from datetime import timedelta
     import yfinance as yf
     yf_symbol = _to_yfinance_symbol(symbol, market)
     for attempt in range(Config.YFINANCE_MAX_RETRIES):
         try:
-            raw = yf.download(
-                tickers=yf_symbol,
-                period=WEEKLY_LOOKBACK_PERIOD,
-                interval=WEEKLY_INTERVAL,
-                auto_adjust=False,
-                progress=False,
-                threads=False,
-            )
+            if end_date is not None:
+                start_date = end_date - timedelta(days=WEEKLY_LOOKBACK_DAYS)
+                raw = yf.download(
+                    tickers=yf_symbol,
+                    start=start_date.isoformat(),
+                    end=end_date.isoformat(),
+                    interval=WEEKLY_INTERVAL,
+                    auto_adjust=False,
+                    progress=False,
+                    threads=False,
+                )
+            else:
+                raw = yf.download(
+                    tickers=yf_symbol,
+                    period=WEEKLY_LOOKBACK_PERIOD,
+                    interval=WEEKLY_INTERVAL,
+                    auto_adjust=False,
+                    progress=False,
+                    threads=False,
+                )
             if raw.empty:
                 return None
             # yfinance returns MultiIndex (Price, Ticker) even for single tickers
@@ -209,7 +227,17 @@ def process_message(message_content: str) -> None:
             week_number = get_week_number(conn, run_id)
         if not week_number:
             raise ValueError(f"Run {run_id} has no WeekNumber — cannot key results")
-        logger.info("Run %s is for week %s", run_id, week_number)
+
+        # Point-in-time: if the target week is fully in the past, bound all price fetches
+        # to that week's close so the analysis reflects how the week actually looked.
+        as_of_end = week_exclusive_end(week_number)
+        if as_of_end is not None and as_of_end > date.today():
+            as_of_end = None  # current/ongoing week — fetch through today (live)
+        logger.info(
+            "Run %s is for week %s (%s)",
+            run_id, week_number,
+            f"point-in-time, prices up to {as_of_end}" if as_of_end else "live/current",
+        )
 
         update_job_status(
             conn,
@@ -250,7 +278,7 @@ def process_message(message_content: str) -> None:
         logger.info("Found %s stocks across %s sectors", total_stocks, total_sectors)
 
         # Fetch benchmark once
-        benchmark_data = fetch_benchmark_data(market)
+        benchmark_data = fetch_benchmark_data(market, end_date=as_of_end)
 
         # Process stock by stock within each sector
         all_results: list[dict[str, Any]] = []
@@ -308,7 +336,7 @@ def process_message(message_content: str) -> None:
                 total_filtered += 1
 
                 # 3. Fetch price data for this stock
-                price_frame = _fetch_single_price_data(symbol, market)
+                price_frame = _fetch_single_price_data(symbol, market, end_date=as_of_end)
                 time.sleep(stock_delay)
 
                 # 4. Analyze

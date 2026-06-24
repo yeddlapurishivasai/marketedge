@@ -26,6 +26,31 @@ const QUADRANT_COLORS: Record<string, string> = {
 type SortDir = 'asc' | 'desc' | null;
 type SortState = { key: string; dir: SortDir };
 
+// ISO-8601 week label (YYYY-Www) matching the worker's date.fromisocalendar parsing.
+function isoWeekLabel(d: Date): string {
+  const target = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = (target.getUTCDay() + 6) % 7; // Mon=0..Sun=6
+  target.setUTCDate(target.getUTCDate() - dayNum + 3); // nearest Thursday
+  const isoYear = target.getUTCFullYear();
+  const firstThursday = new Date(Date.UTC(isoYear, 0, 4));
+  const firstDayNum = (firstThursday.getUTCDay() + 6) % 7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNum + 3);
+  const week = 1 + Math.round((target.getTime() - firstThursday.getTime()) / (7 * 24 * 3600 * 1000));
+  return `${isoYear}-W${String(week).padStart(2, '0')}`;
+}
+
+// Build the current week plus the previous `count` weeks as {label, value} options.
+function recentWeekOptions(count: number): { label: string; value: string }[] {
+  const opts: { label: string; value: string }[] = [];
+  const now = new Date();
+  for (let i = 0; i <= count; i++) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i * 7);
+    opts.push({ label: isoWeekLabel(d), value: isoWeekLabel(d) });
+  }
+  return opts;
+}
+
 function useSortableData<T>(items: T[], defaultSort?: SortState) {
   const [sort, setSort] = useState<SortState>(defaultSort || { key: '', dir: null });
 
@@ -227,7 +252,8 @@ export default function AnalysisPage() {
   const [selectedSectorIds, setSelectedSectorIds] = useState<number[]>([]);
   const [testSampleOnly, setTestSampleOnly] = useState<boolean>(import.meta.env.DEV);
   const [retryFailedOnly, setRetryFailedOnly] = useState<boolean>(false);
-  const [lastRun, setLastRun] = useState<JobRun | null>(null);
+  const [weekRuns, setWeekRuns] = useState<JobRun[]>([]);
+  const [selectedWeek, setSelectedWeek] = useState<string>('');
   const [allSectors, setAllSectors] = useState<Sector[]>([]);
   const [latestRunId, setLatestRunId] = useState<number | null>(null);
   const [stocks, setStocks] = useState<StageAnalysisResult[]>([]);
@@ -248,11 +274,11 @@ export default function AnalysisPage() {
       const [s, h, runs] = await Promise.all([
         fetchStage2Summary(m).catch(() => null),
         fetchStage2History(m).catch(() => []),
-        fetchJobRuns({ market: m, jobType: 'stage2_analysis', pageSize: 1 }).catch(() => [])
+        fetchJobRuns({ market: m, jobType: 'stage2_analysis', pageSize: 40 }).catch(() => [])
       ]);
       setSummary(s);
       setHistory(h);
-      setLastRun(runs.length > 0 ? runs[0] : null);
+      setWeekRuns(runs);
       if (runs.length > 0 && runs[0].status === 'completed') {
         setLatestRunId(runs[0].id);
         const rot = await fetchSectorRotation(m, runs[0].id).catch(() => []);
@@ -278,19 +304,27 @@ export default function AnalysisPage() {
   }, [m, testSampleOnly]);
 
   // A run already exists for this market/week, so there may be failed/pending tickers
-  // to fill in. Retry upserts only the missing symbols for the current week.
-  const canRetry = !!lastRun && (lastRun.status === 'completed' || lastRun.status === 'failed');
+  // to fill in. Retry upserts only the missing symbols for the selected week.
+  const weekOptions = useMemo(() => recentWeekOptions(12), []);
+  const effectiveWeek = selectedWeek || (weekOptions[0]?.value ?? '');
+  const canRetry = useMemo(
+    () => weekRuns.some(r => r.weekNumber === effectiveWeek && (r.status === 'completed' || r.status === 'failed')),
+    [weekRuns, effectiveWeek]
+  );
 
   const handleTrigger = async () => {
     setTriggering(true);
     try {
-      const req: { minMarketCap?: number; maxMarketCap?: number; sectorIds?: number[]; limit?: number; testSampleOnly?: boolean; retryFailedOnly?: boolean } = {};
+      const req: { minMarketCap?: number; maxMarketCap?: number; sectorIds?: number[]; limit?: number; testSampleOnly?: boolean; retryFailedOnly?: boolean; weekNumber?: string } = {};
       if (minMcap) req.minMarketCap = parseFloat(minMcap);
       if (maxMcap) req.maxMarketCap = parseFloat(maxMcap);
       if (selectedSectorIds.length > 0) req.sectorIds = selectedSectorIds;
       if (limitVal) req.limit = parseInt(limitVal);
       if (testSampleOnly) req.testSampleOnly = true;
       if (retryFailedOnly && canRetry) req.retryFailedOnly = true;
+      // Only send weekNumber for a past week; current week lets the server compute it
+      // (avoids year-boundary drift between client and server ISO-week math).
+      if (selectedWeek && selectedWeek !== weekOptions[0]?.value) req.weekNumber = selectedWeek;
       await triggerAnalysis(m, req);
       setShowTriggerModal(false);
       setMinMcap('');
@@ -298,6 +332,7 @@ export default function AnalysisPage() {
       setLimitVal('');
       setSelectedSectorIds([]);
       setRetryFailedOnly(false);
+      setSelectedWeek('');
       navigate(`/${m}/jobs`);
     } catch { /* ignore */ }
     setTriggering(false);
@@ -404,6 +439,27 @@ export default function AnalysisPage() {
                   {testSampleOnly
                     ? 'Runs only the curated test-sample stocks — fast, ideal for local testing.'
                     : 'Runs the entire stock universe — slower, full results.'}
+                </div>
+              </div>
+
+              {/* Target week: current (live) or a past week (point-in-time) */}
+              <div className="form-group">
+                <label className="form-label">Target Week</label>
+                <select
+                  className="form-input"
+                  value={selectedWeek || weekOptions[0]?.value || ''}
+                  onChange={e => setSelectedWeek(e.target.value)}
+                >
+                  {weekOptions.map((opt, i) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}{i === 0 ? ' (current)' : ''}
+                    </option>
+                  ))}
+                </select>
+                <div style={{ marginTop: 6, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                  {(!selectedWeek || selectedWeek === weekOptions[0]?.value)
+                    ? 'Runs for the current week using live prices.'
+                    : 'Point-in-time run — prices are fetched only up to that week\u2019s close. Market cap uses current values.'}
                 </div>
               </div>
 

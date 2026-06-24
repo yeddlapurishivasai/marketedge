@@ -154,6 +154,7 @@ export interface TriggerAnalysisRequest {
   limit?: number;
   testSampleOnly?: boolean;
   retryFailedOnly?: boolean;
+  weekNumber?: string;
   force?: boolean;
 }
 
