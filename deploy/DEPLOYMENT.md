@@ -34,6 +34,46 @@ az account set --subscription 5bfc6247-f6ee-4d64-8651-711aac18f8f0
 
 ---
 
+## Quick Start
+
+### A. Reset the database and deploy everything (clean slate)
+
+Deletes the existing database, recreates an empty one, publishes schema + seed data, then
+publishes the API (with UI) and the Worker.
+
+```powershell
+# 1. Delete the current database
+.\deploy\delete-database.ps1 -Force
+
+# 2. Recreate the empty database resource (sqlpackage needs it to exist)
+az sql db create --resource-group market-edge-dr-rg-01 `
+    --server market-edge-dr-sql-server-01 --name MarketEdge --service-objective S0
+
+# 3. Publish the dacpac + seed data
+.\deploy\deploy-database.ps1 -SeedData
+
+# 4. Publish API + UI + Worker
+.\deploy\deploy-apps.ps1
+```
+
+### B. Deploy app changes only (no database changes)
+
+```powershell
+.\deploy\deploy-apps.ps1
+```
+
+### C. Full end-to-end in one command
+
+```powershell
+# Database (schema + seed) → app settings → API → Worker
+.\deploy\deploy-all.ps1 -SeedData
+```
+
+All commands default to the `market-edge-dr-rg-01` resources; see **Scripts** below for
+per-script parameters and overrides.
+
+---
+
 ## Scripts
 
 ### 1. Delete the database — `delete-database.ps1`
