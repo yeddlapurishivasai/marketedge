@@ -225,6 +225,7 @@ export default function AnalysisPage() {
   const [maxMcap, setMaxMcap] = useState('');
   const [limitVal, setLimitVal] = useState('');
   const [selectedSectorIds, setSelectedSectorIds] = useState<number[]>([]);
+  const [testSampleOnly, setTestSampleOnly] = useState<boolean>(import.meta.env.DEV);
   const [allSectors, setAllSectors] = useState<Sector[]>([]);
   const [latestRunId, setLatestRunId] = useState<number | null>(null);
   const [stocks, setStocks] = useState<StageAnalysisResult[]>([]);
@@ -268,11 +269,12 @@ export default function AnalysisPage() {
   const handleTrigger = async () => {
     setTriggering(true);
     try {
-      const req: { minMarketCap?: number; maxMarketCap?: number; sectorIds?: number[]; limit?: number; force?: boolean } = {};
+      const req: { minMarketCap?: number; maxMarketCap?: number; sectorIds?: number[]; limit?: number; testSampleOnly?: boolean; force?: boolean } = {};
       if (minMcap) req.minMarketCap = parseFloat(minMcap);
       if (maxMcap) req.maxMarketCap = parseFloat(maxMcap);
       if (selectedSectorIds.length > 0) req.sectorIds = selectedSectorIds;
       if (limitVal) req.limit = parseInt(limitVal);
+      if (testSampleOnly) req.testSampleOnly = true;
       // Always force when explicitly triggering from UI with parameters
       req.force = true;
       await triggerAnalysis(m, req);
@@ -361,6 +363,34 @@ export default function AnalysisPage() {
               <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: 16 }}>
                 Configure filters for the analysis run. Leave fields blank for defaults.
               </p>
+
+              {/* Run mode: test sample vs full universe */}
+              <div className="form-group">
+                <label className="form-label">Run Mode</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${testSampleOnly ? 'btn-primary' : 'btn-outline'}`}
+                    style={{ flex: 1 }}
+                    onClick={() => setTestSampleOnly(true)}
+                  >
+                    Sample (200 stocks)
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${!testSampleOnly ? 'btn-primary' : 'btn-outline'}`}
+                    style={{ flex: 1 }}
+                    onClick={() => setTestSampleOnly(false)}
+                  >
+                    Full universe
+                  </button>
+                </div>
+                <div style={{ marginTop: 6, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                  {testSampleOnly
+                    ? 'Runs only the curated test-sample stocks — fast, ideal for local testing.'
+                    : 'Runs the entire stock universe — slower, full results.'}
+                </div>
+              </div>
 
               {/* Sector Selection */}
               <div className="form-group">
