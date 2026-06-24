@@ -34,25 +34,19 @@
 #>
 
 param(
-    [Parameter(Mandatory)]
-    [string]$ResourceGroup,
+    [string]$ResourceGroup = "market-edge-dr-rg-01",
 
-    [Parameter(Mandatory)]
-    [string]$ApiAppName,
+    [string]$ApiAppName = "market-edge-dr-api-01",
 
-    [Parameter(Mandatory)]
-    [string]$WorkerAppName,
+    [string]$WorkerAppName = "market-edge-dr-worker-01",
 
-    [Parameter(Mandatory)]
-    [string]$SqlServer,
+    [string]$SqlServer = "market-edge-dr-sql-server-01.database.windows.net",
 
-    [Parameter(Mandatory)]
-    [string]$SqlUser,
+    [string]$SqlUser = "sqladmin",
 
     [SecureString]$SqlPassword,
 
-    [Parameter(Mandatory)]
-    [string]$StorageAccountName
+    [string]$StorageAccountName = "marketedgedrsa01"
 )
 
 $ErrorActionPreference = "Stop"
