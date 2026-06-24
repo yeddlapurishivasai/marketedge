@@ -7,7 +7,8 @@ A stock market management application for cataloging Indian (NSE) and US (NASDAQ
 ```
 src/
 ├── MarketEdge.Api/          # .NET 8 Web API + React SPA
-└── MarketEdge.Database/     # SQL Server Database Project (dacpac)
+├── MarketEdge.Database/     # SQL Server Database Project (dacpac)
+└── MarketEdge.Worker/       # Python Flask worker service (yfinance stage analysis)
 ```
 
 ## Projects

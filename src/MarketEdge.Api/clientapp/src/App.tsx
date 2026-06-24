@@ -5,8 +5,10 @@ import { fetchSectors, fetchStocks, createSector, renameSector, deleteSector, de
 import {
   Sun, Moon, ChevronLeft, Search, Plus, Pencil, Trash2,
   ArrowRightLeft, X, TrendingUp, LayoutGrid, BarChart3,
-  Globe, IndianRupee, DollarSign, ChevronRight
+  IndianRupee, DollarSign, ChevronRight, Activity, Target
 } from 'lucide-react';
+import JobsPage from './pages/JobsPage';
+import AnalysisPage from './pages/AnalysisPage';
 import './styles.css';
 
 // Theme context
@@ -85,6 +87,8 @@ function App() {
             <Route path="/:market/sectors" element={<SectorsPage />} />
             <Route path="/:market/sectors/:sectorId" element={<SectorDetail />} />
             <Route path="/:market/stocks" element={<StocksPage />} />
+            <Route path="/:market/analysis" element={<AnalysisPage />} />
+            <Route path="/:market/jobs" element={<JobsPage />} />
           </Routes>
         </div>
       </BrowserRouter>
@@ -146,6 +150,22 @@ function MarketMenu() {
           </div>
           <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
         </div>
+        <div className="menu-card" onClick={() => navigate(`/${m}/analysis`)}>
+          <div className="menu-card-icon analysis"><Target size={22} /></div>
+          <div className="menu-card-text">
+            <h3>Stage 2 Analysis</h3>
+            <p>RS, momentum &amp; sector rotation</p>
+          </div>
+          <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
+        </div>
+        <div className="menu-card" onClick={() => navigate(`/${m}/jobs`)}>
+          <div className="menu-card-icon jobs"><Activity size={22} /></div>
+          <div className="menu-card-text">
+            <h3>Job Runs</h3>
+            <p>Monitor analysis job runs</p>
+          </div>
+          <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
+        </div>
       </div>
     </div>
   );
@@ -154,7 +174,6 @@ function MarketMenu() {
 function SectorsPage() {
   const { market } = useParams<{ market: string }>();
   const m = market as Market;
-  const navigate = useNavigate();
   const [sectors, setSectors] = useState<Sector[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
