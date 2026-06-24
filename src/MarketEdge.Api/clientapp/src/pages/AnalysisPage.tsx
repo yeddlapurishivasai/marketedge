@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { Market, Sector, Stage2Summary, SectorRotation, SectorRotationHistory, Stage2History, StageAnalysisResult } from '../api';
+import type { Market, Sector, Stage2Summary, SectorRotation, SectorRotationHistory, Stage2History, StageAnalysisResult, JobRun } from '../api';
 import {
   fetchSectors, fetchStage2Summary, fetchSectorRotation, fetchStage2History,
   fetchJobRuns, triggerAnalysis, fetchStage2Stocks, fetchRotationHistory
@@ -226,6 +226,8 @@ export default function AnalysisPage() {
   const [limitVal, setLimitVal] = useState('');
   const [selectedSectorIds, setSelectedSectorIds] = useState<number[]>([]);
   const [testSampleOnly, setTestSampleOnly] = useState<boolean>(import.meta.env.DEV);
+  const [retryFailedOnly, setRetryFailedOnly] = useState<boolean>(false);
+  const [lastRun, setLastRun] = useState<JobRun | null>(null);
   const [allSectors, setAllSectors] = useState<Sector[]>([]);
   const [latestRunId, setLatestRunId] = useState<number | null>(null);
   const [stocks, setStocks] = useState<StageAnalysisResult[]>([]);
@@ -250,6 +252,7 @@ export default function AnalysisPage() {
       ]);
       setSummary(s);
       setHistory(h);
+      setLastRun(runs.length > 0 ? runs[0] : null);
       if (runs.length > 0 && runs[0].status === 'completed') {
         setLatestRunId(runs[0].id);
         const rot = await fetchSectorRotation(m, runs[0].id).catch(() => []);
@@ -274,23 +277,27 @@ export default function AnalysisPage() {
       .catch(() => setAllSectors([]));
   }, [m, testSampleOnly]);
 
+  // A run already exists for this market/week, so there may be failed/pending tickers
+  // to fill in. Retry upserts only the missing symbols for the current week.
+  const canRetry = !!lastRun && (lastRun.status === 'completed' || lastRun.status === 'failed');
+
   const handleTrigger = async () => {
     setTriggering(true);
     try {
-      const req: { minMarketCap?: number; maxMarketCap?: number; sectorIds?: number[]; limit?: number; testSampleOnly?: boolean; force?: boolean } = {};
+      const req: { minMarketCap?: number; maxMarketCap?: number; sectorIds?: number[]; limit?: number; testSampleOnly?: boolean; retryFailedOnly?: boolean } = {};
       if (minMcap) req.minMarketCap = parseFloat(minMcap);
       if (maxMcap) req.maxMarketCap = parseFloat(maxMcap);
       if (selectedSectorIds.length > 0) req.sectorIds = selectedSectorIds;
       if (limitVal) req.limit = parseInt(limitVal);
       if (testSampleOnly) req.testSampleOnly = true;
-      // Always force when explicitly triggering from UI with parameters
-      req.force = true;
+      if (retryFailedOnly && canRetry) req.retryFailedOnly = true;
       await triggerAnalysis(m, req);
       setShowTriggerModal(false);
       setMinMcap('');
       setMaxMcap('');
       setLimitVal('');
       setSelectedSectorIds([]);
+      setRetryFailedOnly(false);
       navigate(`/${m}/jobs`);
     } catch { /* ignore */ }
     setTriggering(false);
@@ -399,6 +406,24 @@ export default function AnalysisPage() {
                     : 'Runs the entire stock universe — slower, full results.'}
                 </div>
               </div>
+
+              {/* Retry failed/pending tickers only (enabled when a run already exists for the week) */}
+              {canRetry && (
+                <div className="form-group">
+                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={retryFailedOnly}
+                      onChange={(e) => setRetryFailedOnly(e.target.checked)}
+                    />
+                    Retry failed / pending tickers only
+                  </label>
+                  <div style={{ marginTop: 6, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                    Processes only symbols in the selected universe that have no result yet
+                    for the current week. Already-completed tickers are left untouched.
+                  </div>
+                </div>
+              )}
 
               {/* Sector Selection */}
               <div className="form-group">

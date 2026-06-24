@@ -2,6 +2,7 @@ CREATE TABLE [dbo].[IndianStageAnalysisResults]
 (
     [Id] INT IDENTITY(1,1) NOT NULL,
     [RunId] INT NOT NULL,
+    [WeekNumber] NVARCHAR(10) NOT NULL DEFAULT '',
     [Symbol] NVARCHAR(50) NOT NULL,
     [CompanyName] NVARCHAR(500) NOT NULL,
     [SectorId] INT NOT NULL,
@@ -48,8 +49,9 @@ CREATE TABLE [dbo].[IndianStageAnalysisResults]
     CONSTRAINT [CK_IndianStageAnalysisResults_Classification] CHECK ([Classification] IN ('continuing', 'new', 'reentry', 'removed')),
     CONSTRAINT [CK_IndianStageAnalysisResults_Quadrant] CHECK ([Quadrant] IN ('leading', 'weakening', 'lagging', 'improving')),
     CONSTRAINT [CK_IndianStageAnalysisResults_ADClassification] CHECK ([ADClassification] IN ('accumulating', 'distributing', 'neutral')),
+    CONSTRAINT [UX_IndianStageAnalysisResults_WeekSymbol] UNIQUE NONCLUSTERED ([WeekNumber], [Symbol]),
     INDEX [IX_IndianStageAnalysisResults_RunId] NONCLUSTERED ([RunId]),
     INDEX [IX_IndianStageAnalysisResults_Symbol] NONCLUSTERED ([Symbol]),
     INDEX [IX_IndianStageAnalysisResults_IsStage2] NONCLUSTERED ([IsStage2]) INCLUDE ([RunId], [Symbol], [Classification]),
-    INDEX [IX_IndianStageAnalysisResults_RunId_IsStage2] NONCLUSTERED ([RunId], [IsStage2]) INCLUDE ([Symbol], [SectorName], [RSScore], [MomentumScore])
+    INDEX [IX_IndianStageAnalysisResults_Week_IsStage2] NONCLUSTERED ([WeekNumber], [IsStage2]) INCLUDE ([Symbol], [SectorId], [SectorName], [RSScore], [RSDelta2w], [MomentumScore], [ADClassification])
 )

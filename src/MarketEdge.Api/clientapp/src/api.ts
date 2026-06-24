@@ -111,6 +111,7 @@ export interface JobRun {
   id: number;
   jobType: string;
   market: string;
+  weekNumber: string;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   parameters?: Record<string, unknown>;
@@ -152,6 +153,7 @@ export interface TriggerAnalysisRequest {
   sectorIds?: number[];
   limit?: number;
   testSampleOnly?: boolean;
+  retryFailedOnly?: boolean;
   force?: boolean;
 }
 

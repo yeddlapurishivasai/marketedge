@@ -77,7 +77,9 @@ def main():
     # and never collides with a real run for the same week. It is deleted at the end.
     print("\n[2] Creating test job run...")
     cursor = conn.cursor()
-    week_number = _get_week_number()
+    # Use a sentinel WeekNumber for the throwaway result rows so the (WeekNumber, Symbol)
+    # upsert never collides with — or deletes — real week-keyed data in the DB.
+    week_number = "E2E-TEST"
     cursor.execute(
         "INSERT INTO dbo.JobRuns (JobType, Market, WeekNumber, Status, Progress, CreatedAt) "
         "VALUES (?, ?, ?, 'cancelled', 0, GETUTCDATE())",
@@ -126,6 +128,7 @@ def main():
 
         result = {
             "run_id": run_id,
+            "week_number": week_number,
             "symbol": symbol,
             "company_name": stock["company_name"],
             "sector_id": stock["sector_id"],
