@@ -15,58 +15,58 @@ description: "Validation/documentation tasks for the backtracked Stage 2 Analysi
 
 ## Phase 1: Setup & Baseline
 
-- [ ] T001 Confirm baseline builds: run `dotnet build src/MarketEdge.Api` and
+- [x] T001 Confirm baseline builds: run `dotnet build src/MarketEdge.Api` and
   record success as the validation baseline.
-- [ ] T002 [P] Inventory the routes in `src/MarketEdge.Api/Controllers/JobsController.cs`
+- [x] T002 [P] Inventory the routes in `src/MarketEdge.Api/Controllers/JobsController.cs`
   and confirm each is captured in `contracts/api.md` (method, route, query/body).
-- [ ] T003 [P] Confirm NO EF Core migrations exist under `src/MarketEdge.Api`
+- [x] T003 [P] Confirm NO EF Core migrations exist under `src/MarketEdge.Api`
   (Constitution I/II) — search for any `Migrations/` folder or `Migration` types.
 
 ## Phase 2: Trigger & Job Lifecycle (US1, US2)
 
-- [ ] T004 [US1] Validate `TriggerStageAnalysisAsync` in `Services/JobService.cs`:
+- [x] T004 [US1] Validate `TriggerStageAnalysisAsync` in `Services/JobService.cs`:
   market validation, week resolution via `GetIsoWeekNumber`, `weekNumber` regex
   `^\d{4}-W\d{2}$`, and future-week rejection — match against spec FR-001/FR-002.
-- [ ] T005 [US1] Validate dedup: an active `(stage2_analysis, market, week)` run is
+- [x] T005 [US1] Validate dedup: an active `(stage2_analysis, market, week)` run is
   returned instead of creating a duplicate, and the `DbUpdateException`
   (SQL 2601/2627) fallback path resolves to the in-flight run (FR-003).
   Cross-check `src/MarketEdge.Database/Indexes/UX_JobRuns_ActiveWeek.sql`.
-- [ ] T006 [US1] Validate `Parameters` persistence + queue payload: filters
+- [x] T006 [US1] Validate `Parameters` persistence + queue payload: filters
   forwarded, full-sector selection summarized as `"All Sectors"`, message is
   base64 JSON on `stage-analysis-jobs` (FR-004, `contracts/api.md`).
-- [ ] T007 [P] [US2] Validate `GET /api/jobs` filtering/ordering/pagination and
+- [x] T007 [P] [US2] Validate `GET /api/jobs` filtering/ordering/pagination and
   `GET /api/jobs/{id}` mapping incl. `DurationSeconds` (FR-005/FR-006).
-- [ ] T008 [P] [US2] Validate `POST /api/jobs/{id}/cancel`: non-terminal → cancelled
+- [x] T008 [P] [US2] Validate `POST /api/jobs/{id}/cancel`: non-terminal → cancelled
   `{ cancelled: true }`; terminal/unknown → `404` (FR-007).
 
 ## Phase 3: Stage 2 Read Models (US3, US4, US5)
 
-- [ ] T009 [US3] Validate `GetLatestStage2SummaryAsync`: latest completed run's
+- [x] T009 [US3] Validate `GetLatestStage2SummaryAsync`: latest completed run's
   week, totals, classification counts, `BySector` ordering, `Top25` ordering by
   `RSScore` then `MomentumScore`; `404` when no completed run (FR-008).
-- [ ] T010 [P] [US4] Validate `GetStage2StocksAsync` filter semantics
+- [x] T010 [P] [US4] Validate `GetStage2StocksAsync` filter semantics
   (none → Stage 2; `removed`; else `IsStage2 AND classification`) + `sectorId`
   narrowing + ordering; unknown run → empty list (FR-009).
-- [ ] T011 [P] [US5] Validate `GetSectorRotationAsync` aggregation over non-null
+- [x] T011 [P] [US5] Validate `GetSectorRotationAsync` aggregation over non-null
   `RSScore`/`RSDelta2w`, `GetQuadrant`, accumulating/distributing counts (FR-010).
-- [ ] T012 [P] [US5] Validate `GetStage2HistoryAsync` (maxRuns=10) and
+- [x] T012 [P] [US5] Validate `GetStage2HistoryAsync` (maxRuns=10) and
   `GetSectorRotationHistoryAsync` (maxRuns=12) collapse the audit log to one entry
   per week and order ascending (FR-011).
-- [ ] T013 [P] Validate India/US symmetry: every market-scoped read selects the
+- [x] T013 [P] Validate India/US symmetry: every market-scoped read selects the
   matching `Indian*`/`US*` entity set and sector table (FR-012).
 
 ## Phase 4: Contract & Data Model Sync
 
-- [ ] T014 [P] Diff `Models/AnalysisDtos.cs` against `contracts/api.md` and confirm
+- [x] T014 [P] Diff `Models/AnalysisDtos.cs` against `contracts/api.md` and confirm
   every DTO field is documented with correct nullability.
-- [ ] T015 [P] Diff `Models/AnalysisEntities.cs` (`StageAnalysisResultBase`,
+- [x] T015 [P] Diff `Models/AnalysisEntities.cs` (`StageAnalysisResultBase`,
   `JobRun`) against the dacpac tables `StageAnalysisResults.sql`,
   `USStageAnalysisResults.sql`, `JobRuns.sql` — column names, types, nullability,
   and CHECK-constrained enums must align with the spec's Key Entities.
 
 ## Phase 5: End-to-End Verification (optional, requires environment)
 
-- [ ] T016 With a seeded local SQL Server + running worker + Azurite queue, trigger
+- [x] T016 With a seeded local SQL Server + running worker + Azurite queue, trigger
   a `testSampleOnly` run for `india`, poll `GET /api/jobs/{id}` to `completed`,
   then verify `summary`, `runs/{id}/stocks`, and `runs/{id}/sector-rotation`
   return the documented shapes (SC-001..SC-004).
