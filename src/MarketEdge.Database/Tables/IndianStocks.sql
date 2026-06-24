@@ -5,13 +5,11 @@ CREATE TABLE [dbo].[IndianStocks]
     [CompanyName] NVARCHAR(500) NOT NULL,
     [SectorId] INT NOT NULL,
     [BroadSector] NVARCHAR(200) NULL,
-    [MarketCap] DECIMAL(20, 2) NULL,
     [IsFno] BIT NOT NULL CONSTRAINT [DF_IndianStocks_IsFno] DEFAULT (0),
     [CreatedAt] DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
     CONSTRAINT [PK_IndianStocks] PRIMARY KEY CLUSTERED ([Id]),
     CONSTRAINT [UQ_IndianStocks_Symbol] UNIQUE ([Symbol]),
     CONSTRAINT [FK_IndianStocks_IndianSectors] FOREIGN KEY ([SectorId]) REFERENCES [dbo].[IndianSectors]([Id]),
     INDEX [IX_IndianStocks_SectorId] NONCLUSTERED ([SectorId]),
-    INDEX [IX_IndianStocks_Symbol] NONCLUSTERED ([Symbol]),
-    INDEX [IX_IndianStocks_MarketCap] NONCLUSTERED ([MarketCap])
+    INDEX [IX_IndianStocks_Symbol] NONCLUSTERED ([Symbol])
 );

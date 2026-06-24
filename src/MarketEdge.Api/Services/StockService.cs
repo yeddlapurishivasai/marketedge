@@ -34,7 +34,7 @@ public class StockService : IStockService
             stocks = q.Select(s => new StockDto
             {
                 Id = s.Id, Symbol = s.Symbol, CompanyName = s.CompanyName,
-                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.MarketCap, IsFno = s.IsFno
+                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.MarketCapInfo != null ? s.MarketCapInfo.MarketCap : null, IsFno = s.IsFno
             });
         }
         else
@@ -48,7 +48,7 @@ public class StockService : IStockService
             stocks = q.Select(s => new StockDto
             {
                 Id = s.Id, Symbol = s.Symbol, CompanyName = s.CompanyName,
-                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.MarketCap, IsFno = s.IsFno
+                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.MarketCapInfo != null ? s.MarketCapInfo.MarketCap : null, IsFno = s.IsFno
             });
         }
 
@@ -70,7 +70,7 @@ public class StockService : IStockService
                 .Select(s => new StockDto
                 {
                     Id = s.Id, Symbol = s.Symbol, CompanyName = s.CompanyName,
-                    SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.MarketCap, IsFno = s.IsFno
+                    SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.MarketCapInfo != null ? s.MarketCapInfo.MarketCap : null, IsFno = s.IsFno
                 }).FirstOrDefaultAsync();
         }
 
@@ -78,7 +78,7 @@ public class StockService : IStockService
             .Select(s => new StockDto
             {
                 Id = s.Id, Symbol = s.Symbol, CompanyName = s.CompanyName,
-                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.MarketCap, IsFno = s.IsFno
+                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.MarketCapInfo != null ? s.MarketCapInfo.MarketCap : null, IsFno = s.IsFno
             }).FirstOrDefaultAsync();
     }
 
@@ -90,7 +90,7 @@ public class StockService : IStockService
             {
                 Symbol = request.Symbol, CompanyName = request.CompanyName,
                 SectorId = request.SectorId, BroadSector = request.BroadSector,
-                MarketCap = request.MarketCap, IsFno = request.IsFno, CreatedAt = DateTime.UtcNow
+                IsFno = request.IsFno, CreatedAt = DateTime.UtcNow
             };
             _db.USStocks.Add(stock);
             await _db.SaveChangesAsync();
@@ -102,7 +102,7 @@ public class StockService : IStockService
             {
                 Symbol = request.Symbol, CompanyName = request.CompanyName,
                 SectorId = request.SectorId, BroadSector = request.BroadSector,
-                MarketCap = request.MarketCap, IsFno = request.IsFno, CreatedAt = DateTime.UtcNow
+                IsFno = request.IsFno, CreatedAt = DateTime.UtcNow
             };
             _db.IndianStocks.Add(stock);
             await _db.SaveChangesAsync();
@@ -119,7 +119,6 @@ public class StockService : IStockService
             if (request.CompanyName != null) stock.CompanyName = request.CompanyName;
             if (request.SectorId.HasValue) stock.SectorId = request.SectorId.Value;
             if (request.BroadSector != null) stock.BroadSector = request.BroadSector;
-            if (request.MarketCap.HasValue) stock.MarketCap = request.MarketCap;
             if (request.IsFno.HasValue) stock.IsFno = request.IsFno.Value;
         }
         else
@@ -129,7 +128,6 @@ public class StockService : IStockService
             if (request.CompanyName != null) stock.CompanyName = request.CompanyName;
             if (request.SectorId.HasValue) stock.SectorId = request.SectorId.Value;
             if (request.BroadSector != null) stock.BroadSector = request.BroadSector;
-            if (request.MarketCap.HasValue) stock.MarketCap = request.MarketCap;
             if (request.IsFno.HasValue) stock.IsFno = request.IsFno.Value;
         }
         await _db.SaveChangesAsync();
