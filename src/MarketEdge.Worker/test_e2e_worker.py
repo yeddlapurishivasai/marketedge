@@ -16,6 +16,13 @@ import sys
 import time
 from datetime import datetime, timezone
 
+# Ensure Unicode output (emoji, em dash) works on Windows consoles (cp1252).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 from config import Config
 from db import get_connection, get_stocks, save_single_result, update_job_status, clear_run_results
 from stage_analysis import calculate_stage2, fetch_benchmark_data
