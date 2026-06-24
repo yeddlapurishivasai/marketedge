@@ -37,6 +37,9 @@ public class MarketEdgeDbContext : DbContext
             .WithOne(r => r.JobRun)
             .HasForeignKey(r => r.RunId);
 
+        modelBuilder.Entity<IndianStock>().Property(s => s.MarketCap).HasColumnType("decimal(20,2)");
+        modelBuilder.Entity<USStock>().Property(s => s.MarketCap).HasColumnType("decimal(20,2)");
+
         ConfigureDecimalProperties<IndianStageAnalysisResult>(modelBuilder);
         ConfigureDecimalProperties<USStageAnalysisResult>(modelBuilder);
     }

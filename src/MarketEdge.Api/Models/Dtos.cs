@@ -15,6 +15,8 @@ public class StockDto
     public int SectorId { get; set; }
     public string? SectorName { get; set; }
     public string? BroadSector { get; set; }
+    public decimal? MarketCap { get; set; }
+    public bool IsFno { get; set; }
 }
 
 public class CreateSectorRequest
@@ -28,6 +30,8 @@ public class CreateStockRequest
     public string CompanyName { get; set; } = string.Empty;
     public int SectorId { get; set; }
     public string? BroadSector { get; set; }
+    public decimal? MarketCap { get; set; }
+    public bool IsFno { get; set; }
 }
 
 public class UpdateStockRequest
@@ -35,6 +39,8 @@ public class UpdateStockRequest
     public string? CompanyName { get; set; }
     public int? SectorId { get; set; }
     public string? BroadSector { get; set; }
+    public decimal? MarketCap { get; set; }
+    public bool? IsFno { get; set; }
 }
 
 public class MoveStocksRequest

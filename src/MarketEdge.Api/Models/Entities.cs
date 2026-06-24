@@ -22,6 +22,8 @@ public class IndianStock
     public string CompanyName { get; set; } = string.Empty;
     public int SectorId { get; set; }
     public string? BroadSector { get; set; }
+    public decimal? MarketCap { get; set; }
+    public bool IsFno { get; set; }
     public DateTime CreatedAt { get; set; }
 
     [ForeignKey(nameof(SectorId))]
@@ -47,6 +49,8 @@ public class USStock
     public string CompanyName { get; set; } = string.Empty;
     public int SectorId { get; set; }
     public string? BroadSector { get; set; }
+    public decimal? MarketCap { get; set; }
+    public bool IsFno { get; set; }
     public DateTime CreatedAt { get; set; }
 
     [ForeignKey(nameof(SectorId))]

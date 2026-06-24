@@ -11,6 +11,8 @@ export interface Stock {
   sectorId: number;
   sectorName?: string;
   broadSector?: string;
+  marketCap?: number;
+  isFno: boolean;
 }
 
 export interface PagedResult<T> {
@@ -68,7 +70,7 @@ export async function fetchStocks(
   return res.json();
 }
 
-export async function createStock(market: Market, data: { symbol: string; companyName: string; sectorId: number; broadSector?: string }): Promise<Stock> {
+export async function createStock(market: Market, data: { symbol: string; companyName: string; sectorId: number; broadSector?: string; marketCap?: number; isFno?: boolean }): Promise<Stock> {
   const res = await fetch(`${BASE}/${market}/stocks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -78,7 +80,7 @@ export async function createStock(market: Market, data: { symbol: string; compan
   return res.json();
 }
 
-export async function updateStock(market: Market, id: number, data: { companyName?: string; sectorId?: number; broadSector?: string }): Promise<void> {
+export async function updateStock(market: Market, id: number, data: { companyName?: string; sectorId?: number; broadSector?: string; marketCap?: number; isFno?: boolean }): Promise<void> {
   const res = await fetch(`${BASE}/${market}/stocks/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
