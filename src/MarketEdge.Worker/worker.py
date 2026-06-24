@@ -21,6 +21,7 @@ from db import (
     get_stocks,
     save_single_result,
     update_job_status,
+    update_market_cap,
 )
 from stage_analysis import (
     calculate_stage2,
@@ -260,6 +261,12 @@ def process_message(message_content: str) -> None:
                 # 1. Fetch market cap for this stock
                 mc = _fetch_single_market_cap(symbol, market)
                 stock["market_cap"] = mc
+                # Persist the freshly fetched market cap to the fundamentals table
+                if mc is not None:
+                    try:
+                        update_market_cap(conn, market, stock["id"], mc)
+                    except Exception as exc:
+                        logger.warning("Failed to persist market cap for %s: %s", symbol, exc)
                 time.sleep(stock_delay)
 
                 # 2. Apply market cap filter

@@ -14,6 +14,11 @@ MARKET_TABLES = {
     "us": ("USStocks", "USSectors", "USStageAnalysisResults"),
 }
 
+FUNDAMENTALS_TABLES = {
+    "india": "IndianStockFundamentals",
+    "us": "USStockFundamentals",
+}
+
 
 def get_connection() -> pyodbc.Connection:
     logger.debug("Opening SQL Server connection")
@@ -179,6 +184,37 @@ def save_single_result(conn: pyodbc.Connection, market: str, result: dict[str, A
 
     cursor = conn.cursor()
     cursor.execute(insert_query, params)
+    conn.commit()
+
+
+def update_market_cap(
+    conn: pyodbc.Connection,
+    market: str,
+    stock_id: int,
+    market_cap: int | float | None,
+) -> None:
+    """Upsert the latest market cap for a stock into its fundamentals table."""
+    if market_cap is None:
+        return
+    market_key = market.lower()
+    if market_key not in FUNDAMENTALS_TABLES:
+        raise ValueError(f"Unsupported market: {market}")
+    table = FUNDAMENTALS_TABLES[market_key]
+    cursor = conn.cursor()
+    cursor.execute(
+        f"""
+        MERGE dbo.{table} AS target
+        USING (SELECT ? AS StockId, ? AS MarketCap) AS src
+        ON target.StockId = src.StockId
+        WHEN MATCHED THEN
+            UPDATE SET MarketCap = src.MarketCap, UpdatedAt = GETUTCDATE()
+        WHEN NOT MATCHED THEN
+            INSERT (StockId, MarketCap, UpdatedAt, CreatedAt)
+            VALUES (src.StockId, src.MarketCap, GETUTCDATE(), GETUTCDATE());
+        """,
+        stock_id,
+        market_cap,
+    )
     conn.commit()
 
 
