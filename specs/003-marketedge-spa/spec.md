@@ -297,8 +297,9 @@ auto-refreshes every 5s and stops when none are active; cancel calls `cancelJobR
   `SectorsPage`, `SectorDetail`, `StocksPage`, `AnalysisPage`, `JobsPage`) is
   documented with its purpose, controls, and API calls, matching the code.
 - **SC-002**: Each documented API call in the SPA corresponds to a real function in
-  `src/api.ts` and a real endpoint in the API spec (`specs/001-stage2-analysis-api/`
-  or the sectors/stocks controllers).
+  `src/api.ts` and a real endpoint in a backend spec (Stage 2 analysis in
+  `specs/001-stage2-analysis-api/`; sectors/stocks CRUD/move in
+  `specs/004-catalog-api/`).
 - **SC-003**: The five Analysis tabs and their tables/charts/filters match the
   rendered components and column headers in `AnalysisPage.tsx`.
 - **SC-004**: Jobs auto-refresh starts only when an active run exists and stops when
@@ -315,7 +316,7 @@ auto-refreshes every 5s and stops when none are active; cancel calls `cancelJobR
 - `recharts`, `react-router-dom` v7, and `lucide-react` are the charting, routing,
   and icon libraries (per `package.json`); TradingView is embedded via iframe.
 - Sectors/stocks CRUD endpoints (`/api/{market}/sectors`, `/api/{market}/stocks`)
-  behave as the `api.ts` client expects; their server spec is out of scope here and
-  belongs with the sectors/stocks controllers.
+  behave as the `api.ts` client expects; their server contract is specified in
+  `specs/004-catalog-api/` and is out of scope here.
 - This SPA is presentation-only; all persisted data and analysis come from the API
   and worker, which are specified separately.

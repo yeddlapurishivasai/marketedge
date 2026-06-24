@@ -18,7 +18,7 @@ dacpac (build → publish).
 - NO Entity Framework Core migrations may ever be added. EF Core is query-only.
 - Every table, index, constraint, and check lives as a `.sql` file under
   `src/MarketEdge.Database/Tables/` (or `Indexes/`), e.g. `JobRuns.sql`,
-  `IndianStageAnalysisResults.sql`, `UX_JobRuns_ActiveWeek.sql`.
+  `IndianSectors.sql`, `StageAnalysisResults.sql`, `UX_JobRuns_ActiveWeek.sql`.
 - Schema changes are made by editing those `.sql` files and re-publishing the
   dacpac, never by code-first model changes.
 - Database invariants (e.g. CHECK constraints on `Status`, `Market`,
@@ -86,7 +86,8 @@ The unit of analysis is an ISO week (`YYYY-Www`) per market.
 ## Technology Constraints
 
 - API: .NET 8 Web API, EF Core (query-only), React 19 + TypeScript + Vite SPA
-  under `clientapp/` (the SPA is OUT OF SCOPE for analysis specs).
+  under `clientapp/` (the SPA is OUT OF SCOPE for the *analysis* specs 001/002; it
+  is documented separately in its own presentation-only spec, `003-marketedge-spa`).
 - Worker: Python 3.12, Flask, pandas, yfinance, pyodbc, azure-storage-queue.
 - Database: SQL Server 2022, dacpac via Microsoft.Build.Sql; tables
   `IndianSectors`, `IndianStocks`, `USSectors`, `USStocks`,
@@ -117,4 +118,13 @@ the India/US code paths is a constitutional violation and must be justified
 explicitly (with a simpler alternative considered) before merge. Specs and plans
 under `specs/` must declare a Constitution Check and document any deviation.
 
-**Version**: 1.0.0 | **Ratified**: 2026-06-24 | **Last Amended**: 2026-06-24
+**Version**: 1.0.1 | **Ratified**: 2026-06-24 | **Last Amended**: 2026-06-24
+
+<!--
+Amendment log:
+- 1.0.1 (2026-06-24): Clarified that the SPA is documented in its own
+  presentation-only spec (003-marketedge-spa) and is only out of scope for the
+  analysis specs; corrected an example schema filename. Patch-level wording fixes,
+  no principle changes.
+-->
+

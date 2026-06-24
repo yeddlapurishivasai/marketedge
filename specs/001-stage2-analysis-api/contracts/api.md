@@ -90,7 +90,9 @@ bySector: SectorStage2CountDto[], top25: StageAnalysisResultDto[]`.
 accumulatingCount, distributingCount`.
 
 ### Stage2HistoryDto
-`runId, runDate, totalStage2, bySector: SectorStage2CountDto[]`.
+`runId, runDate, totalStage2, bySector: SectorStage2CountDto[]`. Note: in the
+history projection only `stage2Count` is populated on each `bySector` entry;
+`totalCount` is left `0` (it is filled only in the point-in-time summary).
 
 ### SectorRotationHistoryDto
 `runId, runDate, sectors: SectorRotationDto[]`.
@@ -102,7 +104,9 @@ accumulatingCount, distributingCount`.
 - **Stocks filter**: no `classification` → `IsStage2=true`; `classification=removed`
   → `Classification=removed`; otherwise `IsStage2=true AND Classification=<value>`.
   Optional `sectorId` narrows further. Ordering: `RSScore` desc, then
-  `MomentumScore` desc.
+  `MomentumScore` desc — on the raw nullable values (no null coalescing), so
+  null-RS rows fall to provider-default position here, unlike the summary `top25`
+  which coalesces nulls to `0`.
 - **Quadrant** (sector aggregate): `(avgRSScore>0, avgRSDelta2w>0)` →
   `leading | weakening | lagging | improving`.
 - **History / rotation-history** collapse the `JobRuns` audit log to the latest

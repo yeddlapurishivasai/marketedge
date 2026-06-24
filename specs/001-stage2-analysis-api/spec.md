@@ -49,7 +49,9 @@ a base64 JSON message lands on the Azure Storage Queue.
    after the current week, **Then** the API returns `400` ("in the future").
 5. **Given** optional filters (`minMarketCap`, `maxMarketCap`, `sectorIds`,
    `limit`, `testSampleOnly`, `retryFailedOnly`), **When** provided, **Then** they
-   are persisted on the run's `Parameters` JSON and forwarded in the queue message.
+   are persisted on the run's `Parameters` JSON (sector selections resolved to
+   sector *names* under the key `sectors`) and the raw `sectorIds` are forwarded in
+   the queue message.
 
 ---
 
@@ -158,8 +160,10 @@ plus week-over-week history for Stage 2 counts and sector rotation.
   `UX_JobRuns_ActiveWeek` filtered unique index; the API catches the unique
   violation (SQL errors 2601/2627) and returns the existing in-flight run instead
   of erroring.
-- `sectorIds` covering every sector for the market is recorded as `"All Sectors"`
-  in `Parameters` rather than the full list.
+- Supplied `sectorIds` are resolved to sector names and stored in `Parameters`
+  under the key `sectors` (the raw ids are only forwarded in the queue message). A
+  selection covering every sector for the market is recorded as `"All Sectors"`
+  rather than the full name list.
 - A run whose `WeekNumber` has no result rows yet yields empty summaries/lists,
   not errors.
 - `Force` on the trigger request is accepted but deprecated/ignored (results are

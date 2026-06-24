@@ -198,7 +198,9 @@ week, and restricting to the local test-sample universe for fast runs.
   extract `market`, `runId`, and optional `minMarketCap`, `maxMarketCap`,
   `sectorIds`, `limit`, `testSampleOnly`, `retryFailedOnly`, `weekNumber`.
 - **FR-004**: The worker MUST be idempotent: skip runs already `completed`/
-  `cancelled`; resolve `weekNumber` from `JobRuns` when absent and error if none.
+  `cancelled`; resolve `weekNumber` from `JobRuns` when absent and error if none. A
+  `failed` run is NOT in the skip set, so if its queue message is redelivered (the
+  message is not deleted on failure) the run is re-processed.
 - **FR-005**: For a fully-past week the worker MUST bound all price/benchmark
   fetches to the week's exclusive end (point-in-time); for the current week it MUST
   fetch live through today.

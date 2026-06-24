@@ -43,7 +43,7 @@ idle. No hard latency targets.
 SPA calls the API exclusively through `src/api.ts` (never the worker/DB directly);
 graceful degradation on fetch failure.
 
-**Scale/Scope**: 7 routes / 7 screen components; 17 API client functions; 5
+**Scale/Scope**: 7 routes / 7 screen components; 18 API client functions; 5
 analysis tabs; ~2,285 (India) / ~6,368 (US) stocks paged at 50/page.
 
 ## Constitution Check
