@@ -8,11 +8,6 @@ description: "Validation/documentation tasks for the backtracked MarketEdge SPA 
 
 **Prerequisites**: `plan.md`, `spec.md`, `contracts/ui.md`
 
-> **Nature of these tasks**: This is a **backtracking** effort. Tasks document and
-> **validate existing front-end behavior** against the code — they do NOT build new
-> screens. Each task references real files under
-> `src/MarketEdge.Api/clientapp/`. Backend behavior is out of scope (see specs 001/002).
-
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (independent files/areas)

@@ -4,12 +4,6 @@
 
 **Input**: Feature specification from `specs/003-marketedge-spa/spec.md`
 
-> **Backtracking plan**: The SPA already exists and ships with the API. This plan
-> describes how to **document and validate the current front-end behavior** —
-> routing, catalog management, the Stage 2 dashboard, and job monitoring — NOT how
-> to build it from scratch. All backend behavior is specified separately
-> (`specs/001-stage2-analysis-api/`, `specs/002-stage2-analysis-worker/`).
-
 ## Summary
 
 Document and verify the React 19 + TypeScript + Vite SPA under

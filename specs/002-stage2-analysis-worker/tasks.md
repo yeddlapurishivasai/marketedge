@@ -8,10 +8,6 @@ description: "Validation/documentation tasks for the backtracked Stage 2 Analysi
 
 **Prerequisites**: `plan.md`, `spec.md`, `contracts/algorithm.md`
 
-> **Nature of these tasks**: This is a **backtracking** effort. Tasks document and
-> **validate existing behavior** against the worker code — they do NOT build new
-> features. Each task references real files. **The React SPA is out of scope.**
-
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (independent files/areas)

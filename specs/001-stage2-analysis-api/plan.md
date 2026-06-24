@@ -4,11 +4,6 @@
 
 **Input**: Feature specification from `specs/001-stage2-analysis-api/spec.md`
 
-> **Backtracking plan**: This feature already exists and ships. This plan does NOT
-> describe building it from scratch. It describes how to **document and validate
-> the current API behavior** so the spec, contracts, and code stay in agreement.
-> **The React SPA is out of scope** throughout.
-
 ## Summary
 
 Document and verify the existing Stage 2 analysis HTTP surface of

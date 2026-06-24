@@ -4,11 +4,6 @@
 
 **Input**: Feature specification from `specs/002-stage2-analysis-worker/spec.md`
 
-> **Backtracking plan**: The worker already exists and runs in production. This plan
-> describes how to **document and validate the current behavior** — the Stage 2
-> algorithm, job lifecycle, persistence, and resilience — NOT how to build it from
-> scratch. **The React SPA is out of scope.**
-
 ## Summary
 
 Document and verify the Python worker that consumes Stage 2 jobs from the queue,
