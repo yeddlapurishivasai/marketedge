@@ -145,7 +145,26 @@ public class JobService : IJobService
         };
 
         _db.JobRuns.Add(job);
-        await _db.SaveChangesAsync();
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            // Race: another request created the authoritative run for this week first.
+            // The UX_JobRuns_ActiveWeek filtered unique index blocked this duplicate;
+            // fall back to returning the existing active run for the week.
+            _db.Entry(job).State = EntityState.Detached;
+            var existing = await _db.JobRuns
+                .Where(j => j.JobType == "stage2_analysis"
+                    && j.Market == market
+                    && j.WeekNumber == weekNumber
+                    && (j.Status == "completed" || j.Status == "running" || j.Status == "queued"))
+                .OrderByDescending(j => j.CreatedAt)
+                .FirstOrDefaultAsync();
+            if (existing != null) return existing.Id;
+            throw;
+        }
 
         var message = JsonSerializer.Serialize(new
         {
@@ -428,5 +447,12 @@ public class JobService : IJobService
         if (week >= 52 && date.Month == 1) year--;
         if (week == 1 && date.Month == 12) year++;
         return $"{year}-W{week:D2}";
+    }
+
+    private static bool IsUniqueViolation(DbUpdateException ex)
+    {
+        // SQL Server unique index/constraint violations: 2601 (duplicate key row) / 2627 (unique constraint)
+        return ex.InnerException is Microsoft.Data.SqlClient.SqlException sql
+            && sql.Errors.Cast<Microsoft.Data.SqlClient.SqlError>().Any(e => e.Number is 2601 or 2627);
     }
 }

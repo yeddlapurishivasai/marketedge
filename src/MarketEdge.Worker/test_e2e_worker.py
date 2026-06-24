@@ -71,13 +71,16 @@ def main():
     print(f"    Sector: {first_sector_name} (id={first_sector_id})")
     print(f"    Stocks to process: {len(sector_stocks)}")
 
-    # 3. Create a test job run
+    # 3. Create a test job run.
+    # Insert as 'cancelled' so this throwaway harness run stays outside the
+    # UX_JobRuns_ActiveWeek unique index (which covers queued/running/completed)
+    # and never collides with a real run for the same week. It is deleted at the end.
     print("\n[2] Creating test job run...")
     cursor = conn.cursor()
     week_number = _get_week_number()
     cursor.execute(
         "INSERT INTO dbo.JobRuns (JobType, Market, WeekNumber, Status, Progress, CreatedAt) "
-        "VALUES (?, ?, ?, 'running', 0, GETUTCDATE())",
+        "VALUES (?, ?, ?, 'cancelled', 0, GETUTCDATE())",
         "stage2_analysis", market, week_number,
     )
     conn.commit()
