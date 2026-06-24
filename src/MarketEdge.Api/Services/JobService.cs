@@ -131,6 +131,7 @@ public class JobService : IJobService
                 parameters["sectors"] = string.Join(", ", sectorNames);
         }
         if (request?.Limit != null) parameters["limit"] = request.Limit;
+        if (request?.TestSampleOnly == true) parameters["testSampleOnly"] = true;
 
         var job = new JobRun
         {
@@ -155,6 +156,7 @@ public class JobService : IJobService
             maxMarketCap = request?.MaxMarketCap,
             sectorIds = request?.SectorIds,
             limit = request?.Limit,
+            testSampleOnly = request?.TestSampleOnly,
             timestamp = DateTime.UtcNow
         });
 

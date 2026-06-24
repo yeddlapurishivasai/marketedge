@@ -17,6 +17,7 @@ public class StockDto
     public string? BroadSector { get; set; }
     public decimal? MarketCap { get; set; }
     public bool IsFno { get; set; }
+    public bool IsTestSample { get; set; }
 }
 
 public class CreateSectorRequest
@@ -39,6 +40,7 @@ public class UpdateStockRequest
     public int? SectorId { get; set; }
     public string? BroadSector { get; set; }
     public bool? IsFno { get; set; }
+    public bool? IsTestSample { get; set; }
 }
 
 public class MoveStocksRequest

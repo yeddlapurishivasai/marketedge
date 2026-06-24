@@ -34,7 +34,7 @@ public class StockService : IStockService
             stocks = q.Select(s => new StockDto
             {
                 Id = s.Id, Symbol = s.Symbol, CompanyName = s.CompanyName,
-                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.Fundamentals != null ? s.Fundamentals.MarketCap : null, IsFno = s.IsFno
+                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.Fundamentals != null ? s.Fundamentals.MarketCap : null, IsFno = s.IsFno, IsTestSample = s.IsTestSample
             });
         }
         else
@@ -48,7 +48,7 @@ public class StockService : IStockService
             stocks = q.Select(s => new StockDto
             {
                 Id = s.Id, Symbol = s.Symbol, CompanyName = s.CompanyName,
-                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.Fundamentals != null ? s.Fundamentals.MarketCap : null, IsFno = s.IsFno
+                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.Fundamentals != null ? s.Fundamentals.MarketCap : null, IsFno = s.IsFno, IsTestSample = s.IsTestSample
             });
         }
 
@@ -70,7 +70,7 @@ public class StockService : IStockService
                 .Select(s => new StockDto
                 {
                     Id = s.Id, Symbol = s.Symbol, CompanyName = s.CompanyName,
-                    SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.Fundamentals != null ? s.Fundamentals.MarketCap : null, IsFno = s.IsFno
+                    SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.Fundamentals != null ? s.Fundamentals.MarketCap : null, IsFno = s.IsFno, IsTestSample = s.IsTestSample
                 }).FirstOrDefaultAsync();
         }
 
@@ -78,7 +78,7 @@ public class StockService : IStockService
             .Select(s => new StockDto
             {
                 Id = s.Id, Symbol = s.Symbol, CompanyName = s.CompanyName,
-                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.Fundamentals != null ? s.Fundamentals.MarketCap : null, IsFno = s.IsFno
+                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.Fundamentals != null ? s.Fundamentals.MarketCap : null, IsFno = s.IsFno, IsTestSample = s.IsTestSample
             }).FirstOrDefaultAsync();
     }
 
@@ -120,6 +120,7 @@ public class StockService : IStockService
             if (request.SectorId.HasValue) stock.SectorId = request.SectorId.Value;
             if (request.BroadSector != null) stock.BroadSector = request.BroadSector;
             if (request.IsFno.HasValue) stock.IsFno = request.IsFno.Value;
+            if (request.IsTestSample.HasValue) stock.IsTestSample = request.IsTestSample.Value;
         }
         else
         {
@@ -129,6 +130,7 @@ public class StockService : IStockService
             if (request.SectorId.HasValue) stock.SectorId = request.SectorId.Value;
             if (request.BroadSector != null) stock.BroadSector = request.BroadSector;
             if (request.IsFno.HasValue) stock.IsFno = request.IsFno.Value;
+            if (request.IsTestSample.HasValue) stock.IsTestSample = request.IsTestSample.Value;
         }
         await _db.SaveChangesAsync();
         return true;

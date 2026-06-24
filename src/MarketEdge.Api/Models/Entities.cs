@@ -23,6 +23,7 @@ public class IndianStock
     public int SectorId { get; set; }
     public string? BroadSector { get; set; }
     public bool IsFno { get; set; }
+    public bool IsTestSample { get; set; }
     public DateTime CreatedAt { get; set; }
 
     [ForeignKey(nameof(SectorId))]
@@ -50,6 +51,7 @@ public class USStock
     public int SectorId { get; set; }
     public string? BroadSector { get; set; }
     public bool IsFno { get; set; }
+    public bool IsTestSample { get; set; }
     public DateTime CreatedAt { get; set; }
 
     [ForeignKey(nameof(SectorId))]

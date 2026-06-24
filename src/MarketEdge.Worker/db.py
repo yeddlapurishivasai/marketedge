@@ -32,6 +32,7 @@ def get_stocks(
     market: str,
     sector_ids: list[int] | None = None,
     limit: int | None = None,
+    test_sample_only: bool = False,
 ) -> list[dict[str, Any]]:
     market_key = market.lower()
     if market_key not in MARKET_TABLES:
@@ -42,6 +43,9 @@ def get_stocks(
     top_clause = f"TOP {limit}" if limit else ""
     where_clauses = []
     params: list[Any] = []
+
+    if test_sample_only:
+        where_clauses.append("st.IsTestSample = 1")
 
     if sector_ids:
         placeholders = ",".join("?" * len(sector_ids))

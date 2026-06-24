@@ -25,6 +25,11 @@ public class TriggerAnalysisRequest
     public List<int>? SectorIds { get; set; }
     public int? Limit { get; set; }
     /// <summary>
+    /// When true, restricts the run to stocks flagged IsTestSample (200 India + 200 US)
+    /// for fast local/e2e runs.
+    /// </summary>
+    public bool? TestSampleOnly { get; set; }
+    /// <summary>
     /// When true, forces a new run even if one already exists for this week.
     /// The previous same-week run will be superseded.
     /// </summary>

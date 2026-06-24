@@ -170,6 +170,7 @@ def process_message(message_content: str) -> None:
     limit = payload.get("limit")  # int or None
     if limit is not None:
         limit = int(limit)
+    test_sample_only = bool(payload.get("testSampleOnly"))
 
     _set_listener_status(
         queue_listener="running",
@@ -180,7 +181,7 @@ def process_message(message_content: str) -> None:
         last_message_at=_utcnow().isoformat(),
     )
 
-    logger.info("Processing run %s for market %s (sectors=%s, limit=%s)", run_id, market, sector_ids, limit)
+    logger.info("Processing run %s for market %s (sectors=%s, limit=%s, test_sample_only=%s)", run_id, market, sector_ids, limit, test_sample_only)
     conn = None
 
     try:
@@ -209,7 +210,7 @@ def process_message(message_content: str) -> None:
         clear_run_results(conn, market, run_id)
 
         # Fetch all stocks and group by sector
-        all_stocks = get_stocks(conn, market, sector_ids=sector_ids, limit=limit)
+        all_stocks = get_stocks(conn, market, sector_ids=sector_ids, limit=limit, test_sample_only=test_sample_only)
         if not all_stocks:
             raise ValueError(f"No stocks found for market {market} with given filters")
 

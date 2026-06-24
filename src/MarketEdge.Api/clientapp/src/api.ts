@@ -13,6 +13,7 @@ export interface Stock {
   broadSector?: string;
   marketCap?: number;
   isFno: boolean;
+  isTestSample: boolean;
 }
 
 export interface PagedResult<T> {
@@ -149,6 +150,7 @@ export interface TriggerAnalysisRequest {
   maxMarketCap?: number;
   sectorIds?: number[];
   limit?: number;
+  testSampleOnly?: boolean;
   force?: boolean;
 }
 

@@ -33,6 +33,8 @@ def main():
     parser.add_argument("--market", default="india", choices=["india", "us"])
     parser.add_argument("--sector-id", type=int, default=None, help="Sector ID to test (default: first available)")
     parser.add_argument("--max-stocks", type=int, default=5, help="Max stocks to process (default: 5)")
+    parser.add_argument("--all-stocks", action="store_true",
+                        help="Use the full universe instead of only IsTestSample stocks")
     args = parser.parse_args()
 
     market = args.market
@@ -43,9 +45,9 @@ def main():
     conn = get_connection()
     print("    OK")
 
-    # 2. Get stocks for one sector
+    # 2. Get stocks for one sector (default: only the local test sample for speed)
     sector_ids = [args.sector_id] if args.sector_id else None
-    stocks = get_stocks(conn, market, sector_ids=sector_ids)
+    stocks = get_stocks(conn, market, sector_ids=sector_ids, test_sample_only=not args.all_stocks)
     if not stocks:
         print("    ERROR: No stocks found")
         sys.exit(1)
