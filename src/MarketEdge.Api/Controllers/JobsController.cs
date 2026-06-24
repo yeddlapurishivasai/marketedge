@@ -49,7 +49,15 @@ public class JobsController : ControllerBase
         if (market != "india" && market != "us")
             return BadRequest("Market must be 'india' or 'us'");
 
-        var runId = await _jobService.TriggerStageAnalysisAsync(market, request);
+        int runId;
+        try
+        {
+            runId = await _jobService.TriggerStageAnalysisAsync(market, request);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ex.Message);
+        }
         return Ok(new { runId });
     }
 

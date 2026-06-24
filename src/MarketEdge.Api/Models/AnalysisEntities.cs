@@ -29,6 +29,7 @@ public abstract class StageAnalysisResultBase
     [Key]
     public int Id { get; set; }
     public int RunId { get; set; }
+    public string WeekNumber { get; set; } = string.Empty;
     public string Symbol { get; set; } = string.Empty;
     public string CompanyName { get; set; } = string.Empty;
     public int SectorId { get; set; }

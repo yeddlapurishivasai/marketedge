@@ -1,7 +1,9 @@
 import logging
 import math
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, timedelta
 
 import pandas as pd
 import yfinance as yf
@@ -10,7 +12,28 @@ logger = logging.getLogger(__name__)
 
 WEEKLY_LOOKBACK_PERIOD = "2y"
 WEEKLY_INTERVAL = "1wk"
+# Lookback window (in days) used when fetching a bounded point-in-time history for a
+# past week. Slightly more than the 2y relative period to keep the same number of bars.
+WEEKLY_LOOKBACK_DAYS = 760
 MAX_MARKET_CAP_WORKERS = 5
+
+
+def week_exclusive_end(week_number: str) -> date | None:
+    """Return the exclusive end date (the Monday AFTER the ISO week) for 'YYYY-Www'.
+
+    Used as the yfinance ``end`` bound so a point-in-time fetch includes the target
+    week's bar but nothing after it. Returns None for malformed/sentinel week strings.
+    """
+    match = re.fullmatch(r"(\d{4})-W(\d{2})", (week_number or "").strip())
+    if not match:
+        return None
+    year, week = int(match.group(1)), int(match.group(2))
+    try:
+        sunday = date.fromisocalendar(year, week, 7)
+    except ValueError:
+        return None
+    return sunday + timedelta(days=1)
+
 
 
 def _to_yfinance_symbol(symbol: str, market: str) -> str:
@@ -95,17 +118,32 @@ def fetch_price_data(
     return results
 
 
-def fetch_benchmark_data(market: str) -> pd.DataFrame:
+def fetch_benchmark_data(market: str, end_date: date | None = None) -> pd.DataFrame:
     benchmark_symbol = "^NSEI" if market.lower() == "india" else "^GSPC"
-    logger.info("Fetching benchmark data for %s using %s", market, benchmark_symbol)
-    benchmark_data = yf.download(
-        tickers=benchmark_symbol,
-        period=WEEKLY_LOOKBACK_PERIOD,
-        interval=WEEKLY_INTERVAL,
-        auto_adjust=False,
-        progress=False,
-        threads=False,
+    logger.info(
+        "Fetching benchmark data for %s using %s%s",
+        market, benchmark_symbol, f" as of {end_date}" if end_date else "",
     )
+    if end_date is not None:
+        start_date = end_date - timedelta(days=WEEKLY_LOOKBACK_DAYS)
+        benchmark_data = yf.download(
+            tickers=benchmark_symbol,
+            start=start_date.isoformat(),
+            end=end_date.isoformat(),
+            interval=WEEKLY_INTERVAL,
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+        )
+    else:
+        benchmark_data = yf.download(
+            tickers=benchmark_symbol,
+            period=WEEKLY_LOOKBACK_PERIOD,
+            interval=WEEKLY_INTERVAL,
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+        )
     benchmark_data = benchmark_data.dropna(how="all").tail(60)
 
     if benchmark_data.empty:

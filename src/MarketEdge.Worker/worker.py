@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from threading import Lock
 from typing import Any
 
@@ -13,14 +13,17 @@ from azure.storage.queue import QueueClient
 
 from config import Config
 from db import (
-    clear_run_results,
+    get_completed_symbols_for_week,
     get_connection,
     get_consecutive_stage2_weeks,
     get_ever_stage2_symbols,
     get_previous_stage2_symbols,
     get_stocks,
+    get_week_number,
+    get_week_results,
     save_single_result,
     update_job_status,
+    update_market_cap,
 )
 from stage_analysis import (
     calculate_stage2,
@@ -29,6 +32,7 @@ from stage_analysis import (
     fetch_benchmark_data,
     fetch_market_caps,
     fetch_price_data,
+    week_exclusive_end,
 )
 
 logging.basicConfig(
@@ -124,21 +128,38 @@ def _fetch_single_market_cap(symbol: str, market: str) -> int | None:
         return None
 
 
-def _fetch_single_price_data(symbol: str, market: str) -> Any:
-    """Fetch weekly price data for a single stock."""
-    from stage_analysis import _to_yfinance_symbol, WEEKLY_LOOKBACK_PERIOD, WEEKLY_INTERVAL
+def _fetch_single_price_data(symbol: str, market: str, end_date: Any = None) -> Any:
+    """Fetch weekly price data for a single stock.
+
+    When ``end_date`` is provided, fetches a bounded window ending at that date
+    (point-in-time for a past week) instead of the default relative lookback period.
+    """
+    from stage_analysis import _to_yfinance_symbol, WEEKLY_LOOKBACK_PERIOD, WEEKLY_INTERVAL, WEEKLY_LOOKBACK_DAYS
+    from datetime import timedelta
     import yfinance as yf
     yf_symbol = _to_yfinance_symbol(symbol, market)
     for attempt in range(Config.YFINANCE_MAX_RETRIES):
         try:
-            raw = yf.download(
-                tickers=yf_symbol,
-                period=WEEKLY_LOOKBACK_PERIOD,
-                interval=WEEKLY_INTERVAL,
-                auto_adjust=False,
-                progress=False,
-                threads=False,
-            )
+            if end_date is not None:
+                start_date = end_date - timedelta(days=WEEKLY_LOOKBACK_DAYS)
+                raw = yf.download(
+                    tickers=yf_symbol,
+                    start=start_date.isoformat(),
+                    end=end_date.isoformat(),
+                    interval=WEEKLY_INTERVAL,
+                    auto_adjust=False,
+                    progress=False,
+                    threads=False,
+                )
+            else:
+                raw = yf.download(
+                    tickers=yf_symbol,
+                    period=WEEKLY_LOOKBACK_PERIOD,
+                    interval=WEEKLY_INTERVAL,
+                    auto_adjust=False,
+                    progress=False,
+                    threads=False,
+                )
             if raw.empty:
                 return None
             # yfinance returns MultiIndex (Price, Ticker) even for single tickers
@@ -170,6 +191,9 @@ def process_message(message_content: str) -> None:
     limit = payload.get("limit")  # int or None
     if limit is not None:
         limit = int(limit)
+    test_sample_only = bool(payload.get("testSampleOnly"))
+    retry_failed_only = bool(payload.get("retryFailedOnly"))
+    week_number = payload.get("weekNumber")  # may be None; resolved from JobRuns below
 
     _set_listener_status(
         queue_listener="running",
@@ -180,7 +204,10 @@ def process_message(message_content: str) -> None:
         last_message_at=_utcnow().isoformat(),
     )
 
-    logger.info("Processing run %s for market %s (sectors=%s, limit=%s)", run_id, market, sector_ids, limit)
+    logger.info(
+        "Processing run %s for market %s (sectors=%s, limit=%s, test_sample_only=%s, retry_failed_only=%s)",
+        run_id, market, sector_ids, limit, test_sample_only, retry_failed_only,
+    )
     conn = None
 
     try:
@@ -195,6 +222,23 @@ def process_message(message_content: str) -> None:
             logger.info("Run %s already %s — skipping (idempotent)", run_id, row.Status)
             return
 
+        # Resolve the week this run belongs to (results are upserted per week).
+        if not week_number:
+            week_number = get_week_number(conn, run_id)
+        if not week_number:
+            raise ValueError(f"Run {run_id} has no WeekNumber — cannot key results")
+
+        # Point-in-time: if the target week is fully in the past, bound all price fetches
+        # to that week's close so the analysis reflects how the week actually looked.
+        as_of_end = week_exclusive_end(week_number)
+        if as_of_end is not None and as_of_end > date.today():
+            as_of_end = None  # current/ongoing week — fetch through today (live)
+        logger.info(
+            "Run %s is for week %s (%s)",
+            run_id, week_number,
+            f"point-in-time, prices up to {as_of_end}" if as_of_end else "live/current",
+        )
+
         update_job_status(
             conn,
             run_id,
@@ -205,13 +249,23 @@ def process_message(message_content: str) -> None:
             error="",
         )
 
-        # Clear any previous results for this run (supports re-runs)
-        clear_run_results(conn, market, run_id)
-
         # Fetch all stocks and group by sector
-        all_stocks = get_stocks(conn, market, sector_ids=sector_ids, limit=limit)
+        all_stocks = get_stocks(conn, market, sector_ids=sector_ids, limit=limit, test_sample_only=test_sample_only)
         if not all_stocks:
             raise ValueError(f"No stocks found for market {market} with given filters")
+
+        # Retry mode: only process symbols in the selected universe that lack a result
+        # row for this week (failed/pending tickers from an earlier run).
+        if retry_failed_only:
+            done_symbols = get_completed_symbols_for_week(conn, market, week_number)
+            before = len(all_stocks)
+            all_stocks = [s for s in all_stocks if s["symbol"] not in done_symbols]
+            logger.info(
+                "Retry mode: %s of %s symbols already have results for week %s — processing %s remaining",
+                before - len(all_stocks), before, week_number, len(all_stocks),
+            )
+            if not all_stocks:
+                logger.info("Nothing to retry for week %s — all selected symbols already processed", week_number)
 
         total_stocks = len(all_stocks)
         sectors_map: dict[int, list[dict[str, Any]]] = {}
@@ -224,7 +278,7 @@ def process_message(message_content: str) -> None:
         logger.info("Found %s stocks across %s sectors", total_stocks, total_sectors)
 
         # Fetch benchmark once
-        benchmark_data = fetch_benchmark_data(market)
+        benchmark_data = fetch_benchmark_data(market, end_date=as_of_end)
 
         # Process stock by stock within each sector
         all_results: list[dict[str, Any]] = []
@@ -259,6 +313,12 @@ def process_message(message_content: str) -> None:
                 # 1. Fetch market cap for this stock
                 mc = _fetch_single_market_cap(symbol, market)
                 stock["market_cap"] = mc
+                # Persist the freshly fetched market cap to the fundamentals table
+                if mc is not None:
+                    try:
+                        update_market_cap(conn, market, stock["id"], mc)
+                    except Exception as exc:
+                        logger.warning("Failed to persist market cap for %s: %s", symbol, exc)
                 time.sleep(stock_delay)
 
                 # 2. Apply market cap filter
@@ -276,7 +336,7 @@ def process_message(message_content: str) -> None:
                 total_filtered += 1
 
                 # 3. Fetch price data for this stock
-                price_frame = _fetch_single_price_data(symbol, market)
+                price_frame = _fetch_single_price_data(symbol, market, end_date=as_of_end)
                 time.sleep(stock_delay)
 
                 # 4. Analyze
@@ -294,6 +354,7 @@ def process_message(message_content: str) -> None:
 
                 result = {
                     "run_id": run_id,
+                    "week_number": week_number,
                     "symbol": symbol,
                     "company_name": stock["company_name"],
                     "sector_id": stock["sector_id"],
@@ -339,9 +400,15 @@ def process_message(message_content: str) -> None:
                 logger.info("Pausing %ss between sectors...", sector_delay)
                 time.sleep(sector_delay)
 
-        # --- Post-processing (classifications, ranks, weeks) ---
-        previous_stage2_symbols = get_previous_stage2_symbols(conn, market)
-        ever_stage2_symbols = get_ever_stage2_symbols(conn, market)
+        # --- Post-processing over the FULL week's result set ---
+        # Results are upserted per week, so classification/ranks/weeks must be computed
+        # across every symbol in the week (including symbols processed in an earlier run
+        # for the same week), not just this run's symbols. Read the week's snapshot back.
+        week_results = get_week_results(conn, market, week_number)
+        current_stage2_symbols = {r["symbol"] for r in week_results if r["is_stage2"]}
+
+        previous_stage2_symbols = get_previous_stage2_symbols(conn, market, week_number)
+        ever_stage2_symbols = get_ever_stage2_symbols(conn, market, week_number)
         classifications = classify_stocks(
             current_stage2_symbols,
             previous_stage2_symbols,
@@ -350,36 +417,35 @@ def process_message(message_content: str) -> None:
 
         results_table = "IndianStageAnalysisResults" if market == "india" else "USStageAnalysisResults"
         cursor = conn.cursor()
-        for result in all_results:
-            cls = classifications.get(result["symbol"])
-            result["classification"] = cls
+        for symbol, cls in classifications.items():
             if cls:
                 cursor.execute(
-                    f"UPDATE dbo.{results_table} SET Classification = ? WHERE RunId = ? AND Symbol = ?",
-                    cls, run_id, result["symbol"],
+                    f"UPDATE dbo.{results_table} SET Classification = ? WHERE WeekNumber = ? AND Symbol = ?",
+                    cls, week_number, symbol,
                 )
         conn.commit()
 
-        compute_rs_ranks(all_results)
-        for result in all_results:
-            if result.get("rs_rank") is not None:
+        # Relative-strength ranks computed across the whole week.
+        ranked = compute_rs_ranks(
+            [{"symbol": r["symbol"], "rs_score": r["rs_score"]} for r in week_results]
+        )
+        for r in ranked:
+            if r.get("rs_rank") is not None:
                 cursor.execute(
-                    f"UPDATE dbo.{results_table} SET RSRank = ? WHERE RunId = ? AND Symbol = ?",
-                    result["rs_rank"], run_id, result["symbol"],
+                    f"UPDATE dbo.{results_table} SET RSRank = ? WHERE WeekNumber = ? AND Symbol = ?",
+                    r["rs_rank"], week_number, r["symbol"],
                 )
         conn.commit()
 
+        # WeeksInStage2 from consecutive prior weeks, for every symbol in the week.
         stage2_symbols_list = list(current_stage2_symbols)
-        prior_weeks = get_consecutive_stage2_weeks(conn, market, stage2_symbols_list)
-        for result in all_results:
-            sym = result["symbol"]
-            if result.get("is_stage2"):
-                result["weeks_in_stage2"] = prior_weeks.get(sym, 0) + 1
-            else:
-                result["weeks_in_stage2"] = 0
+        prior_weeks = get_consecutive_stage2_weeks(conn, market, stage2_symbols_list, week_number)
+        for r in week_results:
+            sym = r["symbol"]
+            weeks_val = (prior_weeks.get(sym, 0) + 1) if r["is_stage2"] else 0
             cursor.execute(
-                f"UPDATE dbo.{results_table} SET WeeksInStage2 = ? WHERE RunId = ? AND Symbol = ?",
-                result["weeks_in_stage2"], run_id, sym,
+                f"UPDATE dbo.{results_table} SET WeeksInStage2 = ? WHERE WeekNumber = ? AND Symbol = ?",
+                weeks_val, week_number, sym,
             )
         conn.commit()
 
@@ -391,7 +457,7 @@ def process_message(message_content: str) -> None:
             skipped_stocks=total_skipped,
             min_market_cap=min_market_cap, max_market_cap=max_market_cap,
         )
-        metrics["resultCount"] = len(all_results)
+        metrics["resultCount"] = len(week_results)
         metrics["newCount"] = sum(1 for v in classifications.values() if v == "new")
         metrics["reentryCount"] = sum(1 for v in classifications.values() if v == "reentry")
         metrics["continuingCount"] = sum(1 for v in classifications.values() if v == "continuing")

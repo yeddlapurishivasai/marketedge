@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { Market, Sector, Stage2Summary, SectorRotation, SectorRotationHistory, Stage2History, StageAnalysisResult } from '../api';
+import type { Market, Sector, Stage2Summary, SectorRotation, SectorRotationHistory, Stage2History, StageAnalysisResult, JobRun } from '../api';
 import {
   fetchSectors, fetchStage2Summary, fetchSectorRotation, fetchStage2History,
   fetchJobRuns, triggerAnalysis, fetchStage2Stocks, fetchRotationHistory
 } from '../api';
+import { formatMarketCap, formatPrice } from '../format';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line
@@ -21,18 +22,34 @@ const QUADRANT_COLORS: Record<string, string> = {
   lagging: '#ef4444'
 };
 
-function formatMarketCap(value?: number): string {
-  if (!value) return '—';
-  if (value >= 1e12) return `${(value / 1e12).toFixed(1)}T`;
-  if (value >= 1e9) return `${(value / 1e9).toFixed(1)}B`;
-  if (value >= 1e7) return `${(value / 1e7).toFixed(1)}Cr`;
-  if (value >= 1e6) return `${(value / 1e6).toFixed(1)}M`;
-  return value.toFixed(0);
-}
-
 // Sort state type
 type SortDir = 'asc' | 'desc' | null;
 type SortState = { key: string; dir: SortDir };
+
+// ISO-8601 week label (YYYY-Www) matching the worker's date.fromisocalendar parsing.
+function isoWeekLabel(d: Date): string {
+  const target = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = (target.getUTCDay() + 6) % 7; // Mon=0..Sun=6
+  target.setUTCDate(target.getUTCDate() - dayNum + 3); // nearest Thursday
+  const isoYear = target.getUTCFullYear();
+  const firstThursday = new Date(Date.UTC(isoYear, 0, 4));
+  const firstDayNum = (firstThursday.getUTCDay() + 6) % 7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNum + 3);
+  const week = 1 + Math.round((target.getTime() - firstThursday.getTime()) / (7 * 24 * 3600 * 1000));
+  return `${isoYear}-W${String(week).padStart(2, '0')}`;
+}
+
+// Build the current week plus the previous `count` weeks as {label, value} options.
+function recentWeekOptions(count: number): { label: string; value: string }[] {
+  const opts: { label: string; value: string }[] = [];
+  const now = new Date();
+  for (let i = 0; i <= count; i++) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i * 7);
+    opts.push({ label: isoWeekLabel(d), value: isoWeekLabel(d) });
+  }
+  return opts;
+}
 
 function useSortableData<T>(items: T[], defaultSort?: SortState) {
   const [sort, setSort] = useState<SortState>(defaultSort || { key: '', dir: null });
@@ -233,6 +250,10 @@ export default function AnalysisPage() {
   const [maxMcap, setMaxMcap] = useState('');
   const [limitVal, setLimitVal] = useState('');
   const [selectedSectorIds, setSelectedSectorIds] = useState<number[]>([]);
+  const [testSampleOnly, setTestSampleOnly] = useState<boolean>(import.meta.env.DEV);
+  const [retryFailedOnly, setRetryFailedOnly] = useState<boolean>(false);
+  const [weekRuns, setWeekRuns] = useState<JobRun[]>([]);
+  const [selectedWeek, setSelectedWeek] = useState<string>('');
   const [allSectors, setAllSectors] = useState<Sector[]>([]);
   const [latestRunId, setLatestRunId] = useState<number | null>(null);
   const [stocks, setStocks] = useState<StageAnalysisResult[]>([]);
@@ -250,15 +271,14 @@ export default function AnalysisPage() {
 
   const load = useCallback(async () => {
     try {
-      const [s, h, runs, sectors] = await Promise.all([
+      const [s, h, runs] = await Promise.all([
         fetchStage2Summary(m).catch(() => null),
         fetchStage2History(m).catch(() => []),
-        fetchJobRuns({ market: m, jobType: 'stage2_analysis', pageSize: 1 }).catch(() => []),
-        fetchSectors(m).catch(() => [])
+        fetchJobRuns({ market: m, jobType: 'stage2_analysis', pageSize: 40 }).catch(() => [])
       ]);
       setSummary(s);
       setHistory(h);
-      setAllSectors(sectors);
+      setWeekRuns(runs);
       if (runs.length > 0 && runs[0].status === 'completed') {
         setLatestRunId(runs[0].id);
         const rot = await fetchSectorRotation(m, runs[0].id).catch(() => []);
@@ -273,22 +293,46 @@ export default function AnalysisPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Load sectors with counts scoped to the selected run mode; prune selections no longer available.
+  useEffect(() => {
+    fetchSectors(m, testSampleOnly)
+      .then(secs => {
+        setAllSectors(secs);
+        setSelectedSectorIds(prev => prev.filter(id => secs.some(s => s.id === id)));
+      })
+      .catch(() => setAllSectors([]));
+  }, [m, testSampleOnly]);
+
+  // A run already exists for this market/week, so there may be failed/pending tickers
+  // to fill in. Retry upserts only the missing symbols for the selected week.
+  const weekOptions = useMemo(() => recentWeekOptions(12), []);
+  const effectiveWeek = selectedWeek || (weekOptions[0]?.value ?? '');
+  const canRetry = useMemo(
+    () => weekRuns.some(r => r.weekNumber === effectiveWeek && (r.status === 'completed' || r.status === 'failed')),
+    [weekRuns, effectiveWeek]
+  );
+
   const handleTrigger = async () => {
     setTriggering(true);
     try {
-      const req: { minMarketCap?: number; maxMarketCap?: number; sectorIds?: number[]; limit?: number; force?: boolean } = {};
+      const req: { minMarketCap?: number; maxMarketCap?: number; sectorIds?: number[]; limit?: number; testSampleOnly?: boolean; retryFailedOnly?: boolean; weekNumber?: string } = {};
       if (minMcap) req.minMarketCap = parseFloat(minMcap);
       if (maxMcap) req.maxMarketCap = parseFloat(maxMcap);
       if (selectedSectorIds.length > 0) req.sectorIds = selectedSectorIds;
       if (limitVal) req.limit = parseInt(limitVal);
-      // Always force when explicitly triggering from UI with parameters
-      req.force = true;
+      if (testSampleOnly) req.testSampleOnly = true;
+      if (retryFailedOnly && canRetry) req.retryFailedOnly = true;
+      // Only send weekNumber for a past week; current week lets the server compute it
+      // (avoids year-boundary drift between client and server ISO-week math).
+      if (selectedWeek && selectedWeek !== weekOptions[0]?.value) req.weekNumber = selectedWeek;
       await triggerAnalysis(m, req);
       setShowTriggerModal(false);
       setMinMcap('');
       setMaxMcap('');
       setLimitVal('');
       setSelectedSectorIds([]);
+      setRetryFailedOnly(false);
+      setSelectedWeek('');
       navigate(`/${m}/jobs`);
     } catch { /* ignore */ }
     setTriggering(false);
@@ -370,6 +414,73 @@ export default function AnalysisPage() {
                 Configure filters for the analysis run. Leave fields blank for defaults.
               </p>
 
+              {/* Run mode: test sample vs full universe */}
+              <div className="form-group">
+                <label className="form-label">Run Mode</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${testSampleOnly ? 'btn-primary' : 'btn-outline'}`}
+                    style={{ flex: 1 }}
+                    onClick={() => setTestSampleOnly(true)}
+                  >
+                    Sample (200 stocks)
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${!testSampleOnly ? 'btn-primary' : 'btn-outline'}`}
+                    style={{ flex: 1 }}
+                    onClick={() => setTestSampleOnly(false)}
+                  >
+                    Full universe
+                  </button>
+                </div>
+                <div style={{ marginTop: 6, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                  {testSampleOnly
+                    ? 'Runs only the curated test-sample stocks — fast, ideal for local testing.'
+                    : 'Runs the entire stock universe — slower, full results.'}
+                </div>
+              </div>
+
+              {/* Target week: current (live) or a past week (point-in-time) */}
+              <div className="form-group">
+                <label className="form-label">Target Week</label>
+                <select
+                  className="form-input"
+                  value={selectedWeek || weekOptions[0]?.value || ''}
+                  onChange={e => setSelectedWeek(e.target.value)}
+                >
+                  {weekOptions.map((opt, i) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}{i === 0 ? ' (current)' : ''}
+                    </option>
+                  ))}
+                </select>
+                <div style={{ marginTop: 6, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                  {(!selectedWeek || selectedWeek === weekOptions[0]?.value)
+                    ? 'Runs for the current week using live prices.'
+                    : 'Point-in-time run — prices are fetched only up to that week\u2019s close. Market cap uses current values.'}
+                </div>
+              </div>
+
+              {/* Retry failed/pending tickers only (enabled when a run already exists for the week) */}
+              {canRetry && (
+                <div className="form-group">
+                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={retryFailedOnly}
+                      onChange={(e) => setRetryFailedOnly(e.target.checked)}
+                    />
+                    Retry failed / pending tickers only
+                  </label>
+                  <div style={{ marginTop: 6, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                    Processes only symbols in the selected universe that have no result yet
+                    for the current week. Already-completed tickers are left untouched.
+                  </div>
+                </div>
+              )}
+
               {/* Sector Selection */}
               <div className="form-group">
                 <label className="form-label">Sectors (select one or more, leave empty for all)</label>
@@ -415,39 +526,44 @@ export default function AnalysisPage() {
                 )}
               </div>
 
-              {/* Limit */}
-              <div className="form-group">
-                <label className="form-label">Stock Limit (max stocks to analyze)</label>
-                <input
-                  className="form-input"
-                  type="number"
-                  placeholder="Leave blank for all stocks in selected sectors"
-                  value={limitVal}
-                  onChange={e => setLimitVal(e.target.value)}
-                />
-              </div>
+              {/* Full-universe-only filters (not applicable in sample mode) */}
+              {!testSampleOnly && (
+                <>
+                  {/* Limit */}
+                  <div className="form-group">
+                    <label className="form-label">Stock Limit (max stocks to analyze)</label>
+                    <input
+                      className="form-input"
+                      type="number"
+                      placeholder="Leave blank for all stocks in selected sectors"
+                      value={limitVal}
+                      onChange={e => setLimitVal(e.target.value)}
+                    />
+                  </div>
 
-              {/* Market Cap */}
-              <div className="form-group">
-                <label className="form-label">Min Market Cap ({m === 'india' ? '₹' : '$'})</label>
-                <input
-                  className="form-input"
-                  type="number"
-                  placeholder={m === 'india' ? 'e.g., 50000000000 (₹5000 Cr)' : 'e.g., 10000000000 ($10B)'}
-                  value={minMcap}
-                  onChange={e => setMinMcap(e.target.value)}
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Max Market Cap ({m === 'india' ? '₹' : '$'})</label>
-                <input
-                  className="form-input"
-                  type="number"
-                  placeholder="Leave blank for no upper limit"
-                  value={maxMcap}
-                  onChange={e => setMaxMcap(e.target.value)}
-                />
-              </div>
+                  {/* Market Cap */}
+                  <div className="form-group">
+                    <label className="form-label">Min Market Cap ({m === 'india' ? '₹' : '$'})</label>
+                    <input
+                      className="form-input"
+                      type="number"
+                      placeholder={m === 'india' ? 'e.g., 50000000000 (₹5000 Cr)' : 'e.g., 10000000000 ($10B)'}
+                      value={minMcap}
+                      onChange={e => setMinMcap(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Max Market Cap ({m === 'india' ? '₹' : '$'})</label>
+                    <input
+                      className="form-input"
+                      type="number"
+                      placeholder="Leave blank for no upper limit"
+                      value={maxMcap}
+                      onChange={e => setMaxMcap(e.target.value)}
+                    />
+                  </div>
+                </>
+              )}
             </div>
             <div className="modal-footer">
               <button className="btn btn-outline" onClick={() => setShowTriggerModal(false)}>Cancel</button>
@@ -582,7 +698,7 @@ export default function AnalysisPage() {
                       <td className="cell-symbol">{s.symbol}</td>
                       <td>{s.companyName.length > 30 ? s.companyName.slice(0, 27) + '...' : s.companyName}</td>
                       <td className="cell-muted">{s.sectorName}</td>
-                      <td>{s.closePrice?.toFixed(2)}</td>
+                      <td>{formatPrice(s.closePrice, m)}</td>
                       <td style={{ color: (s.rsScore ?? 0) > 0 ? 'var(--success)' : 'var(--danger)' }}>
                         {s.rsScore?.toFixed(2)}
                       </td>
@@ -775,8 +891,8 @@ export default function AnalysisPage() {
                           <td className="cell-symbol">{s.symbol}</td>
                           <td>{s.companyName.length > 25 ? s.companyName.slice(0, 22) + '...' : s.companyName}</td>
                           <td className="cell-muted">{s.sectorName}</td>
-                          <td>{s.closePrice?.toFixed(2)}</td>
-                          <td className="cell-muted">{formatMarketCap(s.marketCap ?? undefined)}</td>
+                          <td>{formatPrice(s.closePrice, m)}</td>
+                          <td className="cell-muted">{formatMarketCap(s.marketCap, m)}</td>
                           <td style={{ color: (s.rsScore ?? 0) > 0 ? 'var(--success)' : 'var(--danger)' }}>
                             {s.rsScore?.toFixed(2)}
                           </td>

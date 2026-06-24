@@ -57,50 +57,33 @@ public class JobService : IJobService
         var now = DateTime.UtcNow;
         var weekNumber = GetIsoWeekNumber(now);
 
-        if (request?.Force != true)
+        // Optional target-week override (e.g. re-running a previous week point-in-time).
+        if (!string.IsNullOrWhiteSpace(request?.WeekNumber))
         {
-            // Idempotency: return existing run for this week if it exists
-            var existingRun = await _db.JobRuns
-                .Where(j => j.JobType == "stage2_analysis"
-                    && j.Market == market
-                    && j.WeekNumber == weekNumber
-                    && (j.Status == "completed" || j.Status == "running" || j.Status == "queued"))
-                .OrderByDescending(j => j.CreatedAt)
-                .FirstOrDefaultAsync();
-
-            if (existingRun != null)
-            {
-                return existingRun.Id;
-            }
+            var requested = request.WeekNumber.Trim();
+            if (!System.Text.RegularExpressions.Regex.IsMatch(requested, @"^\d{4}-W\d{2}$"))
+                throw new ArgumentException($"Invalid week '{requested}'. Expected format YYYY-Www.");
+            // Week strings are zero-padded fixed-width, so ordinal compare == chronological.
+            if (string.CompareOrdinal(requested, weekNumber) > 0)
+                throw new ArgumentException($"Week '{requested}' is in the future.");
+            weekNumber = requested;
         }
-        else
+
+        // One in-flight run per (week, market): if a run is already queued or running
+        // for this week, return it instead of starting a duplicate. Completed runs are
+        // an append-only audit log — they never block a new run, and results are
+        // upserted per week rather than deleted.
+        var inFlightRun = await _db.JobRuns
+            .Where(j => j.JobType == "stage2_analysis"
+                && j.Market == market
+                && j.WeekNumber == weekNumber
+                && (j.Status == "running" || j.Status == "queued"))
+            .OrderByDescending(j => j.CreatedAt)
+            .FirstOrDefaultAsync();
+
+        if (inFlightRun != null)
         {
-            // Force mode: cancel queued/running and delete completed same-week runs
-            var sameWeekRuns = await _db.JobRuns
-                .Where(j => j.JobType == "stage2_analysis"
-                    && j.Market == market
-                    && j.WeekNumber == weekNumber)
-                .ToListAsync();
-
-            var toCancel = sameWeekRuns.Where(j => j.Status is "queued" or "running").ToList();
-            foreach (var stale in toCancel)
-            {
-                stale.Status = "cancelled";
-                stale.CompletedAt = now;
-            }
-
-            var toDelete = sameWeekRuns.Where(j => j.Status == "completed").ToList();
-            if (toDelete.Count > 0)
-            {
-                var resultsTable = market == "india" ? "IndianStageAnalysisResults" : "USStageAnalysisResults";
-                var oldIds = toDelete.Select(r => r.Id).ToList();
-                await _db.Database.ExecuteSqlRawAsync(
-                    $"DELETE FROM dbo.{resultsTable} WHERE RunId IN ({string.Join(",", oldIds)})");
-                _db.JobRuns.RemoveRange(toDelete);
-            }
-
-            if (toCancel.Count > 0 || toDelete.Count > 0)
-                await _db.SaveChangesAsync();
+            return inFlightRun.Id;
         }
 
         var parameters = new Dictionary<string, object?>();
@@ -131,6 +114,8 @@ public class JobService : IJobService
                 parameters["sectors"] = string.Join(", ", sectorNames);
         }
         if (request?.Limit != null) parameters["limit"] = request.Limit;
+        if (request?.TestSampleOnly == true) parameters["testSampleOnly"] = true;
+        if (request?.RetryFailedOnly == true) parameters["retryFailedOnly"] = true;
 
         var job = new JobRun
         {
@@ -144,17 +129,39 @@ public class JobService : IJobService
         };
 
         _db.JobRuns.Add(job);
-        await _db.SaveChangesAsync();
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            // Race: another request created the in-flight run for this week first.
+            // The UX_JobRuns_ActiveWeek filtered unique index blocked this duplicate;
+            // fall back to returning the existing in-flight run for the week.
+            _db.Entry(job).State = EntityState.Detached;
+            var existing = await _db.JobRuns
+                .Where(j => j.JobType == "stage2_analysis"
+                    && j.Market == market
+                    && j.WeekNumber == weekNumber
+                    && (j.Status == "running" || j.Status == "queued"))
+                .OrderByDescending(j => j.CreatedAt)
+                .FirstOrDefaultAsync();
+            if (existing != null) return existing.Id;
+            throw;
+        }
 
         var message = JsonSerializer.Serialize(new
         {
             market,
             runId = job.Id,
+            weekNumber,
             triggeredBy = "manual",
             minMarketCap = request?.MinMarketCap,
             maxMarketCap = request?.MaxMarketCap,
             sectorIds = request?.SectorIds,
             limit = request?.Limit,
+            testSampleOnly = request?.TestSampleOnly,
+            retryFailedOnly = request?.RetryFailedOnly,
             timestamp = DateTime.UtcNow
         });
 
@@ -186,9 +193,10 @@ public class JobService : IJobService
 
         if (latestRun == null) return null;
 
+        var week = latestRun.WeekNumber;
         var results = market == "india"
-            ? await _db.IndianStageAnalysisResults.Where(r => r.RunId == latestRun.Id).ToListAsync<StageAnalysisResultBase>()
-            : await _db.USStageAnalysisResults.Where(r => r.RunId == latestRun.Id).ToListAsync<StageAnalysisResultBase>();
+            ? await _db.IndianStageAnalysisResults.Where(r => r.WeekNumber == week).ToListAsync<StageAnalysisResultBase>()
+            : await _db.USStageAnalysisResults.Where(r => r.WeekNumber == week).ToListAsync<StageAnalysisResultBase>();
 
         var stage2 = results.Where(r => r.IsStage2).ToList();
 
@@ -228,8 +236,8 @@ public class JobService : IJobService
         if (job == null) return new List<StageAnalysisResultDto>();
 
         IQueryable<StageAnalysisResultBase> query = job.Market == "india"
-            ? _db.IndianStageAnalysisResults.Where(r => r.RunId == runId)
-            : _db.USStageAnalysisResults.Where(r => r.RunId == runId);
+            ? _db.IndianStageAnalysisResults.Where(r => r.WeekNumber == job.WeekNumber)
+            : _db.USStageAnalysisResults.Where(r => r.WeekNumber == job.WeekNumber);
 
         if (!string.IsNullOrEmpty(classification))
         {
@@ -259,8 +267,8 @@ public class JobService : IJobService
         if (job == null) return new List<SectorRotationDto>();
 
         var results = job.Market == "india"
-            ? await _db.IndianStageAnalysisResults.Where(r => r.RunId == runId && r.RSScore != null && r.RSDelta2w != null).ToListAsync<StageAnalysisResultBase>()
-            : await _db.USStageAnalysisResults.Where(r => r.RunId == runId && r.RSScore != null && r.RSDelta2w != null).ToListAsync<StageAnalysisResultBase>();
+            ? await _db.IndianStageAnalysisResults.Where(r => r.WeekNumber == job.WeekNumber && r.RSScore != null && r.RSDelta2w != null).ToListAsync<StageAnalysisResultBase>()
+            : await _db.USStageAnalysisResults.Where(r => r.WeekNumber == job.WeekNumber && r.RSScore != null && r.RSDelta2w != null).ToListAsync<StageAnalysisResultBase>();
 
         return results
             .GroupBy(r => new { r.SectorId, r.SectorName })
@@ -281,24 +289,33 @@ public class JobService : IJobService
 
     public async Task<List<Stage2HistoryDto>> GetStage2HistoryAsync(string market, int maxRuns = 10)
     {
-        var runs = await _db.JobRuns
+        var completed = await _db.JobRuns
             .Where(j => j.JobType == "stage2_analysis" && j.Market == market && j.Status == "completed")
             .OrderByDescending(j => j.CompletedAt)
-            .Take(maxRuns)
             .ToListAsync();
 
-        var runIds = runs.Select(r => r.Id).ToList();
+        // Results are upserted per week (one snapshot per week, last writer owns it).
+        // Collapse the audit log to the latest completed run per week so history shows
+        // one entry per week rather than one per trigger.
+        var runs = completed
+            .GroupBy(j => j.WeekNumber)
+            .Select(g => g.OrderByDescending(j => j.CompletedAt).First())
+            .OrderByDescending(j => j.CompletedAt)
+            .Take(maxRuns)
+            .ToList();
+
+        var weeks = runs.Select(r => r.WeekNumber).ToList();
         var allResults = market == "india"
-            ? await _db.IndianStageAnalysisResults.Where(r => runIds.Contains(r.RunId) && r.IsStage2).ToListAsync<StageAnalysisResultBase>()
-            : await _db.USStageAnalysisResults.Where(r => runIds.Contains(r.RunId) && r.IsStage2).ToListAsync<StageAnalysisResultBase>();
+            ? await _db.IndianStageAnalysisResults.Where(r => weeks.Contains(r.WeekNumber) && r.IsStage2).ToListAsync<StageAnalysisResultBase>()
+            : await _db.USStageAnalysisResults.Where(r => weeks.Contains(r.WeekNumber) && r.IsStage2).ToListAsync<StageAnalysisResultBase>();
 
         return runs.Select(run => new Stage2HistoryDto
         {
             RunId = run.Id,
             RunDate = run.CompletedAt ?? run.CreatedAt,
-            TotalStage2 = allResults.Count(r => r.RunId == run.Id),
+            TotalStage2 = allResults.Count(r => r.WeekNumber == run.WeekNumber),
             BySector = allResults
-                .Where(r => r.RunId == run.Id)
+                .Where(r => r.WeekNumber == run.WeekNumber)
                 .GroupBy(r => r.SectorName)
                 .Select(g => new SectorStage2CountDto
                 {
@@ -311,21 +328,28 @@ public class JobService : IJobService
 
     public async Task<List<SectorRotationHistoryDto>> GetSectorRotationHistoryAsync(string market, int maxRuns = 12)
     {
-        var runs = await _db.JobRuns
+        var completed = await _db.JobRuns
             .Where(j => j.JobType == "stage2_analysis" && j.Market == market && j.Status == "completed")
             .OrderByDescending(j => j.CompletedAt)
-            .Take(maxRuns)
             .ToListAsync();
+
+        // One entry per week: latest completed run owns the week's upserted snapshot.
+        var runs = completed
+            .GroupBy(j => j.WeekNumber)
+            .Select(g => g.OrderByDescending(j => j.CompletedAt).First())
+            .OrderByDescending(j => j.CompletedAt)
+            .Take(maxRuns)
+            .ToList();
 
         if (!runs.Any()) return new List<SectorRotationHistoryDto>();
 
-        var runIds = runs.Select(r => r.Id).ToList();
+        var weeks = runs.Select(r => r.WeekNumber).ToList();
         var allResults = market == "india"
             ? await _db.IndianStageAnalysisResults
-                .Where(r => runIds.Contains(r.RunId) && r.RSScore != null && r.RSDelta2w != null)
+                .Where(r => weeks.Contains(r.WeekNumber) && r.RSScore != null && r.RSDelta2w != null)
                 .ToListAsync<StageAnalysisResultBase>()
             : await _db.USStageAnalysisResults
-                .Where(r => runIds.Contains(r.RunId) && r.RSScore != null && r.RSDelta2w != null)
+                .Where(r => weeks.Contains(r.WeekNumber) && r.RSScore != null && r.RSDelta2w != null)
                 .ToListAsync<StageAnalysisResultBase>();
 
         return runs.Select(run => new SectorRotationHistoryDto
@@ -333,7 +357,7 @@ public class JobService : IJobService
             RunId = run.Id,
             RunDate = run.CompletedAt ?? run.CreatedAt,
             Sectors = allResults
-                .Where(r => r.RunId == run.Id)
+                .Where(r => r.WeekNumber == run.WeekNumber)
                 .GroupBy(r => new { r.SectorId, r.SectorName })
                 .Select(g => new SectorRotationDto
                 {
@@ -369,6 +393,7 @@ public class JobService : IJobService
             Id = j.Id,
             JobType = j.JobType,
             Market = j.Market,
+            WeekNumber = j.WeekNumber,
             Status = j.Status,
             Progress = j.Progress,
             Parameters = j.Parameters != null ? JsonSerializer.Deserialize<Dictionary<string, object>>(j.Parameters) : null,
@@ -426,5 +451,12 @@ public class JobService : IJobService
         if (week >= 52 && date.Month == 1) year--;
         if (week == 1 && date.Month == 12) year++;
         return $"{year}-W{week:D2}";
+    }
+
+    private static bool IsUniqueViolation(DbUpdateException ex)
+    {
+        // SQL Server unique index/constraint violations: 2601 (duplicate key row) / 2627 (unique constraint)
+        return ex.InnerException is Microsoft.Data.SqlClient.SqlException sql
+            && sql.Errors.Cast<Microsoft.Data.SqlClient.SqlError>().Any(e => e.Number is 2601 or 2627);
     }
 }

@@ -11,6 +11,8 @@ public class MarketEdgeDbContext : DbContext
     public DbSet<IndianStock> IndianStocks => Set<IndianStock>();
     public DbSet<USSector> USSectors => Set<USSector>();
     public DbSet<USStock> USStocks => Set<USStock>();
+    public DbSet<IndianStockFundamentals> IndianStockFundamentals => Set<IndianStockFundamentals>();
+    public DbSet<USStockFundamentals> USStockFundamentals => Set<USStockFundamentals>();
     public DbSet<JobRun> JobRuns => Set<JobRun>();
     public DbSet<IndianStageAnalysisResult> IndianStageAnalysisResults => Set<IndianStageAnalysisResult>();
     public DbSet<USStageAnalysisResult> USStageAnalysisResults => Set<USStageAnalysisResult>();
@@ -36,6 +38,19 @@ public class MarketEdgeDbContext : DbContext
             .HasMany(j => j.USStageAnalysisResults)
             .WithOne(r => r.JobRun)
             .HasForeignKey(r => r.RunId);
+
+        modelBuilder.Entity<IndianStock>()
+            .HasOne(s => s.Fundamentals)
+            .WithOne(m => m.Stock)
+            .HasForeignKey<IndianStockFundamentals>(m => m.StockId);
+
+        modelBuilder.Entity<USStock>()
+            .HasOne(s => s.Fundamentals)
+            .WithOne(m => m.Stock)
+            .HasForeignKey<USStockFundamentals>(m => m.StockId);
+
+        modelBuilder.Entity<IndianStockFundamentals>().Property(m => m.MarketCap).HasColumnType("decimal(20,2)");
+        modelBuilder.Entity<USStockFundamentals>().Property(m => m.MarketCap).HasColumnType("decimal(20,2)");
 
         ConfigureDecimalProperties<IndianStageAnalysisResult>(modelBuilder);
         ConfigureDecimalProperties<USStageAnalysisResult>(modelBuilder);

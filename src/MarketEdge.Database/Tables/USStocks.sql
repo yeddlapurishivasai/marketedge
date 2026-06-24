@@ -5,6 +5,8 @@ CREATE TABLE [dbo].[USStocks]
     [CompanyName] NVARCHAR(500) NOT NULL,
     [SectorId] INT NOT NULL,
     [BroadSector] NVARCHAR(200) NULL,
+    [IsFno] BIT NOT NULL CONSTRAINT [DF_USStocks_IsFno] DEFAULT (0),
+    [IsTestSample] BIT NOT NULL CONSTRAINT [DF_USStocks_IsTestSample] DEFAULT (0),
     [CreatedAt] DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
     CONSTRAINT [PK_USStocks] PRIMARY KEY CLUSTERED ([Id]),
     CONSTRAINT [UQ_USStocks_Symbol] UNIQUE ([Symbol]),

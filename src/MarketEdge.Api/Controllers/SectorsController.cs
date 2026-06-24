@@ -12,10 +12,10 @@ public class SectorsController : ControllerBase
     public SectorsController(ISectorService sectorService) => _sectorService = sectorService;
 
     [HttpGet]
-    public async Task<IActionResult> GetSectors(string market)
+    public async Task<IActionResult> GetSectors(string market, [FromQuery] bool testSampleOnly = false)
     {
         if (!IsValidMarket(market)) return BadRequest("Market must be 'india' or 'us'");
-        return Ok(await _sectorService.GetSectorsAsync(market));
+        return Ok(await _sectorService.GetSectorsAsync(market, testSampleOnly));
     }
 
     [HttpGet("{id}")]

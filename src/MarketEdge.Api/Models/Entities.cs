@@ -22,10 +22,13 @@ public class IndianStock
     public string CompanyName { get; set; } = string.Empty;
     public int SectorId { get; set; }
     public string? BroadSector { get; set; }
+    public bool IsFno { get; set; }
+    public bool IsTestSample { get; set; }
     public DateTime CreatedAt { get; set; }
 
     [ForeignKey(nameof(SectorId))]
     public IndianSector Sector { get; set; } = null!;
+    public IndianStockFundamentals? Fundamentals { get; set; }
 }
 
 [Table("USSectors")]
@@ -47,8 +50,39 @@ public class USStock
     public string CompanyName { get; set; } = string.Empty;
     public int SectorId { get; set; }
     public string? BroadSector { get; set; }
+    public bool IsFno { get; set; }
+    public bool IsTestSample { get; set; }
     public DateTime CreatedAt { get; set; }
 
     [ForeignKey(nameof(SectorId))]
     public USSector Sector { get; set; } = null!;
+    public USStockFundamentals? Fundamentals { get; set; }
+}
+
+[Table("IndianStockFundamentals")]
+public class IndianStockFundamentals
+{
+    [Key]
+    public int Id { get; set; }
+    public int StockId { get; set; }
+    public decimal? MarketCap { get; set; }
+    public DateTime UpdatedAt { get; set; }
+    public DateTime CreatedAt { get; set; }
+
+    [ForeignKey(nameof(StockId))]
+    public IndianStock Stock { get; set; } = null!;
+}
+
+[Table("USStockFundamentals")]
+public class USStockFundamentals
+{
+    [Key]
+    public int Id { get; set; }
+    public int StockId { get; set; }
+    public decimal? MarketCap { get; set; }
+    public DateTime UpdatedAt { get; set; }
+    public DateTime CreatedAt { get; set; }
+
+    [ForeignKey(nameof(StockId))]
+    public USStock Stock { get; set; } = null!;
 }

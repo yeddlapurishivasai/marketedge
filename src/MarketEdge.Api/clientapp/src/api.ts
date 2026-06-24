@@ -11,6 +11,9 @@ export interface Stock {
   sectorId: number;
   sectorName?: string;
   broadSector?: string;
+  marketCap?: number;
+  isFno: boolean;
+  isTestSample: boolean;
 }
 
 export interface PagedResult<T> {
@@ -24,8 +27,9 @@ export type Market = 'india' | 'us';
 
 const BASE = '/api';
 
-export async function fetchSectors(market: Market): Promise<Sector[]> {
-  const res = await fetch(`${BASE}/${market}/sectors`);
+export async function fetchSectors(market: Market, testSampleOnly = false): Promise<Sector[]> {
+  const qs = testSampleOnly ? '?testSampleOnly=true' : '';
+  const res = await fetch(`${BASE}/${market}/sectors${qs}`);
   if (!res.ok) throw new Error('Failed to fetch sectors');
   return res.json();
 }
@@ -68,7 +72,7 @@ export async function fetchStocks(
   return res.json();
 }
 
-export async function createStock(market: Market, data: { symbol: string; companyName: string; sectorId: number; broadSector?: string }): Promise<Stock> {
+export async function createStock(market: Market, data: { symbol: string; companyName: string; sectorId: number; broadSector?: string; isFno?: boolean }): Promise<Stock> {
   const res = await fetch(`${BASE}/${market}/stocks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -78,7 +82,7 @@ export async function createStock(market: Market, data: { symbol: string; compan
   return res.json();
 }
 
-export async function updateStock(market: Market, id: number, data: { companyName?: string; sectorId?: number; broadSector?: string }): Promise<void> {
+export async function updateStock(market: Market, id: number, data: { companyName?: string; sectorId?: number; broadSector?: string; isFno?: boolean }): Promise<void> {
   const res = await fetch(`${BASE}/${market}/stocks/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -107,6 +111,7 @@ export interface JobRun {
   id: number;
   jobType: string;
   market: string;
+  weekNumber: string;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   parameters?: Record<string, unknown>;
@@ -147,6 +152,9 @@ export interface TriggerAnalysisRequest {
   maxMarketCap?: number;
   sectorIds?: number[];
   limit?: number;
+  testSampleOnly?: boolean;
+  retryFailedOnly?: boolean;
+  weekNumber?: string;
   force?: boolean;
 }
 

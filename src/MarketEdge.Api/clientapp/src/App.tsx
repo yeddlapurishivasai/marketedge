@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, createContext, useContext } from 'rea
 import { BrowserRouter, Routes, Route, NavLink, useParams, useNavigate } from 'react-router-dom';
 import type { Market, Sector, Stock } from './api';
 import { fetchSectors, fetchStocks, createSector, renameSector, deleteSector, deleteStock, moveStocks } from './api';
+import { formatMarketCap } from './format';
 import {
   Sun, Moon, ChevronLeft, Search, Plus, Pencil, Trash2,
   ArrowRightLeft, X, TrendingUp, LayoutGrid, BarChart3,
@@ -413,6 +414,8 @@ function SectorDetail() {
                 </th>
                 <th>Symbol</th>
                 <th>Company Name</th>
+                <th style={{ width: 120, textAlign: 'right' }}>Market Cap</th>
+                <th style={{ width: 70, textAlign: 'center' }}>F&O</th>
                 <th style={{ width: 80, textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
@@ -422,6 +425,8 @@ function SectorDetail() {
                   <td><input type="checkbox" className="checkbox" checked={selected.has(st.id)} onChange={() => toggleSelect(st.id)} /></td>
                   <td className="cell-symbol">{st.symbol}</td>
                   <td>{st.companyName}</td>
+                  <td style={{ textAlign: 'right' }}>{formatMarketCap(st.marketCap, m)}</td>
+                  <td className="cell-center">{st.isFno ? <span className="badge badge-count">F&amp;O</span> : <span className="cell-muted">-</span>}</td>
                   <td className="cell-actions">
                     <button className="btn btn-ghost btn-sm" onClick={() => { setSelected(new Set([st.id])); setShowMove(true); }}>
                       <ArrowRightLeft size={14} />
@@ -580,6 +585,8 @@ function StocksPage() {
                 <th>Symbol</th>
                 <th>Company Name</th>
                 <th>Sector</th>
+                <th style={{ width: 120, textAlign: 'right' }}>Market Cap</th>
+                <th style={{ width: 70, textAlign: 'center' }}>F&O</th>
                 <th style={{ width: 80, textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
@@ -590,6 +597,8 @@ function StocksPage() {
                   <td className="cell-symbol">{st.symbol}</td>
                   <td>{st.companyName}</td>
                   <td className="cell-muted">{st.sectorName || '-'}</td>
+                  <td style={{ textAlign: 'right' }}>{formatMarketCap(st.marketCap, m)}</td>
+                  <td className="cell-center">{st.isFno ? <span className="badge badge-count">F&amp;O</span> : <span className="cell-muted">-</span>}</td>
                   <td className="cell-actions">
                     <button className="btn btn-ghost btn-sm" onClick={() => { setSelected(new Set([st.id])); setShowMove(true); }}>
                       <ArrowRightLeft size={14} />

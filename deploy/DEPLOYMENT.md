@@ -1,107 +1,165 @@
 # MarketEdge — Azure Deployment Guide
 
+All scripts live in `deploy/` and default to the **`dr`** environment, so you can run
+most of them with **no arguments**. Override any parameter to target a different env.
+
+## Target resources (defaults)
+
+| Resource | Value |
+|----------|-------|
+| Subscription | `5bfc6247-f6ee-4d64-8651-711aac18f8f0` (Visual Studio Enterprise with MSDN) |
+| Resource Group | `market-edge-dr-rg-01` |
+| SQL Server | `market-edge-dr-sql-server-01` (FQDN `…database.windows.net`) |
+| SQL Database | `MarketEdge` |
+| SQL Admin User | `sqladmin` |
+| Storage Account | `marketedgedrsa01` |
+| Storage Queue | `stage-analysis-jobs` |
+| App Service Plan | `market-edge-dr-asp-01` |
+| API App Service | `market-edge-dr-api-01` (also serves the React UI) |
+| Worker App Service | `market-edge-dr-worker-01` |
+
 ## Prerequisites
 
-- [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az login`)
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) — `az login`
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
-- [sqlpackage](https://learn.microsoft.com/en-us/sql/tools/sqlpackage/sqlpackage-download) (`dotnet tool install -g microsoft.sqlpackage`)
-- [sqlcmd](https://learn.microsoft.com/en-us/sql/tools/sqlcmd/sqlcmd-utility) (for seeding data)
+- [sqlpackage](https://learn.microsoft.com/sql/tools/sqlpackage/sqlpackage-download) — `dotnet tool install -g microsoft.sqlpackage`
+- [sqlcmd](https://learn.microsoft.com/sql/tools/sqlcmd/sqlcmd-utility) (only for `-SeedData`)
+- Node.js (the API publish builds the React app)
 - PowerShell 7+
 
-## Azure Resources
-
-| Resource | Naming Convention | Example |
-|----------|-------------------|---------|
-| Resource Group | `market-edge-{env}-rg-01` | `market-edge-dr-rg-01` |
-| SQL Server | `market-edge-{env}-sql-server-01` | `market-edge-dr-sql-server-01` |
-| SQL Database | `MarketEdge` | `MarketEdge` |
-| Storage Account | `marketedge{env}sa01` | `marketedgedrsa01` |
-| Storage Queue | `stage-analysis-jobs` | `stage-analysis-jobs` |
-| App Service Plan | `market-edge-{env}-asp-01` | `market-edge-dr-asp-01` |
-| API App Service | `market-edge-{env}-api-01` | `market-edge-dr-api-01` |
-| Worker App Service | `market-edge-{env}-worker-01` | `market-edge-dr-worker-01` |
-
-## Quick Start — Full Deployment
-
 ```powershell
-# Login and select the correct subscription
 az login
-
-# Run the full deployment (prompts for SQL password securely)
-.\deploy\deploy-all.ps1 `
-    -ResourceGroup "market-edge-dr-rg-01" `
-    -SqlServer "market-edge-dr-sql-server-01.database.windows.net" `
-    -SqlUser sqladmin `
-    -StorageAccountName marketedgedrsa01 `
-    -SeedData
+az account set --subscription 5bfc6247-f6ee-4d64-8651-711aac18f8f0
 ```
 
-This runs all steps: database schema → app settings → API deploy → worker deploy.
+---
 
-## Individual Scripts
+## Quick Start
 
-### 1. Database (Schema + Seed)
+### A. Reset the database and deploy everything (clean slate)
+
+Deletes the existing database, recreates an empty one, publishes schema + seed data, then
+publishes the API (with UI) and the Worker.
 
 ```powershell
-.\deploy\deploy-database.ps1 `
-    -SqlServer "market-edge-dr-sql-server-01.database.windows.net" `
-    -SqlUser sqladmin `
-    -SeedData
+# 1. Delete the current database
+.\deploy\delete-database.ps1 -Force
+
+# 2. Recreate the empty database resource (sqlpackage needs it to exist)
+az sql db create --resource-group market-edge-dr-rg-01 `
+    --server market-edge-dr-sql-server-01 --name MarketEdge --service-objective S0
+
+# 3. Publish the dacpac + seed data
+.\deploy\deploy-database.ps1 -SeedData
+
+# 4. Publish API + UI + Worker
+.\deploy\deploy-apps.ps1
 ```
 
-- Builds the dacpac (auto-detects Azure SQL vs on-premises target)
-- Publishes schema via `sqlpackage`
-- Optionally seeds data from `Scripts/SeedData.sql`
-
-### 2. API Deployment
+### B. Deploy app changes only (no database changes)
 
 ```powershell
-.\deploy\deploy-api.ps1 `
-    -ResourceGroup "market-edge-dr-rg-01" `
-    -AppName "market-edge-dr-api-01"
+.\deploy\deploy-apps.ps1
 ```
 
-- Runs `dotnet publish` (builds React frontend too)
-- Zips and deploys via `az webapp deployment source config-zip`
-
-### 3. Worker Deployment
+### C. Full end-to-end in one command
 
 ```powershell
-.\deploy\deploy-worker.ps1 `
-    -ResourceGroup "market-edge-dr-rg-01" `
-    -AppName "market-edge-dr-worker-01"
+# Database (schema + seed) → app settings → API → Worker
+.\deploy\deploy-all.ps1 -SeedData
 ```
 
-- Packages Python source files (excludes `.env`, `__pycache__`)
-- Deploys via zip; Azure installs `requirements.txt` automatically (`SCM_DO_BUILD_DURING_DEPLOYMENT=true`)
+All commands default to the `market-edge-dr-rg-01` resources; see **Scripts** below for
+per-script parameters and overrides.
 
-### 4. Configure App Settings
+---
+
+## Scripts
+
+### 1. Delete the database — `delete-database.ps1`
+
+Permanently deletes the Azure SQL database (schema + data). Verifies the DB exists and
+prompts for confirmation (type the database name); pass `-Force` to skip the prompt.
 
 ```powershell
-.\deploy\configure-apps.ps1 `
-    -ResourceGroup "market-edge-dr-rg-01" `
-    -ApiAppName "market-edge-dr-api-01" `
-    -WorkerAppName "market-edge-dr-worker-01" `
-    -SqlServer "market-edge-dr-sql-server-01.database.windows.net" `
-    -SqlUser sqladmin `
-    -StorageAccountName marketedgedrsa01
+# Delete MarketEdge on the dr server (interactive confirm)
+.\deploy\delete-database.ps1
+
+# Non-interactive
+.\deploy\delete-database.ps1 -Force
+
+# Different target
+.\deploy\delete-database.ps1 `
+    -ResourceGroup market-edge-dr-rg-01 `
+    -SqlServerName market-edge-dr-sql-server-01 `
+    -DatabaseName MarketEdge
 ```
 
-Sets connection strings and environment variables for both apps.
+> Note: the server also has a `market-edge-dr-db-01` database. The app uses `MarketEdge`
+> (the default). Pass `-DatabaseName market-edge-dr-db-01` only if you intend to delete that one.
 
-## Skipping Steps
+### 2. Publish the dacpac — `deploy-database.ps1`
 
-Use flags on `deploy-all.ps1` to skip steps:
+Builds the SQL project (auto-selects the Azure SQL provider) and publishes the schema via
+`sqlpackage`. Add `-SeedData` to also run `Scripts/SeedData.sql`. Prompts for the SQL password.
 
 ```powershell
-# Redeploy only the API (skip DB + worker)
-.\deploy\deploy-all.ps1 ... -SkipDatabase -SkipWorker
+# Schema only
+.\deploy\deploy-database.ps1
 
-# Redeploy only the worker
-.\deploy\deploy-all.ps1 ... -SkipDatabase -SkipApi
+# Schema + seed data
+.\deploy\deploy-database.ps1 -SeedData
 ```
 
-## App Settings Reference
+Typical "fresh database" flow:
+
+```powershell
+.\deploy\delete-database.ps1 -Force
+.\deploy\deploy-database.ps1 -SeedData
+```
+
+> The Azure SQL **database resource** must exist for `sqlpackage` to publish into it. If you
+> deleted it, recreate the empty DB first (see *Infrastructure setup*) before publishing.
+
+### 3. Publish API + UI + Worker — `deploy-apps.ps1`
+
+Publishes application code only (no database). The API publish builds the React frontend and
+bundles it into `wwwroot`, so this single script covers **API + UI + Worker**.
+
+```powershell
+# Publish API (with UI) and Worker
+.\deploy\deploy-apps.ps1
+
+# Only the worker / only the API
+.\deploy\deploy-apps.ps1 -SkipApi
+.\deploy\deploy-apps.ps1 -SkipWorker
+
+# First-time deploy: also (re)apply app settings, then publish
+.\deploy\deploy-apps.ps1 -Configure -SqlUser sqladmin
+```
+
+App settings/connection strings are **not** changed unless you pass `-Configure`
+(only needed on first deploy or when settings change).
+
+---
+
+## Other scripts
+
+| Script | Purpose |
+|--------|---------|
+| `deploy-api.ps1` | Build + publish only the .NET API (incl. React UI). |
+| `deploy-worker.ps1` | Package + publish only the Python worker. |
+| `configure-apps.ps1` | Set connection strings + app settings for API and Worker. |
+| `deploy-all.ps1` | End-to-end: database → settings → API → Worker (use `-Skip*` flags). |
+
+```powershell
+# Everything in one shot (prompts for SQL password)
+.\deploy\deploy-all.ps1 -SeedData
+```
+
+---
+
+## App settings reference
 
 ### API (.NET)
 
@@ -123,9 +181,11 @@ Use flags on `deploy-all.ps1` to skip steps:
 | `YFINANCE_MAX_RETRIES` | Max retries per batch | `3` |
 | `AZURE_LOG_LEVEL` | Azure SDK log level | `ERROR` |
 
-## Infrastructure Setup (One-Time)
+---
 
-If creating resources from scratch:
+## Infrastructure setup (one-time)
+
+If creating resources from scratch (or recreating an empty DB after delete):
 
 ```powershell
 $RG = "market-edge-dr-rg-01"
@@ -134,26 +194,24 @@ $LOCATION = "centralus"
 # Resource Group
 az group create --name $RG --location $LOCATION
 
-# SQL Server (replace <password> with your chosen password)
+# SQL Server (replace <password>)
 az sql server create --resource-group $RG --name market-edge-dr-sql-server-01 `
     --admin-user sqladmin --admin-password <password> --location $LOCATION
 
-# Enable public access + firewall
+# Public access + firewall (allow Azure services)
 az sql server update --resource-group $RG --name market-edge-dr-sql-server-01 `
     --enable-public-network true
 az sql server firewall-rule create --resource-group $RG `
     --server market-edge-dr-sql-server-01 --name AllowAzureServices `
     --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0
 
-# SQL Database
+# SQL Database (empty; dacpac publishes schema into it)
 az sql db create --resource-group $RG --server market-edge-dr-sql-server-01 `
     --name MarketEdge --service-objective S0
 
-# Storage Account
+# Storage Account + Queue
 az storage account create --name marketedgedrsa01 --resource-group $RG `
     --location $LOCATION --sku Standard_LRS --kind StorageV2
-
-# Storage Queue
 $CONN = az storage account show-connection-string --name marketedgedrsa01 `
     --resource-group $RG --query connectionString -o tsv
 az storage queue create --name stage-analysis-jobs --connection-string $CONN
@@ -162,21 +220,22 @@ az storage queue create --name stage-analysis-jobs --connection-string $CONN
 az appservice plan create --resource-group $RG --name market-edge-dr-asp-01 `
     --location $LOCATION --sku B1 --is-linux
 
-# API App Service (.NET 8)
+# API + Worker App Services
 az webapp create --resource-group $RG --plan market-edge-dr-asp-01 `
     --name market-edge-dr-api-01 --runtime "DOTNETCORE:8.0"
-
-# Worker App Service (Python 3.12)
 az webapp create --resource-group $RG --plan market-edge-dr-asp-01 `
     --name market-edge-dr-worker-01 --runtime "PYTHON:3.12"
 ```
+
+---
 
 ## Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
-| dacpac fails with "cannot publish to Azure SQL" | Script auto-detects and uses `SqlAzureV12` provider |
-| "Deny Public Network Access" on SQL | Run `az sql server update --enable-public-network true` |
-| Worker not processing queue messages | Check `AZURE_STORAGE_CONNECTION_STRING` and `QUEUE_NAME` in app settings |
+| dacpac fails publishing to Azure SQL | Script auto-detects and uses the `SqlAzureV12` provider |
+| "Deny Public Network Access" on SQL | `az sql server update --enable-public-network true` |
+| Worker not processing queue messages | Check `AZURE_STORAGE_CONNECTION_STRING` and `QUEUE_NAME` |
 | yfinance throttling errors | Increase `YFINANCE_BATCH_DELAY` (default 4s) |
-| Logs | `az webapp log tail --resource-group <rg> --name <app>` |
+| Wrong subscription | `az account set --subscription 5bfc6247-f6ee-4d64-8651-711aac18f8f0` |
+| Tail logs | `az webapp log tail --resource-group market-edge-dr-rg-01 --name <app>` |

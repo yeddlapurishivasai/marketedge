@@ -7,6 +7,7 @@ public class JobRunDto
     public int Id { get; set; }
     public string JobType { get; set; } = string.Empty;
     public string Market { get; set; } = string.Empty;
+    public string WeekNumber { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
     public int Progress { get; set; }
     public Dictionary<string, object>? Parameters { get; set; }
@@ -25,8 +26,25 @@ public class TriggerAnalysisRequest
     public List<int>? SectorIds { get; set; }
     public int? Limit { get; set; }
     /// <summary>
-    /// When true, forces a new run even if one already exists for this week.
-    /// The previous same-week run will be superseded.
+    /// When true, restricts the run to stocks flagged IsTestSample (200 India + 200 US)
+    /// for fast local/e2e runs.
+    /// </summary>
+    public bool? TestSampleOnly { get; set; }
+    /// <summary>
+    /// Optional ISO week (format YYYY-Www) to run analysis for. When omitted, the current
+    /// week is used. A past week triggers a point-in-time run (prices fetched only up to
+    /// that week's close). Future weeks are rejected.
+    /// </summary>
+    public string? WeekNumber { get; set; }
+    /// <summary>
+    /// When true, restricts the run to symbols in the selected universe that do NOT yet
+    /// have a result row for the current week (i.e. failed/pending tickers from an earlier
+    /// run). Results are upserted, so completed symbols are left untouched.
+    /// </summary>
+    public bool? RetryFailedOnly { get; set; }
+    /// <summary>
+    /// Deprecated. Retained for client compatibility; results are now upserted per week and
+    /// every trigger is recorded as its own run, so forcing is no longer required.
     /// </summary>
     public bool Force { get; set; }
 }

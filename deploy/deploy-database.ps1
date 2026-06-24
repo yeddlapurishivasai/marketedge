@@ -25,13 +25,11 @@
 #>
 
 param(
-    [Parameter(Mandatory)]
-    [string]$SqlServer,
+    [string]$SqlServer = "market-edge-dr-sql-server-01.database.windows.net",
 
     [string]$DatabaseName = "MarketEdge",
 
-    [Parameter(Mandatory)]
-    [string]$SqlUser,
+    [string]$SqlUser = "sqladmin",
 
     [SecureString]$SqlPassword,
 

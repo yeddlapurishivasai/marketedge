@@ -16,6 +16,13 @@ import sys
 import time
 from datetime import datetime, timezone
 
+# Ensure Unicode output (emoji, em dash) works on Windows consoles (cp1252).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 from config import Config
 from db import get_connection, get_stocks, save_single_result, update_job_status, clear_run_results
 from stage_analysis import calculate_stage2, fetch_benchmark_data
@@ -33,6 +40,8 @@ def main():
     parser.add_argument("--market", default="india", choices=["india", "us"])
     parser.add_argument("--sector-id", type=int, default=None, help="Sector ID to test (default: first available)")
     parser.add_argument("--max-stocks", type=int, default=5, help="Max stocks to process (default: 5)")
+    parser.add_argument("--all-stocks", action="store_true",
+                        help="Use the full universe instead of only IsTestSample stocks")
     args = parser.parse_args()
 
     market = args.market
@@ -43,9 +52,9 @@ def main():
     conn = get_connection()
     print("    OK")
 
-    # 2. Get stocks for one sector
+    # 2. Get stocks for one sector (default: only the local test sample for speed)
     sector_ids = [args.sector_id] if args.sector_id else None
-    stocks = get_stocks(conn, market, sector_ids=sector_ids)
+    stocks = get_stocks(conn, market, sector_ids=sector_ids, test_sample_only=not args.all_stocks)
     if not stocks:
         print("    ERROR: No stocks found")
         sys.exit(1)
@@ -62,13 +71,18 @@ def main():
     print(f"    Sector: {first_sector_name} (id={first_sector_id})")
     print(f"    Stocks to process: {len(sector_stocks)}")
 
-    # 3. Create a test job run
+    # 3. Create a test job run.
+    # Insert as 'cancelled' so this throwaway harness run stays outside the
+    # UX_JobRuns_ActiveWeek unique index (which covers queued/running/completed)
+    # and never collides with a real run for the same week. It is deleted at the end.
     print("\n[2] Creating test job run...")
     cursor = conn.cursor()
-    week_number = _get_week_number()
+    # Use a sentinel WeekNumber for the throwaway result rows so the (WeekNumber, Symbol)
+    # upsert never collides with — or deletes — real week-keyed data in the DB.
+    week_number = "E2E-TEST"
     cursor.execute(
         "INSERT INTO dbo.JobRuns (JobType, Market, WeekNumber, Status, Progress, CreatedAt) "
-        "VALUES (?, ?, ?, 'running', 0, GETUTCDATE())",
+        "VALUES (?, ?, ?, 'cancelled', 0, GETUTCDATE())",
         "stage2_analysis", market, week_number,
     )
     conn.commit()
@@ -114,6 +128,7 @@ def main():
 
         result = {
             "run_id": run_id,
+            "week_number": week_number,
             "symbol": symbol,
             "company_name": stock["company_name"],
             "sector_id": stock["sector_id"],

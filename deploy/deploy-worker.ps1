@@ -13,11 +13,9 @@
 #>
 
 param(
-    [Parameter(Mandatory)]
-    [string]$ResourceGroup,
+    [string]$ResourceGroup = "market-edge-dr-rg-01",
 
-    [Parameter(Mandatory)]
-    [string]$AppName
+    [string]$AppName = "market-edge-dr-worker-01"
 )
 
 $ErrorActionPreference = "Stop"
