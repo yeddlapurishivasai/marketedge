@@ -5,6 +5,7 @@ import {
   fetchSectors, fetchStage2Summary, fetchSectorRotation, fetchStage2History,
   fetchJobRuns, triggerAnalysis, fetchStage2Stocks, fetchRotationHistory
 } from '../api';
+import { formatMarketCap, formatPrice } from '../format';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line
@@ -20,15 +21,6 @@ const QUADRANT_COLORS: Record<string, string> = {
   weakening: '#f59e0b',
   lagging: '#ef4444'
 };
-
-function formatMarketCap(value?: number): string {
-  if (!value) return '—';
-  if (value >= 1e12) return `${(value / 1e12).toFixed(1)}T`;
-  if (value >= 1e9) return `${(value / 1e9).toFixed(1)}B`;
-  if (value >= 1e7) return `${(value / 1e7).toFixed(1)}Cr`;
-  if (value >= 1e6) return `${(value / 1e6).toFixed(1)}M`;
-  return value.toFixed(0);
-}
 
 // Sort state type
 type SortDir = 'asc' | 'desc' | null;
@@ -582,7 +574,7 @@ export default function AnalysisPage() {
                       <td className="cell-symbol">{s.symbol}</td>
                       <td>{s.companyName.length > 30 ? s.companyName.slice(0, 27) + '...' : s.companyName}</td>
                       <td className="cell-muted">{s.sectorName}</td>
-                      <td>{s.closePrice?.toFixed(2)}</td>
+                      <td>{formatPrice(s.closePrice, m)}</td>
                       <td style={{ color: (s.rsScore ?? 0) > 0 ? 'var(--success)' : 'var(--danger)' }}>
                         {s.rsScore?.toFixed(2)}
                       </td>
@@ -775,8 +767,8 @@ export default function AnalysisPage() {
                           <td className="cell-symbol">{s.symbol}</td>
                           <td>{s.companyName.length > 25 ? s.companyName.slice(0, 22) + '...' : s.companyName}</td>
                           <td className="cell-muted">{s.sectorName}</td>
-                          <td>{s.closePrice?.toFixed(2)}</td>
-                          <td className="cell-muted">{formatMarketCap(s.marketCap ?? undefined)}</td>
+                          <td>{formatPrice(s.closePrice, m)}</td>
+                          <td className="cell-muted">{formatMarketCap(s.marketCap, m)}</td>
                           <td style={{ color: (s.rsScore ?? 0) > 0 ? 'var(--success)' : 'var(--danger)' }}>
                             {s.rsScore?.toFixed(2)}
                           </td>

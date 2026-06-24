@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, createContext, useContext } from 'rea
 import { BrowserRouter, Routes, Route, NavLink, useParams, useNavigate } from 'react-router-dom';
 import type { Market, Sector, Stock } from './api';
 import { fetchSectors, fetchStocks, createSector, renameSector, deleteSector, deleteStock, moveStocks } from './api';
+import { formatMarketCap } from './format';
 import {
   Sun, Moon, ChevronLeft, Search, Plus, Pencil, Trash2,
   ArrowRightLeft, X, TrendingUp, LayoutGrid, BarChart3,
@@ -13,14 +14,6 @@ import './styles.css';
 
 // Theme context
 const ThemeContext = createContext<{ theme: string; toggle: () => void }>({ theme: 'light', toggle: () => {} });
-
-function formatMarketCap(value?: number): string {
-  if (value == null) return '-';
-  if (value >= 1e12) return `$${(value / 1e12).toFixed(2)}T`;
-  if (value >= 1e9) return `$${(value / 1e9).toFixed(2)}B`;
-  if (value >= 1e6) return `$${(value / 1e6).toFixed(2)}M`;
-  return `$${value.toFixed(0)}`;
-}
 
 function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState(() => localStorage.getItem('me-theme') || 'light');
@@ -432,7 +425,7 @@ function SectorDetail() {
                   <td><input type="checkbox" className="checkbox" checked={selected.has(st.id)} onChange={() => toggleSelect(st.id)} /></td>
                   <td className="cell-symbol">{st.symbol}</td>
                   <td>{st.companyName}</td>
-                  <td style={{ textAlign: 'right' }}>{formatMarketCap(st.marketCap)}</td>
+                  <td style={{ textAlign: 'right' }}>{formatMarketCap(st.marketCap, m)}</td>
                   <td className="cell-center">{st.isFno ? <span className="badge badge-count">F&amp;O</span> : <span className="cell-muted">-</span>}</td>
                   <td className="cell-actions">
                     <button className="btn btn-ghost btn-sm" onClick={() => { setSelected(new Set([st.id])); setShowMove(true); }}>
@@ -604,7 +597,7 @@ function StocksPage() {
                   <td className="cell-symbol">{st.symbol}</td>
                   <td>{st.companyName}</td>
                   <td className="cell-muted">{st.sectorName || '-'}</td>
-                  <td style={{ textAlign: 'right' }}>{formatMarketCap(st.marketCap)}</td>
+                  <td style={{ textAlign: 'right' }}>{formatMarketCap(st.marketCap, m)}</td>
                   <td className="cell-center">{st.isFno ? <span className="badge badge-count">F&amp;O</span> : <span className="cell-muted">-</span>}</td>
                   <td className="cell-actions">
                     <button className="btn btn-ghost btn-sm" onClick={() => { setSelected(new Set([st.id])); setShowMove(true); }}>
