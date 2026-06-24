@@ -85,3 +85,8 @@ sqlcmd -S localhost -d MarketEdge -C -i src/MarketEdge.Database/Scripts/SeedData
 
 - **Indian Market**: 123 sectors, 2,285 stocks (sourced from yfinance industry classifications)
 - **US Market**: 153 sectors, 6,368 stocks (sourced from NASDAQ Stock Screener API)
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->
