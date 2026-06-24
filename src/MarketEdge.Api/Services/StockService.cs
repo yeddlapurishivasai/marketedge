@@ -34,7 +34,7 @@ public class StockService : IStockService
             stocks = q.Select(s => new StockDto
             {
                 Id = s.Id, Symbol = s.Symbol, CompanyName = s.CompanyName,
-                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.MarketCapInfo != null ? s.MarketCapInfo.MarketCap : null, IsFno = s.IsFno
+                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.Fundamentals != null ? s.Fundamentals.MarketCap : null, IsFno = s.IsFno
             });
         }
         else
@@ -48,7 +48,7 @@ public class StockService : IStockService
             stocks = q.Select(s => new StockDto
             {
                 Id = s.Id, Symbol = s.Symbol, CompanyName = s.CompanyName,
-                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.MarketCapInfo != null ? s.MarketCapInfo.MarketCap : null, IsFno = s.IsFno
+                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.Fundamentals != null ? s.Fundamentals.MarketCap : null, IsFno = s.IsFno
             });
         }
 
@@ -70,7 +70,7 @@ public class StockService : IStockService
                 .Select(s => new StockDto
                 {
                     Id = s.Id, Symbol = s.Symbol, CompanyName = s.CompanyName,
-                    SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.MarketCapInfo != null ? s.MarketCapInfo.MarketCap : null, IsFno = s.IsFno
+                    SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.Fundamentals != null ? s.Fundamentals.MarketCap : null, IsFno = s.IsFno
                 }).FirstOrDefaultAsync();
         }
 
@@ -78,7 +78,7 @@ public class StockService : IStockService
             .Select(s => new StockDto
             {
                 Id = s.Id, Symbol = s.Symbol, CompanyName = s.CompanyName,
-                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.MarketCapInfo != null ? s.MarketCapInfo.MarketCap : null, IsFno = s.IsFno
+                SectorId = s.SectorId, SectorName = s.Sector.SectorName, BroadSector = s.BroadSector, MarketCap = s.Fundamentals != null ? s.Fundamentals.MarketCap : null, IsFno = s.IsFno
             }).FirstOrDefaultAsync();
     }
 

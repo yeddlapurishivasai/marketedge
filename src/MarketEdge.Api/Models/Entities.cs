@@ -27,7 +27,7 @@ public class IndianStock
 
     [ForeignKey(nameof(SectorId))]
     public IndianSector Sector { get; set; } = null!;
-    public IndianStockMarketCap? MarketCapInfo { get; set; }
+    public IndianStockFundamentals? Fundamentals { get; set; }
 }
 
 [Table("USSectors")]
@@ -54,11 +54,11 @@ public class USStock
 
     [ForeignKey(nameof(SectorId))]
     public USSector Sector { get; set; } = null!;
-    public USStockMarketCap? MarketCapInfo { get; set; }
+    public USStockFundamentals? Fundamentals { get; set; }
 }
 
-[Table("IndianStockMarketCaps")]
-public class IndianStockMarketCap
+[Table("IndianStockFundamentals")]
+public class IndianStockFundamentals
 {
     [Key]
     public int Id { get; set; }
@@ -71,8 +71,8 @@ public class IndianStockMarketCap
     public IndianStock Stock { get; set; } = null!;
 }
 
-[Table("USStockMarketCaps")]
-public class USStockMarketCap
+[Table("USStockFundamentals")]
+public class USStockFundamentals
 {
     [Key]
     public int Id { get; set; }
