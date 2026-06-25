@@ -620,7 +620,13 @@ function TradesTab({ market, profile }: { market: Market; profile: TradeProfile 
   const [view, setView] = useState<TradeView>('positions');
   return (
     <>
-      <div className="sub-tabs" style={{ marginBottom: 4 }}>
+      <div className="sub-tabs" style={{
+        marginTop: 6, marginBottom: 4, marginLeft: 14, paddingLeft: 14,
+        borderLeft: '2px solid var(--border, rgba(127,127,127,0.3))',
+      }}>
+        <span className="sub-tab-note" style={{ alignSelf: 'center', textTransform: 'capitalize', marginRight: 4 }}>
+          {profile} ›
+        </span>
         <button className={`sub-tab ${view === 'positions' ? 'on' : ''}`} onClick={() => setView('positions')}>
           Positions <span className="sub-tab-note">active &amp; closed</span>
         </button>
