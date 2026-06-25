@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, Fragment } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { Market, StockScore, Trade, TradeStats, TradeProfile, ScannerPerformance, ScoringWeight } from '../api';
-import { fetchScores, fetchTrades, fetchTradeStats, fetchScannerPerformance, fetchScoringWeights, updateScoringWeight } from '../api';
+import type { Market, StockScore, Trade, TradeStats, TradeProfile, ScannerPerformance, ScoringWeight, TradePnlSummary, TradeDay } from '../api';
+import { fetchScores, fetchTrades, fetchTradeStats, fetchScannerPerformance, fetchScoringWeights, updateScoringWeight, fetchTradePnl, fetchTradesByDay } from '../api';
 import { ChevronLeft, ChevronDown, RefreshCw, TrendingUp, Loader2, Gauge, Activity, Target, Sliders } from 'lucide-react';
 
 function fmtPct(v?: number | null): string {
@@ -614,12 +614,35 @@ function ScoresTab({ market, profile }: { market: Market; profile: TradeProfile 
   );
 }
 
+type TradeView = 'positions' | 'pnl' | 'day';
+
 function TradesTab({ market, profile }: { market: Market; profile: TradeProfile }) {
+  const [view, setView] = useState<TradeView>('positions');
+  return (
+    <>
+      <div className="sub-tabs" style={{ marginBottom: 4 }}>
+        <button className={`sub-tab ${view === 'positions' ? 'on' : ''}`} onClick={() => setView('positions')}>
+          Positions <span className="sub-tab-note">active &amp; closed</span>
+        </button>
+        <button className={`sub-tab ${view === 'pnl' ? 'on' : ''}`} onClick={() => setView('pnl')}>
+          P&amp;L <span className="sub-tab-note">by period</span>
+        </button>
+        <button className={`sub-tab ${view === 'day' ? 'on' : ''}`} onClick={() => setView('day')}>
+          Day <span className="sub-tab-note">entries &amp; exits</span>
+        </button>
+      </div>
+      {view === 'positions' ? <PositionsView market={market} profile={profile} />
+        : view === 'pnl' ? <PnlView market={market} profile={profile} />
+        : <DayView market={market} profile={profile} />}
+    </>
+  );
+}
+
+function PositionsView({ market, profile }: { market: Market; profile: TradeProfile }) {
   const [status, setStatus] = useState<string>('active');
   const [rows, setRows] = useState<Trade[]>([]);
   const [stats, setStats] = useState<TradeStats | null>(null);
   const [loading, setLoading] = useState(false);
-  const [expanded, setExpanded] = useState<number | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -675,82 +698,240 @@ function TradesTab({ market, profile }: { market: Market; profile: TradeProfile 
           <div className="empty-state-icon"><Activity size={48} /></div>
           <p className="empty-state-text">
             No trades yet. A scanner hit is only a setup — a paper trade opens on a volume-confirmed
-            break of support/resistance. The blotter fills as live breakouts trigger.
+            break of support/resistance on the daily pre-close scan. The blotter fills as live breakouts trigger.
           </p>
         </div>
       ) : (
-        <div className="table-container">
-          <table className="table">
-            <thead>
+        <TradeBlotter rows={rows} market={market} closed={closed} />
+      )}
+    </>
+  );
+}
+
+/** Shared paper-trade table with an expandable confidence-rationale row. */
+function TradeBlotter({ rows, market, closed }: { rows: Trade[]; market: Market; closed: boolean }) {
+  const [expanded, setExpanded] = useState<number | null>(null);
+  return (
+    <div className="table-container">
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Type</th>
+            <th>Dir</th>
+            <th>Entry time</th>
+            <th style={{ textAlign: 'right' }}>Qty</th>
+            <th style={{ textAlign: 'right' }}>Entry</th>
+            <th style={{ textAlign: 'right' }}>Trail</th>
+            <th style={{ textAlign: 'right' }}>{closed ? 'Last' : 'Current'}</th>
+            <th style={{ textAlign: 'right' }}>Exit</th>
+            <th style={{ textAlign: 'right' }}>P&amp;L %</th>
+            <th style={{ textAlign: 'right' }}>P&amp;L</th>
+            <th style={{ textAlign: 'right' }}>MFE / MAE</th>
+            <th style={{ textAlign: 'center' }}>Confidence</th>
+            <th style={{ textAlign: 'center' }}>Scanners</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(t => (
+            <Fragment key={t.id}>
+            <tr>
+              <td style={{ fontWeight: 600 }}>{t.ticker}</td>
+              <td>{t.tradeType}</td>
+              <td><SideBadge side={t.direction} /></td>
+              <td style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{fmtDateTime(t.entryAt)}</td>
+              <td className="cell-right">{t.qty ?? '—'}</td>
+              <td className="cell-right">{fmtPrice(t.entryPrice, market)}</td>
+              <td className="cell-right" title={t.stopBasis || ''}>{fmtPrice(t.currentStop, market)}</td>
+              <td className="cell-right">{fmtPrice(t.lastPrice, market)}</td>
+              <td className="cell-right">{t.status === 'closed' ? fmtPrice(t.exitPrice, market) : '—'}</td>
+              <td className="cell-right"><PnLCell v={t.pnLPct} /></td>
+              <td className="cell-right"><MoneyCell v={t.pnLAmount} market={market} /></td>
+              <td className="cell-right" style={{ fontSize: '0.8rem' }}>
+                <span style={{ color: 'var(--success)' }}>{fmtNum(t.mfePct)}</span>
+                {' / '}
+                <span style={{ color: 'var(--danger)' }}>{fmtNum(t.maePct)}</span>
+              </td>
+              <td className="cell-center">
+                {t.confidenceScore != null ? (
+                  <button className="btn btn-ghost btn-sm" style={{ padding: '2px 6px', gap: 4 }}
+                    title="Explain why this trade got its confidence score"
+                    onClick={() => setExpanded(expanded === t.id ? null : t.id)}>
+                    <ScoreBadge score={Math.round(t.confidenceScore)} />
+                    <ChevronDown size={12} style={{ transform: expanded === t.id ? 'rotate(180deg)' : 'none' }} />
+                  </button>
+                ) : <span className="cell-muted">—</span>}
+              </td>
+              <td className="cell-center" title={t.flaggedScanners.join(', ')}>
+                <span className="badge badge-count">{t.scannerHitCount}</span>
+              </td>
+              <td>
+                {t.status === 'closed'
+                  ? <span className="cell-muted" style={{ fontSize: '0.8rem' }}>closed · {t.exitReason}</span>
+                  : <span style={{ color: 'var(--success)', fontSize: '0.8rem' }}>active{t.movedToBe ? ' · BE+' : ''}</span>}
+              </td>
+            </tr>
+            {expanded === t.id && (
               <tr>
-                <th>Ticker</th>
-                <th>Type</th>
-                <th>Dir</th>
-                <th>Entry time</th>
-                <th style={{ textAlign: 'right' }}>Qty</th>
-                <th style={{ textAlign: 'right' }}>Entry</th>
-                <th style={{ textAlign: 'right' }}>Trail</th>
-                <th style={{ textAlign: 'right' }}>{closed ? 'Last' : 'Current'}</th>
-                <th style={{ textAlign: 'right' }}>Exit</th>
-                <th style={{ textAlign: 'right' }}>P&amp;L %</th>
-                <th style={{ textAlign: 'right' }}>P&amp;L</th>
-                <th style={{ textAlign: 'right' }}>MFE / MAE</th>
-                <th style={{ textAlign: 'center' }}>Confidence</th>
-                <th style={{ textAlign: 'center' }}>Scanners</th>
-                <th>Status</th>
+                <td colSpan={14} style={{ background: 'var(--bg-subtle, rgba(127,127,127,0.06))' }}>
+                  <ConfidenceRationale trade={t} />
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {rows.map(t => (
-                <Fragment key={t.id}>
-                <tr>
-                  <td style={{ fontWeight: 600 }}>{t.ticker}</td>
-                  <td>{t.tradeType}</td>
-                  <td><SideBadge side={t.direction} /></td>
-                  <td style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{fmtDateTime(t.entryAt)}</td>
-                  <td className="cell-right">{t.qty ?? '—'}</td>
-                  <td className="cell-right">{fmtPrice(t.entryPrice, market)}</td>
-                  <td className="cell-right" title={t.stopBasis || ''}>{fmtPrice(t.currentStop, market)}</td>
-                  <td className="cell-right">{fmtPrice(t.lastPrice, market)}</td>
-                  <td className="cell-right">{t.status === 'closed' ? fmtPrice(t.exitPrice, market) : '—'}</td>
-                  <td className="cell-right"><PnLCell v={t.pnLPct} /></td>
-                  <td className="cell-right"><MoneyCell v={t.pnLAmount} market={market} /></td>
-                  <td className="cell-right" style={{ fontSize: '0.8rem' }}>
-                    <span style={{ color: 'var(--success)' }}>{fmtNum(t.mfePct)}</span>
-                    {' / '}
-                    <span style={{ color: 'var(--danger)' }}>{fmtNum(t.maePct)}</span>
-                  </td>
-                  <td className="cell-center">
-                    {t.confidenceScore != null ? (
-                      <button className="btn btn-ghost btn-sm" style={{ padding: '2px 6px', gap: 4 }}
-                        title="Explain why this trade got its confidence score"
-                        onClick={() => setExpanded(expanded === t.id ? null : t.id)}>
-                        <ScoreBadge score={Math.round(t.confidenceScore)} />
-                        <ChevronDown size={12} style={{ transform: expanded === t.id ? 'rotate(180deg)' : 'none' }} />
-                      </button>
-                    ) : <span className="cell-muted">—</span>}
-                  </td>
-                  <td className="cell-center" title={t.flaggedScanners.join(', ')}>
-                    <span className="badge badge-count">{t.scannerHitCount}</span>
-                  </td>
-                  <td>
-                    {t.status === 'closed'
-                      ? <span className="cell-muted" style={{ fontSize: '0.8rem' }}>closed · {t.exitReason}</span>
-                      : <span style={{ color: 'var(--success)', fontSize: '0.8rem' }}>active{t.movedToBe ? ' · BE+' : ''}</span>}
-                  </td>
-                </tr>
-                {expanded === t.id && (
-                  <tr>
-                    <td colSpan={14} style={{ background: 'var(--bg-subtle, rgba(127,127,127,0.06))' }}>
-                      <ConfidenceRationale trade={t} />
-                    </td>
-                  </tr>
-                )}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            )}
+            </Fragment>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+type PeriodKey = '1d' | '1w' | '1m' | '3m' | '6m' | 'custom';
+
+const PERIODS: { key: PeriodKey; label: string }[] = [
+  { key: '1d', label: '1D' },
+  { key: '1w', label: '1W' },
+  { key: '1m', label: '1M' },
+  { key: '3m', label: '3M' },
+  { key: '6m', label: '6M' },
+  { key: 'custom', label: 'Custom' },
+];
+
+function isoDate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/** [from, to] window (to is exclusive end-of-day) for a named period. */
+function periodRange(key: PeriodKey, customFrom: string, customTo: string): { from: string; to: string } {
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  if (key === 'custom') {
+    return { from: `${customFrom}T00:00:00`, to: `${customTo}T23:59:59` };
+  }
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  if (key === '1d') { /* today */ }
+  else if (key === '1w') start.setDate(start.getDate() - 6);
+  else if (key === '1m') start.setMonth(start.getMonth() - 1);
+  else if (key === '3m') start.setMonth(start.getMonth() - 3);
+  else if (key === '6m') start.setMonth(start.getMonth() - 6);
+  return { from: isoDate(start) + 'T00:00:00', to: isoDate(end) + 'T23:59:59' };
+}
+
+function PnlView({ market, profile }: { market: Market; profile: TradeProfile }) {
+  const [period, setPeriod] = useState<PeriodKey>('1m');
+  const [customFrom, setCustomFrom] = useState(isoDate(new Date(Date.now() - 30 * 864e5)));
+  const [customTo, setCustomTo] = useState(isoDate(new Date()));
+  const [data, setData] = useState<TradePnlSummary | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(() => {
+    const { from, to } = periodRange(period, customFrom, customTo);
+    setLoading(true);
+    fetchTradePnl(market, from, to, profile)
+      .then(setData)
+      .catch(() => setData(null))
+      .finally(() => setLoading(false));
+  }, [market, profile, period, customFrom, customTo]);
+
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <>
+      <div className="toolbar" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        {PERIODS.map(p => (
+          <button key={p.key} className={`btn btn-sm ${period === p.key ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setPeriod(p.key)}>{p.label}</button>
+        ))}
+        {period === 'custom' && (
+          <>
+            <input type="date" className="search-input" style={{ width: 'auto' }} value={customFrom}
+              max={customTo} onChange={e => setCustomFrom(e.target.value)} />
+            <span className="cell-muted">→</span>
+            <input type="date" className="search-input" style={{ width: 'auto' }} value={customTo}
+              min={customFrom} onChange={e => setCustomTo(e.target.value)} />
+          </>
+        )}
+        <button className="btn btn-ghost btn-sm" onClick={load} style={{ marginLeft: 'auto' }}>
+          <RefreshCw size={14} /> Refresh
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="loading"><Loader2 size={18} className="spin" /> Loading P&amp;L...</div>
+      ) : !data ? (
+        <div className="empty-state"><p className="empty-state-text">No P&amp;L data.</p></div>
+      ) : (
+        <>
+          <div className="toolbar" style={{ gap: 16, flexWrap: 'wrap' }}>
+            <Stat label={`Realized P&L (${profile})`} value={fmtMoney(data.realizedPnLAmount, market)}
+              color={data.realizedPnLAmount >= 0 ? 'var(--success)' : 'var(--danger)'} />
+            <Stat label="Unrealized P&L (open now)" value={fmtMoney(data.openPnLAmount, market)}
+              color={data.openPnLAmount >= 0 ? 'var(--success)' : 'var(--danger)'} />
+            <Stat label="Closed in period" value={data.realizedCount} />
+            <Stat label="Open positions" value={data.openCount} />
+            <Stat label="Wins" value={data.wins} color="var(--success)" />
+            <Stat label="Losses" value={data.losses} color="var(--danger)" />
+            <Stat label="Win rate" value={data.winRatePct != null ? `${data.winRatePct}%` : '—'} />
+            <Stat label="Avg realized %" value={fmtPct(data.avgRealizedPnLPct)}
+              color={(data.avgRealizedPnLPct ?? 0) >= 0 ? 'var(--success)' : 'var(--danger)'} />
+          </div>
+          <p className="cell-muted" style={{ fontSize: '0.78rem', margin: '4px 0 0' }}>
+            Realized = {profile} trades closed between {fmtDateTime(data.from)} and {fmtDateTime(data.to)}.
+            Unrealized = live P&amp;L of all currently-open {profile} positions (period-independent).
+          </p>
+        </>
+      )}
+    </>
+  );
+}
+
+function DayView({ market, profile }: { market: Market; profile: TradeProfile }) {
+  const [day, setDay] = useState(isoDate(new Date()));
+  const [data, setData] = useState<TradeDay | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    fetchTradesByDay(market, day, profile)
+      .then(setData)
+      .catch(() => setData(null))
+      .finally(() => setLoading(false));
+  }, [market, profile, day]);
+
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <>
+      <div className="toolbar" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input type="date" className="search-input" style={{ width: 'auto' }} value={day}
+          max={isoDate(new Date())} onChange={e => setDay(e.target.value)} />
+        <button className="btn btn-ghost btn-sm" onClick={load} style={{ marginLeft: 'auto' }}>
+          <RefreshCw size={14} /> Refresh
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="loading"><Loader2 size={18} className="spin" /> Loading day...</div>
+      ) : !data ? (
+        <div className="empty-state"><p className="empty-state-text">No data for this day.</p></div>
+      ) : (
+        <>
+          <h3 style={{ margin: '12px 0 6px', fontSize: '0.95rem' }}>
+            Entries <span className="badge badge-count">{data.entries.length}</span>
+          </h3>
+          {data.entries.length === 0
+            ? <p className="cell-muted" style={{ fontSize: '0.85rem' }}>No {profile} entries on this day.</p>
+            : <TradeBlotter rows={data.entries} market={market} closed={false} />}
+
+          <h3 style={{ margin: '18px 0 6px', fontSize: '0.95rem' }}>
+            Exits <span className="badge badge-count">{data.exits.length}</span>
+          </h3>
+          {data.exits.length === 0
+            ? <p className="cell-muted" style={{ fontSize: '0.85rem' }}>No {profile} exits on this day.</p>
+            : <TradeBlotter rows={data.exits} market={market} closed={true} />}
+        </>
       )}
     </>
   );

@@ -70,6 +70,27 @@ public record TradeStatsDto(
     decimal? PositionalOpenPnLAmount,
     decimal? PositionalRealizedPnLAmount);
 
+// Realized PnL = trades closed (by ExitAt) within [From, To). Unrealized PnL = the live
+// snapshot of all currently-open positions, which is period-independent.
+public record TradePnlSummaryDto(
+    DateTime From,
+    DateTime To,
+    string? TradeType,
+    int RealizedCount,
+    int Wins,
+    int Losses,
+    decimal? WinRatePct,
+    decimal RealizedPnLAmount,
+    decimal? AvgRealizedPnLPct,
+    int OpenCount,
+    decimal OpenPnLAmount);
+
+public record TradeDayDto(
+    DateTime Date,
+    string? TradeType,
+    List<TradeDto> Entries,
+    List<TradeDto> Exits);
+
 public record ScannerPerformanceDto(
     string Scanner,
     int Trades,

@@ -11,6 +11,8 @@ public interface IScoresService
     Task<StockScoreDto?> GetScoreAsync(string market, string ticker);
     Task<List<TradeDto>> GetTradesAsync(string market, string? status, string? tradeType);
     Task<TradeStatsDto> GetTradeStatsAsync(string market);
+    Task<TradePnlSummaryDto> GetTradePnlAsync(string market, DateTime from, DateTime to, string? tradeType);
+    Task<TradeDayDto> GetTradesByDayAsync(string market, DateTime date, string? tradeType);
     Task<List<ScannerPerformanceDto>> GetScannerPerformanceAsync(string market);
     Task<List<ScoringWeightDto>> GetScoringWeightsAsync(string market);
     Task<ScoringWeightDto?> UpdateScoringWeightAsync(string market, int id, ScoringWeightUpdateDto update);
@@ -100,6 +102,56 @@ public class ScoresService : IScoresService
             Sum("closed", null), Sum("active", null),
             Sum("active", "swing"), Sum("closed", "swing"),
             Sum("active", "positional"), Sum("closed", "positional"));
+    }
+
+    public Task<TradePnlSummaryDto> GetTradePnlAsync(string market, DateTime from, DateTime to, string? tradeType)
+        => market == "india"
+            ? GetTradePnl<IndianTrade>(from, to, tradeType)
+            : GetTradePnl<USTrade>(from, to, tradeType);
+
+    private async Task<TradePnlSummaryDto> GetTradePnl<T>(DateTime from, DateTime to, string? tradeType) where T : TradeBase
+    {
+        var q = TradeSet<T>().AsQueryable();
+        if (!string.IsNullOrWhiteSpace(tradeType)) q = q.Where(t => t.TradeType == tradeType);
+
+        // Realized: closed trades whose exit falls in [from, to)
+        var realized = await q.Where(t => t.Status == "closed" && t.ExitAt >= from && t.ExitAt < to)
+            .Select(t => new { t.PnLPct, t.PnLAmount }).ToListAsync();
+        var wins = realized.Count(r => r.PnLPct > 0);
+        var losses = realized.Count(r => r.PnLPct <= 0);
+        decimal? winRate = realized.Count > 0 ? Math.Round(100m * wins / realized.Count, 2) : null;
+        var realizedPnl = Math.Round(
+            realized.Where(r => r.PnLAmount.HasValue).Select(r => r.PnLAmount!.Value).DefaultIfEmpty(0).Sum(), 2);
+        var pcts = realized.Where(r => r.PnLPct.HasValue).Select(r => r.PnLPct!.Value).ToList();
+        decimal? avgPct = pcts.Count > 0 ? Math.Round(pcts.Average(), 2) : null;
+
+        // Unrealized: all currently-open positions (period-independent snapshot)
+        var open = await q.Where(t => t.Status == "active").Select(t => t.PnLAmount).ToListAsync();
+        var openPnl = Math.Round(open.Where(v => v.HasValue).Select(v => v!.Value).DefaultIfEmpty(0).Sum(), 2);
+
+        return new TradePnlSummaryDto(from, to, tradeType, realized.Count, wins, losses, winRate,
+            realizedPnl, avgPct, open.Count, openPnl);
+    }
+
+    public Task<TradeDayDto> GetTradesByDayAsync(string market, DateTime date, string? tradeType)
+        => market == "india"
+            ? GetTradesByDay<IndianTrade>(date, tradeType)
+            : GetTradesByDay<USTrade>(date, tradeType);
+
+    private async Task<TradeDayDto> GetTradesByDay<T>(DateTime date, string? tradeType) where T : TradeBase
+    {
+        var dayStart = date.Date;
+        var dayEnd = dayStart.AddDays(1);
+        var q = TradeSet<T>().AsQueryable();
+        if (!string.IsNullOrWhiteSpace(tradeType)) q = q.Where(t => t.TradeType == tradeType);
+
+        var entries = await q.Where(t => t.EntryAt >= dayStart && t.EntryAt < dayEnd)
+            .OrderByDescending(t => t.EntryAt).ToListAsync();
+        var exits = await q.Where(t => t.ExitAt >= dayStart && t.ExitAt < dayEnd)
+            .OrderByDescending(t => t.ExitAt).ToListAsync();
+
+        return new TradeDayDto(dayStart, tradeType,
+            entries.Select(ToTradeDto).ToList(), exits.Select(ToTradeDto).ToList());
     }
 
     public Task<List<ScannerPerformanceDto>> GetScannerPerformanceAsync(string market)

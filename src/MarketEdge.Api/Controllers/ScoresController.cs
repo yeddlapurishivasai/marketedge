@@ -45,6 +45,33 @@ public class ScoresController : ControllerBase
         return Ok(await _scores.GetTradeStatsAsync(market));
     }
 
+    [HttpGet("api/{market}/trades/pnl")]
+    public async Task<IActionResult> GetTradePnl(string market, [FromQuery] DateTime from,
+        [FromQuery] DateTime to, [FromQuery] string? tradeType = null)
+    {
+        if (!ValidMarket(market)) return BadRequest("Market must be 'india' or 'us'");
+        if (to <= from) return BadRequest("'to' must be after 'from'");
+        tradeType = NormalizeTradeType(tradeType);
+        return Ok(await _scores.GetTradePnlAsync(market, from, to, tradeType));
+    }
+
+    [HttpGet("api/{market}/trades/day")]
+    public async Task<IActionResult> GetTradesByDay(string market, [FromQuery] DateTime date,
+        [FromQuery] string? tradeType = null)
+    {
+        if (!ValidMarket(market)) return BadRequest("Market must be 'india' or 'us'");
+        tradeType = NormalizeTradeType(tradeType);
+        return Ok(await _scores.GetTradesByDayAsync(market, date, tradeType));
+    }
+
+    // Empty/"all" means no trade-type filter.
+    private static string? NormalizeTradeType(string? tradeType)
+    {
+        if (string.IsNullOrWhiteSpace(tradeType)) return null;
+        var t = tradeType.ToLowerInvariant();
+        return t is "swing" or "positional" ? t : null;
+    }
+
     [HttpGet("api/{market}/scanners/performance")]
     public async Task<IActionResult> GetScannerPerformance(string market)
     {

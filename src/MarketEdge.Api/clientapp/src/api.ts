@@ -729,6 +729,52 @@ export async function fetchTradeStats(market: Market): Promise<TradeStats> {
   return res.json();
 }
 
+export interface TradePnlSummary {
+  from: string;
+  to: string;
+  tradeType?: string | null;
+  realizedCount: number;
+  wins: number;
+  losses: number;
+  winRatePct?: number | null;
+  realizedPnLAmount: number;
+  avgRealizedPnLPct?: number | null;
+  openCount: number;
+  openPnLAmount: number;
+}
+
+export interface TradeDay {
+  date: string;
+  tradeType?: string | null;
+  entries: Trade[];
+  exits: Trade[];
+}
+
+export async function fetchTradePnl(
+  market: Market,
+  from: string,
+  to: string,
+  tradeType?: string
+): Promise<TradePnlSummary> {
+  const sp = new URLSearchParams({ from, to });
+  if (tradeType) sp.set('tradeType', tradeType);
+  const res = await fetch(`${BASE}/${market}/trades/pnl?${sp}`);
+  if (!res.ok) throw new Error('Failed to fetch trade P&L');
+  return res.json();
+}
+
+export async function fetchTradesByDay(
+  market: Market,
+  date: string,
+  tradeType?: string
+): Promise<TradeDay> {
+  const sp = new URLSearchParams({ date });
+  if (tradeType) sp.set('tradeType', tradeType);
+  const res = await fetch(`${BASE}/${market}/trades/day?${sp}`);
+  if (!res.ok) throw new Error('Failed to fetch day trades');
+  return res.json();
+}
+
 export interface ScannerPerformance {
   scanner: string;
   trades: number;

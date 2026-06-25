@@ -251,6 +251,10 @@ def run_scanner_job(payload: dict) -> None:
     market = str(payload["market"]).lower()
     run_id = int(payload["runId"])
     scanner_name = payload.get("scannerName")  # None => all scanners (pre-close scan)
+    # Paper trades are opened/managed only on the pre-close scan (the daily all-scanner
+    # run, scannerName=None). Intraday single-scanner runs and ad-hoc/local test runs
+    # evaluate scanners but must NOT touch the paper-trade blotter.
+    is_preclose_scan = scanner_name is None
     universe = (payload.get("universe") or "stage2").lower()
     scan_date = date.today()
 
@@ -318,7 +322,7 @@ def run_scanner_job(payload: dict) -> None:
         # Symbols flagged by any scanner this run are breakout candidates.
         meta_by_sym = {m["symbol"]: m for m in meta_rows}
         flagged: dict[str, dict] = {}
-        for scanner_name, rows in results_by_scanner.items():
+        for s_name, rows in results_by_scanner.items():
             for r in rows:
                 sym = r["symbol"]
                 f = flagged.get(sym)
@@ -329,14 +333,20 @@ def run_scanner_job(payload: dict) -> None:
                         "is_fno": bool(meta_by_sym.get(sym, {}).get("has_options")),
                     }
                     flagged[sym] = f
-                f["scanners"].append(scanner_name)
+                f["scanners"].append(s_name)
 
         trade_metrics: dict[str, int] = {}
         scored = 0
         try:
             from .trades import run_trade_engine
             from .scoring import score_universe
-            trade_metrics = run_trade_engine(conn, market, scan_date, flagged, series_cache)
+            # Only the pre-close scan opens/manages paper trades (see is_preclose_scan).
+            if is_preclose_scan:
+                trade_metrics = run_trade_engine(conn, market, scan_date, flagged, series_cache)
+            else:
+                trade_metrics = {"skipped": "not pre-close scan"}
+                logger.info("Scanner run %s: trade engine skipped (single-scanner run '%s')",
+                            run_id, scanner_name)
             # scanner_hits defaults to the day's persisted scanner-result counts (already persisted above)
             scored = score_universe(conn, market, symbols, scan_date, series_cache)
             logger.info("Scanner run %s: trades=%s scored=%s", run_id, trade_metrics, scored)
