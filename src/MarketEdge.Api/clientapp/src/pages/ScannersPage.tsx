@@ -48,6 +48,8 @@ function ScannerDetail({ m, info, onPickSymbol }: {
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [results, setResults] = useState<ScannerResult[]>([]);
   const [loading, setLoading] = useState(true);
+  const [sortKey, setSortKey] = useState<keyof ScannerResult>('rsRating');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
   const loadResults = useCallback(async (date?: string) => {
     setLoading(true);
@@ -81,6 +83,40 @@ function ScannerDetail({ m, info, onPickSymbol }: {
     setSelectedDate(d);
     await loadResults(d || undefined);
   };
+
+  const toggleSort = (key: keyof ScannerResult) => {
+    if (key === sortKey) {
+      setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      // Text columns default to ascending, numeric to descending.
+      setSortDir(key === 'symbol' || key === 'companyName' ? 'asc' : 'desc');
+    }
+  };
+
+  const sorted = [...results].sort((a, b) => {
+    const av = a[sortKey];
+    const bv = b[sortKey];
+    const aNull = av == null;
+    const bNull = bv == null;
+    if (aNull && bNull) return 0;
+    if (aNull) return 1;   // nulls always sink to the bottom
+    if (bNull) return -1;
+    let cmp: number;
+    if (typeof av === 'number' && typeof bv === 'number') cmp = av - bv;
+    else cmp = String(av).localeCompare(String(bv));
+    return sortDir === 'asc' ? cmp : -cmp;
+  });
+
+  const arrow = (key: keyof ScannerResult) => sortKey === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+  const th = (key: keyof ScannerResult, label: string, right = false) => (
+    <th
+      onClick={() => toggleSort(key)}
+      style={{ cursor: 'pointer', userSelect: 'none', textAlign: right ? 'right' : 'left', whiteSpace: 'nowrap' }}
+    >
+      {label}{arrow(key)}
+    </th>
+  );
 
   return (
     <div>
@@ -116,19 +152,19 @@ function ScannerDetail({ m, info, onPickSymbol }: {
           <table className="table">
             <thead>
               <tr>
-                <th>Symbol</th>
-                <th>Company</th>
-                <th>Sector</th>
-                <th style={{ textAlign: 'right' }}>Close</th>
-                <th style={{ textAlign: 'right' }}>Day %</th>
-                <th style={{ textAlign: 'right' }}>Volume</th>
-                <th style={{ textAlign: 'right' }}>RVol</th>
-                <th style={{ textAlign: 'right' }}>RS</th>
+                {th('symbol', 'Symbol')}
+                {th('companyName', 'Company')}
+                {th('industry', 'Sector')}
+                {th('closePrice', 'Close', true)}
+                {th('dayChangePct', 'Day %', true)}
+                {th('volume', 'Volume', true)}
+                {th('relVolume', 'RVol', true)}
+                {th('rsRating', 'RS', true)}
                 <th>Triggers</th>
               </tr>
             </thead>
             <tbody>
-              {results.map(r => (
+              {sorted.map(r => (
                 <tr key={r.symbol}>
                   <td>
                     <button className="stock-link" onClick={() => onPickSymbol(r.symbol)}>{r.symbol}</button>
