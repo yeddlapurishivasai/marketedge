@@ -557,3 +557,99 @@ export async function saveFundamentalNote(market: Market, symbol: string, noteTe
   });
   if (!res.ok) throw new Error('Failed to save note');
 }
+
+// --- Scores & paper-trade engine ---
+export type TradeProfile = 'swing' | 'positional';
+
+export interface StockScore {
+  ticker: string;
+  asOfDate?: string | null;
+  upsideEpsPct?: number | null;
+  upsideAnalystPct?: number | null;
+  targetPrice?: number | null;
+  aiUpsidePct?: number | null;
+  aiDownsidePct?: number | null;
+  aiRationale?: string | null;
+  swingScore?: number | null;
+  swingSide?: string | null;
+  swingBull?: number | null;
+  swingBear?: number | null;
+  positionalScore?: number | null;
+  positionalSide?: string | null;
+  positionalBull?: number | null;
+  positionalBear?: number | null;
+  fundFreshnessDecay?: number | null;
+  daysSinceEarnings?: number | null;
+  scannerHits?: number | null;
+  isFno?: boolean | null;
+  componentsJson?: string | null;
+  scoredAt: string;
+}
+
+export interface Trade {
+  id: number;
+  ticker: string;
+  companyName?: string | null;
+  tradeType: string;
+  direction: string;
+  status: string;
+  entryScanner?: string | null;
+  flaggedScanners: string[];
+  scannerHitCount: number;
+  entryAt: string;
+  entryPrice: number;
+  initialStop?: number | null;
+  currentStop?: number | null;
+  stopBasis?: string | null;
+  riskPerShare?: number | null;
+  movedToBe: boolean;
+  lastPrice?: number | null;
+  pnLPct?: number | null;
+  mfePct?: number | null;
+  maePct?: number | null;
+  exitAt?: string | null;
+  exitPrice?: number | null;
+  exitReason?: string | null;
+  updatedAt: string;
+}
+
+export interface TradeStats {
+  activeCount: number;
+  closedCount: number;
+  wins: number;
+  losses: number;
+  winRatePct?: number | null;
+  avgPnLPct?: number | null;
+}
+
+export async function fetchScores(
+  market: Market,
+  params: { profile?: TradeProfile; side?: string; take?: number } = {}
+): Promise<StockScore[]> {
+  const sp = new URLSearchParams();
+  sp.set('profile', params.profile || 'swing');
+  if (params.side) sp.set('side', params.side);
+  if (params.take) sp.set('take', params.take.toString());
+  const res = await fetch(`${BASE}/${market}/scores?${sp}`);
+  if (!res.ok) throw new Error('Failed to fetch scores');
+  return res.json();
+}
+
+export async function fetchTrades(
+  market: Market,
+  params: { status?: string; tradeType?: string } = {}
+): Promise<Trade[]> {
+  const sp = new URLSearchParams();
+  if (params.status) sp.set('status', params.status);
+  if (params.tradeType) sp.set('tradeType', params.tradeType);
+  const qs = sp.toString();
+  const res = await fetch(`${BASE}/${market}/trades${qs ? '?' + qs : ''}`);
+  if (!res.ok) throw new Error('Failed to fetch trades');
+  return res.json();
+}
+
+export async function fetchTradeStats(market: Market): Promise<TradeStats> {
+  const res = await fetch(`${BASE}/${market}/trades/stats`);
+  if (!res.ok) throw new Error('Failed to fetch trade stats');
+  return res.json();
+}

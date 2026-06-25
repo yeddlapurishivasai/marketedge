@@ -15,6 +15,7 @@ import AdminPage from './pages/AdminPage';
 import StockLookupPage, { StockLookupModal } from './pages/StockLookupPage';
 import ScannersPage from './pages/ScannersPage';
 import FundamentalsPage from './pages/FundamentalsPage';
+import TradesPage from './pages/TradesPage';
 import './styles.css';
 
 // Theme context
@@ -101,6 +102,7 @@ function App() {
             <Route path="/:market/analysis" element={<AnalysisPage />} />
             <Route path="/:market/scanners" element={<ScannersPage />} />
             <Route path="/:market/fundamentals" element={<FundamentalsPage />} />
+            <Route path="/:market/trades" element={<TradesPage />} />
             <Route path="/:market/jobs" element={<JobsPage />} />
             <Route path="/admin" element={<AdminPage />} />
           </Routes>
@@ -185,6 +187,14 @@ function MarketMenu() {
           <div className="menu-card-text">
             <h3>Fundamental Scanners</h3>
             <p>Earnings, margins &amp; growth from reported results</p>
+          </div>
+          <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
+        </div>
+        <div className="menu-card" onClick={() => navigate(`/${m}/trades`)}>
+          <div className="menu-card-icon analysis"><TrendingUp size={22} /></div>
+          <div className="menu-card-text">
+            <h3>Scores &amp; Trades</h3>
+            <p>Swing/positional scores &amp; the paper-trade blotter</p>
           </div>
           <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
         </div>

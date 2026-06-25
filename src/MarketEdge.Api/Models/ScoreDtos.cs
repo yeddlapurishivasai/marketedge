@@ -1,0 +1,61 @@
+namespace MarketEdge.Api.Models;
+
+// Wire shapes for the scoring & paper-trade engine feature.
+
+public record StockScoreDto(
+    string Ticker,
+    DateOnly? AsOfDate,
+    decimal? UpsideEpsPct,
+    decimal? UpsideAnalystPct,
+    decimal? TargetPrice,
+    decimal? AiUpsidePct,
+    decimal? AiDownsidePct,
+    string? AiRationale,
+    int? SwingScore,
+    string? SwingSide,
+    int? SwingBull,
+    int? SwingBear,
+    int? PositionalScore,
+    string? PositionalSide,
+    int? PositionalBull,
+    int? PositionalBear,
+    decimal? FundFreshnessDecay,
+    int? DaysSinceEarnings,
+    int? ScannerHits,
+    bool? IsFno,
+    string? ComponentsJson,
+    DateTime ScoredAt);
+
+public record TradeDto(
+    int Id,
+    string Ticker,
+    string? CompanyName,
+    string TradeType,
+    string Direction,
+    string Status,
+    string? EntryScanner,
+    List<string> FlaggedScanners,
+    int ScannerHitCount,
+    DateTime EntryAt,
+    decimal EntryPrice,
+    decimal? InitialStop,
+    decimal? CurrentStop,
+    string? StopBasis,
+    decimal? RiskPerShare,
+    bool MovedToBe,
+    decimal? LastPrice,
+    decimal? PnLPct,
+    decimal? MfePct,
+    decimal? MaePct,
+    DateTime? ExitAt,
+    decimal? ExitPrice,
+    string? ExitReason,
+    DateTime UpdatedAt);
+
+public record TradeStatsDto(
+    int ActiveCount,
+    int ClosedCount,
+    int Wins,
+    int Losses,
+    decimal? WinRatePct,
+    decimal? AvgPnLPct);

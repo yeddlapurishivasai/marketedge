@@ -41,6 +41,10 @@ public class MarketEdgeDbContext : DbContext
     public DbSet<USStockNote> USStockNotes => Set<USStockNote>();
     public DbSet<IndianStockSignals> IndianStockSignals => Set<IndianStockSignals>();
     public DbSet<USStockSignals> USStockSignals => Set<USStockSignals>();
+    public DbSet<IndianStockScores> IndianStockScores => Set<IndianStockScores>();
+    public DbSet<USStockScores> USStockScores => Set<USStockScores>();
+    public DbSet<IndianTrade> IndianTrades => Set<IndianTrade>();
+    public DbSet<USTrade> USTrades => Set<USTrade>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -100,6 +104,31 @@ public class MarketEdgeDbContext : DbContext
             e.Property(nameof(StockSignalsBase.CapexCwip)).HasColumnType("decimal(20,2)");
             e.Property(nameof(StockSignalsBase.CapexCwipPrevQ)).HasColumnType("decimal(20,2)");
             e.Property(nameof(StockSignalsBase.CapexChangePct)).HasColumnType("decimal(12,4)");
+        }
+
+        modelBuilder.Entity<IndianStockScores>().HasKey(s => s.Ticker);
+        modelBuilder.Entity<USStockScores>().HasKey(s => s.Ticker);
+        foreach (var t in new[] { typeof(IndianStockScores), typeof(USStockScores) })
+        {
+            var e = modelBuilder.Entity(t);
+            foreach (var p in new[] { nameof(StockScoresBase.UpsideEpsPct), nameof(StockScoresBase.UpsideAnalystPct),
+                nameof(StockScoresBase.AiUpsidePct), nameof(StockScoresBase.AiDownsidePct) })
+                e.Property(p).HasColumnType("decimal(12,4)");
+            e.Property(nameof(StockScoresBase.TargetPrice)).HasColumnType("decimal(18,4)");
+            e.Property(nameof(StockScoresBase.FundFreshnessDecay)).HasColumnType("decimal(9,6)");
+        }
+
+        modelBuilder.Entity<IndianTrade>().HasKey(t => t.Id);
+        modelBuilder.Entity<USTrade>().HasKey(t => t.Id);
+        foreach (var t in new[] { typeof(IndianTrade), typeof(USTrade) })
+        {
+            var e = modelBuilder.Entity(t);
+            foreach (var p in new[] { nameof(TradeBase.EntryPrice), nameof(TradeBase.InitialStop),
+                nameof(TradeBase.CurrentStop), nameof(TradeBase.RiskPerShare), nameof(TradeBase.LastPrice),
+                nameof(TradeBase.ExitPrice) })
+                e.Property(p).HasColumnType("decimal(18,4)");
+            foreach (var p in new[] { nameof(TradeBase.PnLPct), nameof(TradeBase.MfePct), nameof(TradeBase.MaePct) })
+                e.Property(p).HasColumnType("decimal(12,4)");
         }
 
         foreach (var t in new[] { typeof(IndianEarningsFundamentals), typeof(USEarningsFundamentals) })

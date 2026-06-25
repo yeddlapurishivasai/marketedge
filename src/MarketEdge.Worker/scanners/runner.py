@@ -275,9 +275,11 @@ def run_scanner_job(payload: dict) -> None:
 
         # Load each symbol's series once; evaluate all selected scanners against it.
         results_by_scanner: dict[str, list[dict]] = {d.name: [] for d in defs}
+        series_cache: dict[str, Any] = {}
         processed = 0
         for meta in meta_rows:
             series = load_bars(conn, market, meta["symbol"], _MAX_BARS, end_date=scan_date)
+            series_cache[meta["symbol"]] = series
             if series is not None and series.n >= 2:
                 for d in defs:
                     try:
@@ -300,6 +302,34 @@ def run_scanner_job(payload: dict) -> None:
             per_scanner[d.name] = len(rows)
             total_hits += len(rows)
 
+        # --- Scoring + paper-trade engine (feature: scoring & trade engine) ---
+        # Symbols flagged by any scanner this run are breakout candidates.
+        meta_by_sym = {m["symbol"]: m for m in meta_rows}
+        flagged: dict[str, dict] = {}
+        for scanner_name, rows in results_by_scanner.items():
+            for r in rows:
+                sym = r["symbol"]
+                f = flagged.get(sym)
+                if f is None:
+                    f = {
+                        "scanners": [],
+                        "company": r.get("company"),
+                        "is_fno": bool(meta_by_sym.get(sym, {}).get("has_options")),
+                    }
+                    flagged[sym] = f
+                f["scanners"].append(scanner_name)
+
+        trade_metrics: dict[str, int] = {}
+        scored = 0
+        try:
+            from .trades import run_trade_engine
+            from .scoring import score_universe
+            trade_metrics = run_trade_engine(conn, market, scan_date, flagged, series_cache)
+            scored = score_universe(conn, market, symbols, scan_date, series_cache)
+            logger.info("Scanner run %s: trades=%s scored=%s", run_id, trade_metrics, scored)
+        except Exception:  # noqa: BLE001 - scoring/trades must never abort the scan
+            logger.exception("Scanner run %s: scoring/trade engine failed", run_id)
+
         metrics = {
             "market": market,
             "universe": universe,
@@ -309,6 +339,8 @@ def run_scanner_job(payload: dict) -> None:
             "totalHits": total_hits,
             "perScanner": per_scanner,
             "scanDate": str(scan_date),
+            "trades": trade_metrics,
+            "scored": scored,
         }
         update_job_status(conn, run_id, "completed", progress=100, metrics=metrics,
                           completed_at=datetime.now(timezone.utc).replace(tzinfo=None))

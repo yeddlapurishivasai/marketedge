@@ -76,3 +76,79 @@ public abstract class StockSignalsBase
 
 [Table("IndianStockSignals")] public class IndianStockSignals : StockSignalsBase { }
 [Table("USStockSignals")] public class USStockSignals : StockSignalsBase { }
+
+// Per-stock Wilson lower-bound scores (swing + positional) plus deterministic upside,
+// produced by the worker scoring engine each scanner run. Read-only from the API.
+public abstract class StockScoresBase
+{
+    public string Ticker { get; set; } = string.Empty;
+    public DateOnly? AsOfDate { get; set; }
+
+    public decimal? UpsideEpsPct { get; set; }
+    public decimal? UpsideAnalystPct { get; set; }
+    public decimal? TargetPrice { get; set; }
+
+    public decimal? AiUpsidePct { get; set; }
+    public decimal? AiDownsidePct { get; set; }
+    public string? AiRationale { get; set; }
+
+    public int? SwingScore { get; set; }
+    public string? SwingSide { get; set; }
+    public int? SwingBull { get; set; }
+    public int? SwingBear { get; set; }
+
+    public int? PositionalScore { get; set; }
+    public string? PositionalSide { get; set; }
+    public int? PositionalBull { get; set; }
+    public int? PositionalBear { get; set; }
+
+    public decimal? FundFreshnessDecay { get; set; }
+    public int? DaysSinceEarnings { get; set; }
+    public int? ScannerHits { get; set; }
+    public bool? IsFno { get; set; }
+    public string? ComponentsJson { get; set; }
+
+    public DateTime ScoredAt { get; set; }
+}
+
+[Table("IndianStockScores")] public class IndianStockScores : StockScoresBase { }
+[Table("USStockScores")] public class USStockScores : StockScoresBase { }
+
+// Paper trades opened/managed by the worker trade engine on scanner breakouts.
+public abstract class TradeBase
+{
+    public int Id { get; set; }
+    public string Ticker { get; set; } = string.Empty;
+    public string? CompanyName { get; set; }
+    public string TradeType { get; set; } = string.Empty;   // swing / positional
+    public string Direction { get; set; } = string.Empty;   // long / short
+    public string Status { get; set; } = string.Empty;      // active / closed
+
+    public string? EntryScanner { get; set; }
+    public string? FlaggedScannersJson { get; set; }
+    public int ScannerHitCount { get; set; }
+
+    public DateTime EntryAt { get; set; }
+    public decimal EntryPrice { get; set; }
+
+    public decimal? InitialStop { get; set; }
+    public decimal? CurrentStop { get; set; }
+    public string? StopBasis { get; set; }
+    public decimal? RiskPerShare { get; set; }
+    public bool MovedToBe { get; set; }
+
+    public decimal? LastPrice { get; set; }
+    public decimal? PnLPct { get; set; }
+    public decimal? MfePct { get; set; }
+    public decimal? MaePct { get; set; }
+
+    public DateTime? ExitAt { get; set; }
+    public decimal? ExitPrice { get; set; }
+    public string? ExitReason { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+[Table("IndianTrades")] public class IndianTrade : TradeBase { }
+[Table("USTrades")] public class USTrade : TradeBase { }
