@@ -273,6 +273,18 @@ def run_scanner_job(payload: dict) -> None:
         refreshed = refresh_today_bars(conn, market, symbols)
         logger.info("Scanner run %s: refreshed %s today-bars", run_id, refreshed)
 
+        # Refresh the TickerTechnical snapshot (prices, 52W, market cap) from the just-updated
+        # bars by reusing the ingestion 'technical' step, so scoring and Stock Lookup reflect
+        # today's data rather than the last full ingestion. Best-effort: never abort the scan.
+        tech_refreshed = False
+        try:
+            from ingestion_runner import run_steps_inline
+            failed, _tail = run_steps_inline(market, symbols, ["technical"])
+            tech_refreshed = not failed
+            logger.info("Scanner run %s: technical snapshot refresh ok=%s", run_id, tech_refreshed)
+        except Exception:  # noqa: BLE001 - technical refresh must never abort the scan
+            logger.exception("Scanner run %s: technical snapshot refresh failed", run_id)
+
         # Load each symbol's series once; evaluate all selected scanners against it.
         results_by_scanner: dict[str, list[dict]] = {d.name: [] for d in defs}
         series_cache: dict[str, Any] = {}
@@ -336,6 +348,7 @@ def run_scanner_job(payload: dict) -> None:
             "universe": universe,
             "symbols": len(symbols),
             "refreshedBars": refreshed,
+            "technicalRefreshed": tech_refreshed,
             "scanners": len(defs),
             "totalHits": total_hits,
             "perScanner": per_scanner,

@@ -81,6 +81,42 @@ def _build_args(cli: str, step: str, market: str, payload: dict) -> list[str]:
     return args
 
 
+def run_steps_inline(market: str, symbols: list[str] | None, steps: list[str]) -> tuple[bool, str]:
+    """Run ingestion steps as subprocesses WITHOUT creating/updating a JobRun.
+
+    Used by other jobs that need to reuse ingestion logic mid-run — e.g. the pre-close scan
+    refreshing the ``TickerTechnical`` snapshot (prices/52W + market cap) for the scanned
+    universe so scoring and lookups see today's data. Returns ``(failed, output_tail)``.
+    """
+    cli = _resolve_cli()
+    cli_dir = os.path.dirname(cli)
+    market = (market or "").lower()
+    payload = {"symbols": symbols} if symbols else {}
+    output: list[str] = []
+    failed = False
+    for step in _ordered_steps(steps):
+        args = _build_args(cli, step, market, payload)
+        try:
+            proc = subprocess.run(
+                args, cwd=cli_dir, env=os.environ.copy(),
+                capture_output=True, text=True,
+            )
+            if proc.stdout:
+                output.append(proc.stdout)
+            if proc.stderr:
+                output.append(proc.stderr)
+            exit_code = proc.returncode
+        except Exception as exc:  # noqa: BLE001 - record launch failure, stop
+            output.append(f"[launch error] {exc}")
+            exit_code = -1
+        if exit_code != 0:
+            failed = True
+            output.append(f"[step '{step}' exited {exit_code}]")
+            break
+    full = "\n".join(output)
+    return failed, (full[-_OUTPUT_TAIL:] if len(full) > _OUTPUT_TAIL else full)
+
+
 def run_ingestion_job(payload: dict) -> None:
     market = str(payload["market"]).lower()
     run_id = int(payload["runId"])
