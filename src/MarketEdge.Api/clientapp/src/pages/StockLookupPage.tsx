@@ -11,7 +11,7 @@ import {
   searchLookup, fetchLookupDetail, fetchLookupBars, refreshAnalystData
 } from '../api';
 import { formatMarketCap, formatPrice, currencySymbol } from '../format';
-import { ChevronLeft, Search, RefreshCw, Loader2, ExternalLink } from 'lucide-react';
+import { ChevronLeft, Search, RefreshCw, Loader2, ExternalLink, X } from 'lucide-react';
 import { ThemeContext } from '../theme';
 
 type Timeframe = 'daily' | 'weekly';
@@ -133,13 +133,14 @@ function fmtPeriod(d: string): string {
   return dt.toLocaleString('en-US', { month: 'short', year: 'numeric' });
 }
 
-export default function StockLookupPage() {
-  const { market: routeMarket, symbol: routeSymbol } = useParams<{ market: string; symbol?: string }>();
-  const navigate = useNavigate();
+/**
+ * Self-contained stock detail view: loads the symbol's detail + bars and renders the
+ * chart, metric cards, properties and analyst/EPS tables. Reused by the full Stock Lookup
+ * page and by the StockLookupModal (so clicking a row never disturbs the list scroll).
+ */
+export function StockDetailView({ market, symbol }: { market: Market; symbol: string }) {
   const { theme } = useContext(ThemeContext);
 
-  const [market, setMarket] = useState<Market>((routeMarket as Market) || 'us');
-  const [query, setQuery] = useState('');
   const [detail, setDetail] = useState<StockLookupDetail | null>(null);
   const [bars, setBars] = useState<LookupBar[]>([]);
   const [timeframe, setTimeframe] = useState<Timeframe>('daily');
@@ -147,53 +148,36 @@ export default function StockLookupPage() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [suggestions, setSuggestions] = useState<LookupCandidate[]>([]);
 
-  const loadBars = useCallback(async (m: Market, symbol: string, tf: Timeframe) => {
-    try { setBars(await fetchLookupBars(m, symbol, tf)); } catch { setBars([]); }
-  }, []);
-
-  const runSearch = useCallback(async (m: Market, raw: string) => {
-    const symbol = raw.trim();
-    if (!symbol) return;
-    setLoading(true); setError(null); setSuggestions([]);
-    try {
-      const d = await fetchLookupDetail(m, symbol);
-      setDetail(d);
-      setQuery(d.symbol);
-      await loadBars(m, d.symbol, timeframe);
-    } catch (e) {
-      setDetail(null); setBars([]);
-      setError(e instanceof Error ? e.message : 'Lookup failed');
-    }
-    setLoading(false);
-  }, [timeframe, loadBars]);
-
-  // Keep the active market in sync with the URL and load the symbol from the route
-  // (deep-link / click-through from the Stocks list).
-  useEffect(() => {
-    if (routeMarket) setMarket(routeMarket as Market);
-  }, [routeMarket]);
+  const loadBars = useCallback(async (tf: Timeframe) => {
+    try { setBars(await fetchLookupBars(market, symbol, tf)); } catch { setBars([]); }
+  }, [market, symbol]);
 
   useEffect(() => {
-    const m = (routeMarket as Market) || market;
-    if (routeSymbol) runSearch(m, decodeURIComponent(routeSymbol));
+    let active = true;
+    (async () => {
+      setLoading(true); setError(null); setDetail(null); setBars([]);
+      try {
+        const d = await fetchLookupDetail(market, symbol);
+        if (!active) return;
+        setDetail(d);
+        await loadBars(timeframe);
+      } catch (e) {
+        if (!active) return;
+        setDetail(null); setBars([]);
+        setError(e instanceof Error ? e.message : 'Lookup failed');
+      }
+      if (active) setLoading(false);
+    })();
+    return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeMarket, routeSymbol]);
+  }, [market, symbol]);
 
-  // Reload bars when timeframe changes for the loaded symbol.
+  // Reload bars when the timeframe changes for the loaded symbol.
   useEffect(() => {
-    if (detail) loadBars(market, detail.symbol, timeframe);
-  }, [timeframe]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Lightweight autocomplete.
-  useEffect(() => {
-    if (query.trim().length < 1 || (detail && query === detail.symbol)) { setSuggestions([]); return; }
-    const t = setTimeout(async () => {
-      try { setSuggestions(await searchLookup(market, query.trim())); } catch { /* ignore */ }
-    }, 220);
-    return () => clearTimeout(t);
-  }, [query, market]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (detail) loadBars(timeframe);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeframe]);
 
   const toggleEma = (p: number) =>
     setActiveEmas(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p].sort((a, b) => a - b));
@@ -220,6 +204,196 @@ export default function StockLookupPage() {
   const dayTone = t?.dayPct == null ? undefined : t.dayPct >= 0 ? 'up' : 'down';
   const tvSymbol = detail ? `${detail.exchange ?? ''}:${detail.symbol}` : '';
 
+  if (loading && !detail) {
+    return <div className="loading"><div className="spinner" /> Loading {symbol}…</div>;
+  }
+  if (error) return <div className="lookup-error">{error}</div>;
+  if (!detail) return null;
+
+  return (
+    <div className="lookup-body">
+      {/* Header card */}
+      <div className="card lookup-id-card">
+        <div className="lookup-id-top">
+          <span className="lookup-market-tag">{detail.market.toUpperCase()}</span>
+          {detail.exchange && (
+            <a
+              className="tv-link"
+              href={`https://www.tradingview.com/symbols/${encodeURIComponent(tvSymbol)}/`}
+              target="_blank" rel="noreferrer"
+            >
+              TradingView <ExternalLink size={12} />
+            </a>
+          )}
+          {t?.asOfDate && <span className="as-of">As Of {fmtDate(t.asOfDate)}</span>}
+        </div>
+        <h2 className="lookup-symbol">
+          {detail.symbol} <span className="lookup-company">{detail.companyName}</span>
+        </h2>
+        <div className="lookup-sector">
+          {detail.broadSector && <span>{detail.broadSector}</span>}
+          {detail.industry && <span> · {detail.industry}</span>}
+        </div>
+
+        <div className="analyst-refresh">
+          <div>
+            <div className="section-title" style={{ margin: 0 }}>Analyst Data</div>
+            <p className="muted-note">Refresh analyst earnings estimates and rating summary for this symbol only.</p>
+          </div>
+          <button className="btn btn-primary" onClick={refresh} disabled={refreshing}>
+            {refreshing ? <Loader2 size={16} className="spin-icon" /> : <RefreshCw size={16} />} Refresh Analyst Data
+          </button>
+        </div>
+      </div>
+
+      {/* Chart */}
+      <div className="card lookup-chart-card">
+        <div className="chart-toolbar">
+          <div className="seg-toggle">
+            <button className={timeframe === 'daily' ? 'on' : ''} onClick={() => setTimeframe('daily')}>DAILY</button>
+            <button className={timeframe === 'weekly' ? 'on' : ''} onClick={() => setTimeframe('weekly')}>WEEKLY</button>
+          </div>
+          <div className="ema-toggle">
+            {EMA_PERIODS.map(p => (
+              <button
+                key={p}
+                className={activeEmas.includes(p) ? 'on' : ''}
+                style={activeEmas.includes(p) ? { borderColor: EMA_COLORS[p], color: EMA_COLORS[p] } : undefined}
+                onClick={() => toggleEma(p)}
+              >EMA {p}</button>
+            ))}
+          </div>
+        </div>
+        {bars.length === 0
+          ? <div className="empty-state"><p className="empty-state-text">No price bars for this symbol.</p></div>
+          : <PriceChart bars={bars} activeEmas={activeEmas} theme={theme} />}
+      </div>
+
+      {/* Metric cards */}
+      <div className="metric-grid">
+        <Metric label="CLOSE" value={t?.close != null ? formatPrice(t.close, market) : '—'} />
+        <Metric label="DAY %" value={t?.dayPct != null ? `${t.dayPct.toFixed(2)}%` : '—'} tone={dayTone} />
+        <Metric label="RS" value={t?.rs ?? '—'} />
+        <Metric label="RS 1D" value={t?.rs1d ?? '—'} />
+        <Metric label="RS 1W" value={t?.rs1w ?? '—'} />
+        <Metric label="RS 1M" value={t?.rs1m ?? '—'} />
+        <Metric label="RS 3M" value={t?.rs3m ?? '—'} />
+        <Metric label="RS 6M" value={t?.rs6m ?? '—'} />
+      </div>
+      <div className="metric-grid">
+        <Metric label="CONSENSUS RATING" value={a?.consensusRating ?? '—'} />
+        <Metric label="CURRENT QUARTER EPS" value={a?.currentQuarterEps != null ? a.currentQuarterEps.toFixed(2) : '—'} />
+        <Metric label="NEXT QUARTER EPS" value={a?.nextQuarterEps != null ? a.nextQuarterEps.toFixed(2) : '—'} />
+        <Metric label="CURRENT YEAR EPS" value={a?.currentYearEps != null ? a.currentYearEps.toFixed(2) : '—'} />
+        <Metric label="NEXT YEAR EPS" value={a?.nextYearEps != null ? a.nextYearEps.toFixed(2) : '—'} />
+      </div>
+
+      {/* Properties */}
+      <div className="card prop-grid">
+        <Prop label="Exchange" value={detail.exchange} />
+        <Prop label="Market Cap" value={t?.marketCap != null ? formatMarketCap(t.marketCap, market) : '—'} />
+        <Prop label="52W High" value={t?.high52w != null ? formatPrice(t.high52w, market) : '—'} />
+        <Prop label="From 52W High" value={t?.from52wHigh != null ? `${t.from52wHigh.toFixed(2)}%` : '—'} />
+        <Prop label="Open" value={t?.open != null ? formatPrice(t.open, market) : '—'} />
+        <Prop label="High" value={t?.high != null ? formatPrice(t.high, market) : '—'} />
+        <Prop label="Low" value={t?.low != null ? formatPrice(t.low, market) : '—'} />
+        <Prop label="Options" value={detail.isFno ? 'Yes' : 'No'} />
+        <Prop label="Active" value={detail.active ? 'Yes' : 'No'} />
+        <Prop label="RS Type" value={t?.rsType} />
+        <Prop label="RS Date" value={t?.rsDate ? fmtDate(t.rsDate) : '—'} />
+        <Prop label="Bars Available" value={detail.barsAvailable ?? '—'} />
+        <Prop label="Scanner Hits" value={t?.scannerHits ?? '—'} />
+        <Prop label="Last Scanner Hit" value={t?.lastScannerHit ? fmtDate(t.lastScannerHit) : '—'} />
+      </div>
+
+      {/* Analyst snapshot */}
+      {a && (
+        <div className="lookup-section">
+          <h2 className="section-title">Analyst Snapshot</h2>
+          {a.asOfDate && <span className="pill">As Of {fmtDate(a.asOfDate)}</span>}
+          <table className="table">
+            <thead>
+              <tr><th>Consensus</th><th>Current Quarter EPS</th><th>Next Quarter EPS</th><th>Current Year EPS</th><th>Next Year EPS</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ fontWeight: 700 }}>{a.consensusRating ?? '—'}</td>
+                <td>{a.currentQuarterEps?.toFixed(2) ?? '—'}</td>
+                <td>{a.nextQuarterEps?.toFixed(2) ?? '—'}</td>
+                <td>{a.currentYearEps?.toFixed(2) ?? '—'}</td>
+                <td>{a.nextYearEps?.toFixed(2) ?? '—'}</td>
+              </tr>
+            </tbody>
+          </table>
+          {a.numAnalysts != null && <p className="muted-note">Based on {a.numAnalysts} analysts offering recommendations for '{detail.symbol}'.</p>}
+        </div>
+      )}
+
+      <div className="lookup-section">
+        <h2 className="section-title">Quarterly EPS Forecasts <span className="pill">{detail.quarterlyEps.length} rows</span></h2>
+        <EpsTable rows={detail.quarterlyEps} market={market} />
+      </div>
+      <div className="lookup-section">
+        <h2 className="section-title">Yearly EPS Forecasts <span className="pill">{detail.yearlyEps.length} rows</span></h2>
+        <EpsTable rows={detail.yearlyEps} market={market} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Stock detail shown as a modal/popup overlay. Opening it from the Stocks list keeps the
+ * list mounted underneath, so scroll position and search state are preserved.
+ */
+export function StockLookupModal({ market, symbol, onClose }: { market: Market; symbol: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal lookup-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3 className="modal-title">{symbol} Lookup</h3>
+          <button className="modal-close" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          <StockDetailView market={market} symbol={symbol} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function StockLookupPage() {
+  const { market: routeMarket, symbol: routeSymbol } = useParams<{ market: string; symbol?: string }>();
+  const navigate = useNavigate();
+
+  const [market, setMarket] = useState<Market>((routeMarket as Market) || 'us');
+  const [query, setQuery] = useState(routeSymbol ? decodeURIComponent(routeSymbol) : '');
+  const [suggestions, setSuggestions] = useState<LookupCandidate[]>([]);
+
+  useEffect(() => {
+    if (routeMarket) setMarket(routeMarket as Market);
+  }, [routeMarket]);
+
+  // Lightweight autocomplete.
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 1 || q === routeSymbol) { setSuggestions([]); return; }
+    const id = setTimeout(async () => {
+      try { setSuggestions(await searchLookup(market, q)); } catch { /* ignore */ }
+    }, 220);
+    return () => clearTimeout(id);
+  }, [query, market, routeSymbol]);
+
+  const go = (sym: string) => {
+    const s = sym.trim();
+    if (s) { setSuggestions([]); navigate(`/${market}/lookup/${encodeURIComponent(s)}`); }
+  };
+
   return (
     <div className="page">
       <div className="lookup-header-bar">
@@ -230,10 +404,7 @@ export default function StockLookupPage() {
           <h1 className="page-title" style={{ marginBottom: 2 }}>Stock Lookup</h1>
           <p className="page-subtitle">Search by symbol or company name, then inspect the chart and stock properties.</p>
         </div>
-        <form
-          className="lookup-search"
-          onSubmit={e => { e.preventDefault(); const s = query.trim(); if (s) navigate(`/${market}/lookup/${encodeURIComponent(s)}`); }}
-        >
+        <form className="lookup-search" onSubmit={e => { e.preventDefault(); go(query); }}>
           <div className="lookup-search-input">
             <input
               value={query}
@@ -244,7 +415,7 @@ export default function StockLookupPage() {
             {suggestions.length > 0 && (
               <ul className="lookup-suggestions">
                 {suggestions.map(s => (
-                  <li key={s.symbol} onMouseDown={() => navigate(`/${market}/lookup/${encodeURIComponent(s.symbol)}`)}>
+                  <li key={s.symbol} onMouseDown={() => go(s.symbol)}>
                     <strong>{s.symbol}</strong> <span>{s.companyName}</span>
                   </li>
                 ))}
@@ -255,150 +426,20 @@ export default function StockLookupPage() {
             <option value="us">US</option>
             <option value="india">India</option>
           </select>
-          <button type="submit" className="btn btn-primary" disabled={loading}>
-            {loading ? <Loader2 size={16} className="spin-icon" /> : <Search size={16} />} Search
+          <button type="submit" className="btn btn-primary">
+            <Search size={16} /> Search
           </button>
         </form>
       </div>
 
-      {error && <div className="lookup-error">{error}</div>}
-
-      {detail && (
-        <div className="lookup-body">
-          {/* Header card */}
-          <div className="card lookup-id-card">
-            <div className="lookup-id-top">
-              <span className="lookup-market-tag">{detail.market.toUpperCase()}</span>
-              {detail.exchange && (
-                <a
-                  className="tv-link"
-                  href={`https://www.tradingview.com/symbols/${encodeURIComponent(tvSymbol)}/`}
-                  target="_blank" rel="noreferrer"
-                >
-                  TradingView <ExternalLink size={12} />
-                </a>
-              )}
-              {t?.asOfDate && <span className="as-of">As Of {fmtDate(t.asOfDate)}</span>}
-            </div>
-            <h2 className="lookup-symbol">
-              {detail.symbol} <span className="lookup-company">{detail.companyName}</span>
-            </h2>
-            <div className="lookup-sector">
-              {detail.broadSector && <span>{detail.broadSector}</span>}
-              {detail.industry && <span> · {detail.industry}</span>}
-            </div>
-
-            <div className="analyst-refresh">
-              <div>
-                <div className="section-title" style={{ margin: 0 }}>Analyst Data</div>
-                <p className="muted-note">Refresh analyst earnings estimates and rating summary for this symbol only.</p>
-              </div>
-              <button className="btn btn-primary" onClick={refresh} disabled={refreshing}>
-                {refreshing ? <Loader2 size={16} className="spin-icon" /> : <RefreshCw size={16} />} Refresh Analyst Data
-              </button>
-            </div>
+      {routeSymbol
+        ? <StockDetailView market={market} symbol={decodeURIComponent(routeSymbol)} />
+        : (
+          <div className="empty-state" style={{ marginTop: 40 }}>
+            <div className="empty-state-icon">🔎</div>
+            <p className="empty-state-text">Search a symbol to begin.</p>
           </div>
-
-          {/* Chart */}
-          <div className="card lookup-chart-card">
-            <div className="chart-toolbar">
-              <div className="seg-toggle">
-                <button className={timeframe === 'daily' ? 'on' : ''} onClick={() => setTimeframe('daily')}>DAILY</button>
-                <button className={timeframe === 'weekly' ? 'on' : ''} onClick={() => setTimeframe('weekly')}>WEEKLY</button>
-              </div>
-              <div className="ema-toggle">
-                {EMA_PERIODS.map(p => (
-                  <button
-                    key={p}
-                    className={activeEmas.includes(p) ? 'on' : ''}
-                    style={activeEmas.includes(p) ? { borderColor: EMA_COLORS[p], color: EMA_COLORS[p] } : undefined}
-                    onClick={() => toggleEma(p)}
-                  >EMA {p}</button>
-                ))}
-              </div>
-            </div>
-            {bars.length === 0
-              ? <div className="empty-state"><p className="empty-state-text">No price bars for this symbol.</p></div>
-              : <PriceChart bars={bars} activeEmas={activeEmas} theme={theme} />}
-          </div>
-
-          {/* Metric cards */}
-          <div className="metric-grid">
-            <Metric label="CLOSE" value={t?.close != null ? formatPrice(t.close, market) : '—'} />
-            <Metric label="DAY %" value={t?.dayPct != null ? `${t.dayPct.toFixed(2)}%` : '—'} tone={dayTone} />
-            <Metric label="RS" value={t?.rs ?? '—'} />
-            <Metric label="RS 1D" value={t?.rs1d ?? '—'} />
-            <Metric label="RS 1W" value={t?.rs1w ?? '—'} />
-            <Metric label="RS 1M" value={t?.rs1m ?? '—'} />
-            <Metric label="RS 3M" value={t?.rs3m ?? '—'} />
-            <Metric label="RS 6M" value={t?.rs6m ?? '—'} />
-          </div>
-          <div className="metric-grid">
-            <Metric label="CONSENSUS RATING" value={a?.consensusRating ?? '—'} />
-            <Metric label="CURRENT QUARTER EPS" value={a?.currentQuarterEps != null ? a.currentQuarterEps.toFixed(2) : '—'} />
-            <Metric label="NEXT QUARTER EPS" value={a?.nextQuarterEps != null ? a.nextQuarterEps.toFixed(2) : '—'} />
-            <Metric label="CURRENT YEAR EPS" value={a?.currentYearEps != null ? a.currentYearEps.toFixed(2) : '—'} />
-            <Metric label="NEXT YEAR EPS" value={a?.nextYearEps != null ? a.nextYearEps.toFixed(2) : '—'} />
-          </div>
-
-          {/* Properties */}
-          <div className="card prop-grid">
-            <Prop label="Exchange" value={detail.exchange} />
-            <Prop label="Market Cap" value={t?.marketCap != null ? formatMarketCap(t.marketCap, market) : '—'} />
-            <Prop label="52W High" value={t?.high52w != null ? formatPrice(t.high52w, market) : '—'} />
-            <Prop label="From 52W High" value={t?.from52wHigh != null ? `${t.from52wHigh.toFixed(2)}%` : '—'} />
-            <Prop label="Open" value={t?.open != null ? formatPrice(t.open, market) : '—'} />
-            <Prop label="High" value={t?.high != null ? formatPrice(t.high, market) : '—'} />
-            <Prop label="Low" value={t?.low != null ? formatPrice(t.low, market) : '—'} />
-            <Prop label="Options" value={detail.isFno ? 'Yes' : 'No'} />
-            <Prop label="Active" value={detail.active ? 'Yes' : 'No'} />
-            <Prop label="RS Type" value={t?.rsType} />
-            <Prop label="RS Date" value={t?.rsDate ? fmtDate(t.rsDate) : '—'} />
-            <Prop label="Bars Available" value={detail.barsAvailable ?? '—'} />
-            <Prop label="Scanner Hits" value={t?.scannerHits ?? '—'} />
-            <Prop label="Last Scanner Hit" value={t?.lastScannerHit ? fmtDate(t.lastScannerHit) : '—'} />
-          </div>
-
-          {/* Analyst snapshot */}
-          {a && (
-            <div className="lookup-section">
-              <h2 className="section-title">Analyst Snapshot</h2>
-              {a.asOfDate && <span className="pill">As Of {fmtDate(a.asOfDate)}</span>}
-              <table className="table">
-                <thead>
-                  <tr><th>Consensus</th><th>Current Quarter EPS</th><th>Next Quarter EPS</th><th>Current Year EPS</th><th>Next Year EPS</th></tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td style={{ fontWeight: 700 }}>{a.consensusRating ?? '—'}</td>
-                    <td>{a.currentQuarterEps?.toFixed(2) ?? '—'}</td>
-                    <td>{a.nextQuarterEps?.toFixed(2) ?? '—'}</td>
-                    <td>{a.currentYearEps?.toFixed(2) ?? '—'}</td>
-                    <td>{a.nextYearEps?.toFixed(2) ?? '—'}</td>
-                  </tr>
-                </tbody>
-              </table>
-              {a.numAnalysts != null && <p className="muted-note">Based on {a.numAnalysts} analysts offering recommendations for '{detail.symbol}'.</p>}
-            </div>
-          )}
-
-          <div className="lookup-section">
-            <h2 className="section-title">Quarterly EPS Forecasts <span className="pill">{detail.quarterlyEps.length} rows</span></h2>
-            <EpsTable rows={detail.quarterlyEps} market={market} />
-          </div>
-          <div className="lookup-section">
-            <h2 className="section-title">Yearly EPS Forecasts <span className="pill">{detail.yearlyEps.length} rows</span></h2>
-            <EpsTable rows={detail.yearlyEps} market={market} />
-          </div>
-        </div>
-      )}
-
-      {!detail && !loading && !error && (
-        <div className="empty-state" style={{ marginTop: 40 }}>
-          <div className="empty-state-icon">🔎</div>
-          <p className="empty-state-text">Search a symbol to begin.</p>
-        </div>
-      )}
+        )}
     </div>
   );
 }

@@ -12,7 +12,7 @@ import {
 import JobsPage from './pages/JobsPage';
 import AnalysisPage from './pages/AnalysisPage';
 import AdminPage from './pages/AdminPage';
-import StockLookupPage from './pages/StockLookupPage';
+import StockLookupPage, { StockLookupModal } from './pages/StockLookupPage';
 import './styles.css';
 
 // Theme context
@@ -323,7 +323,7 @@ function SectorDetail() {
   const { market, sectorId } = useParams<{ market: string; sectorId: string }>();
   const m = market as Market;
   const sid = Number(sectorId);
-  const navigate = useNavigate();
+  const [lookupSymbol, setLookupSymbol] = useState<string | null>(null);
 
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -434,10 +434,10 @@ function SectorDetail() {
             </thead>
             <tbody>
               {stocks.map(st => (
-                <tr key={st.id} className="row-clickable" onClick={() => navigate(`/${m}/lookup/${encodeURIComponent(st.symbol)}`)}>
+                <tr key={st.id} className="row-clickable" onClick={() => setLookupSymbol(st.symbol)}>
                   <td onClick={e => e.stopPropagation()}><input type="checkbox" className="checkbox" checked={selected.has(st.id)} onChange={() => toggleSelect(st.id)} /></td>
                   <td className="cell-symbol">
-                    <NavLink className="stock-link" to={`/${m}/lookup/${encodeURIComponent(st.symbol)}`}>{st.symbol}</NavLink>
+                    <button className="stock-link" onClick={e => { e.stopPropagation(); setLookupSymbol(st.symbol); }}>{st.symbol}</button>
                   </td>
                   <td>{st.companyName}</td>
                   <td style={{ textAlign: 'right' }}>{formatMarketCap(st.marketCap, m)}</td>
@@ -483,6 +483,10 @@ function SectorDetail() {
         </div>
       </Modal>
 
+      {lookupSymbol && (
+        <StockLookupModal market={m} symbol={lookupSymbol} onClose={() => setLookupSymbol(null)} />
+      )}
+
       {toastEl}
     </div>
   );
@@ -491,7 +495,7 @@ function SectorDetail() {
 function StocksPage() {
   const { market } = useParams<{ market: string }>();
   const m = market as Market;
-  const navigate = useNavigate();
+  const [lookupSymbol, setLookupSymbol] = useState<string | null>(null);
 
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -608,10 +612,10 @@ function StocksPage() {
             </thead>
             <tbody>
               {stocks.map(st => (
-                <tr key={st.id} className="row-clickable" onClick={() => navigate(`/${m}/lookup/${encodeURIComponent(st.symbol)}`)}>
+                <tr key={st.id} className="row-clickable" onClick={() => setLookupSymbol(st.symbol)}>
                   <td onClick={e => e.stopPropagation()}><input type="checkbox" className="checkbox" checked={selected.has(st.id)} onChange={() => toggleSelect(st.id)} /></td>
                   <td className="cell-symbol">
-                    <NavLink className="stock-link" to={`/${m}/lookup/${encodeURIComponent(st.symbol)}`}>{st.symbol}</NavLink>
+                    <button className="stock-link" onClick={e => { e.stopPropagation(); setLookupSymbol(st.symbol); }}>{st.symbol}</button>
                   </td>
                   <td>{st.companyName}</td>
                   <td className="cell-muted">{st.sectorName || '-'}</td>
@@ -657,6 +661,10 @@ function StocksPage() {
           </select>
         </div>
       </Modal>
+
+      {lookupSymbol && (
+        <StockLookupModal market={m} symbol={lookupSymbol} onClose={() => setLookupSymbol(null)} />
+      )}
 
       {toastEl}
     </div>

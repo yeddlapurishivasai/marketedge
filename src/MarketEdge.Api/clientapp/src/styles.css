@@ -1266,3 +1266,8 @@ body {
 
 .row-clickable { cursor: pointer; }
 .row-clickable:hover { background: var(--bg-hover, rgba(127,127,127,0.06)); }
+
+.stock-link { background: none; border: none; padding: 0; cursor: pointer; font: inherit; }
+.lookup-modal { max-width: 1100px; width: 92vw; }
+.lookup-modal .modal-body { max-height: 82vh; overflow-y: auto; }
+.lookup-modal .lookup-body { padding-top: 4px; }
