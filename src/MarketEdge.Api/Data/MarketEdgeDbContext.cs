@@ -45,6 +45,7 @@ public class MarketEdgeDbContext : DbContext
     public DbSet<USStockScores> USStockScores => Set<USStockScores>();
     public DbSet<IndianTrade> IndianTrades => Set<IndianTrade>();
     public DbSet<USTrade> USTrades => Set<USTrade>();
+    public DbSet<ScoringWeight> ScoringWeights => Set<ScoringWeight>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -129,7 +130,12 @@ public class MarketEdgeDbContext : DbContext
                 e.Property(p).HasColumnType("decimal(18,4)");
             foreach (var p in new[] { nameof(TradeBase.PnLPct), nameof(TradeBase.MfePct), nameof(TradeBase.MaePct) })
                 e.Property(p).HasColumnType("decimal(12,4)");
+            e.Property(nameof(TradeBase.ConfidenceScore)).HasColumnType("decimal(5,2)");
         }
+
+        modelBuilder.Entity<ScoringWeight>().HasKey(w => w.Id);
+        modelBuilder.Entity<ScoringWeight>().Property(w => w.Weight).HasColumnType("decimal(9,4)");
+        modelBuilder.Entity<ScoringWeight>().Property(w => w.SeedWeight).HasColumnType("decimal(9,4)");
 
         foreach (var t in new[] { typeof(IndianEarningsFundamentals), typeof(USEarningsFundamentals) })
         {

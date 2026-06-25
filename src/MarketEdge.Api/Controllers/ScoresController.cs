@@ -51,4 +51,20 @@ public class ScoresController : ControllerBase
         if (!ValidMarket(market)) return BadRequest("Market must be 'india' or 'us'");
         return Ok(await _scores.GetScannerPerformanceAsync(market));
     }
+
+    [HttpGet("api/{market}/scoring/weights")]
+    public async Task<IActionResult> GetScoringWeights(string market)
+    {
+        if (!ValidMarket(market)) return BadRequest("Market must be 'india' or 'us'");
+        return Ok(await _scores.GetScoringWeightsAsync(market));
+    }
+
+    [HttpPut("api/{market}/scoring/weights/{id:int}")]
+    public async Task<IActionResult> UpdateScoringWeight(string market, int id,
+        [FromBody] Models.ScoringWeightUpdateDto update)
+    {
+        if (!ValidMarket(market)) return BadRequest("Market must be 'india' or 'us'");
+        var updated = await _scores.UpdateScoringWeightAsync(market, id, update);
+        return updated == null ? NotFound() : Ok(updated);
+    }
 }

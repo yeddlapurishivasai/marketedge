@@ -33,6 +33,7 @@ from typing import Any
 import numpy as np
 
 from .indicators import load_bars
+from . import weights as wmod
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +173,7 @@ def _get_active_trades(conn, market: str) -> list[dict]:
     rows = conn.cursor().execute(
         f"""SELECT Id, Ticker, TradeType, Direction, EntryPrice, Qty, InitialStop, CurrentStop,
                    StopBasis, RiskPerShare, MovedToBe, MfePct, MaePct, FlaggedScannersJson,
-                   ScannerHitCount
+                   ScannerHitCount, EntryScanner
             FROM dbo.{table} WHERE Status = 'active'"""
     ).fetchall()
     return [
@@ -187,6 +188,7 @@ def _get_active_trades(conn, market: str) -> list[dict]:
             "mae": float(r.MaePct) if r.MaePct is not None else None,
             "flagged": _load_list(r.FlaggedScannersJson),
             "hit_count": int(r.ScannerHitCount or 0),
+            "entry_scanner": r.EntryScanner,
         }
         for r in rows
     ]
@@ -274,6 +276,14 @@ def _manage_trade(conn, market: str, t: dict, series, flagged_now: list[str]) ->
         )
         logger.info("Closed %s %s %s @ %.2f pnl=%.2f%% (%s)",
                     market, t["trade_type"], t["ticker"], last, pnl, exit_reason)
+        conn.commit()
+        # Self-adjusting feedback: nudge the triggering scanner's pattern weight
+        # toward this realised outcome (skips manually-overridden weights).
+        try:
+            wmod.adapt_pattern_weight(conn, market, t.get("entry_scanner"), won=pnl > 0)
+        except Exception:  # noqa: BLE001 - weight adaptation must never abort trade mgmt
+            logger.exception("Pattern-weight adaptation failed for %s", t.get("ticker"))
+        return
     else:
         cur.execute(
             f"""UPDATE dbo.{table} SET LastPrice=?, PnLPct=?, PnLAmount=?, CurrentStop=?, StopBasis=?, MovedToBe=?,
@@ -287,7 +297,7 @@ def _manage_trade(conn, market: str, t: dict, series, flagged_now: list[str]) ->
 
 def _open_trade(conn, market: str, ticker: str, company: str | None, trade_type: str,
                 direction: str, entry: float, series, scanners: list[str],
-                entry_at: datetime | None = None) -> dict:
+                entry_at: datetime | None = None, weights: dict[str, Any] | None = None) -> dict:
     table = _t(market)
     m = _series_metrics(series)
 
@@ -308,20 +318,35 @@ def _open_trade(conn, market: str, ticker: str, company: str | None, trade_type:
     risk = abs(entry - initial)
     qty = max(1, int(_NOTIONAL.get(market.lower(), 100_000.0) // entry)) if entry > 0 else 0
     entry_scanner = scanners[0] if scanners else None
+
+    # Trade-confidence: blend the triggering pattern's adaptive weight with the
+    # symbol's fundamentals and EPS upside per the profile's mix weights.
+    confidence = None
+    rationale_json = None
+    if weights is not None:
+        try:
+            fund_score, eps_upside = wmod.symbol_fundamentals(conn, market, ticker)
+            confidence, rationale = wmod.trade_confidence(
+                weights, trade_type, entry_scanner, fund_score, eps_upside)
+            rationale_json = json.dumps(rationale, default=str)
+        except Exception:  # noqa: BLE001 - confidence is advisory, never block an entry
+            logger.exception("Trade-confidence computation failed for %s", ticker)
+
     row = conn.cursor().execute(
         f"""INSERT INTO dbo.{table}
             (Ticker, CompanyName, TradeType, Direction, Status, EntryScanner, FlaggedScannersJson,
              ScannerHitCount, EntryAt, EntryPrice, Qty, InitialStop, CurrentStop, StopBasis, RiskPerShare,
-             MovedToBe, LastPrice, PnLPct, PnLAmount, MfePct, MaePct, CreatedAt, UpdatedAt)
+             MovedToBe, LastPrice, PnLPct, PnLAmount, MfePct, MaePct, ConfidenceScore,
+             ConfidenceRationaleJson, CreatedAt, UpdatedAt)
             OUTPUT INSERTED.Id
-            VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, 0, 0, 0, GETUTCDATE(), GETUTCDATE())""",
+            VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, 0, 0, 0, ?, ?, GETUTCDATE(), GETUTCDATE())""",
         ticker, company, trade_type, direction, entry_scanner, json.dumps(sorted(set(scanners))),
         len(set(scanners)), entry_at or _now(), round(entry, 4), qty, round(initial, 4), round(initial, 4),
-        basis, round(risk, 4), round(entry, 4),
+        basis, round(risk, 4), round(entry, 4), confidence, rationale_json,
     ).fetchone()
     conn.commit()
-    logger.info("Opened %s %s %s @ %.2f stop=%.2f qty=%d (%s)",
-                market, trade_type, ticker, entry, initial, qty, entry_scanner)
+    logger.info("Opened %s %s %s @ %.2f stop=%.2f qty=%d (%s) conf=%s",
+                market, trade_type, ticker, entry, initial, qty, entry_scanner, confidence)
     new_id = int(row.Id) if row else None
     return {
         "id": new_id, "ticker": ticker, "trade_type": trade_type, "direction": direction,
@@ -343,6 +368,19 @@ def run_trade_engine(conn, market: str, scan_date: date,
     active = _get_active_trades(conn, market)
     # tickers that were active at the START of this run -> never re-enter same (ticker, type) this run
     active_keys = {(t["ticker"], t["trade_type"]) for t in active}
+
+    # Ensure a pattern weight exists for every defined scanner, then load the
+    # current (adapted/edited) weights once for this run's confidence scoring.
+    try:
+        from .definitions import scanners_for
+        wmod.seed_weights(conn, market, [d.name for d in scanners_for(market)])
+    except Exception:  # noqa: BLE001 - seeding must never abort the run
+        logger.exception("Weight seeding failed for %s", market)
+    try:
+        weights = wmod.get_weights(conn, market)
+    except Exception:  # noqa: BLE001
+        logger.exception("Weight load failed for %s", market)
+        weights = None
 
     # Cold start OR explicit backfill request -> replay the last few days' breakouts.
     total = conn.cursor().execute(f"SELECT COUNT(*) AS c FROM dbo.{_t(market)}").fetchone()
@@ -402,7 +440,7 @@ def run_trade_engine(conn, market: str, scan_date: date,
                 opened_trade = _open_trade(
                     conn, market, sym, info.get("company"), trade_type, direction,
                     float(series.close[bidx]), series, scanners,
-                    entry_at=_entry_dt(series.dates[bidx]))
+                    entry_at=_entry_dt(series.dates[bidx]), weights=weights)
                 # bring the backfilled trade up to the current bar (trail / close out)
                 _manage_trade(conn, market, opened_trade, series, [])
                 opened += 1
@@ -413,7 +451,7 @@ def run_trade_engine(conn, market: str, scan_date: date,
                 setups += 1  # flagged but no confirmed break yet -> wait
                 continue
             _open_trade(conn, market, sym, info.get("company"), trade_type, direction,
-                        entry, series, scanners)
+                        entry, series, scanners, weights=weights)
             opened += 1
 
     return {

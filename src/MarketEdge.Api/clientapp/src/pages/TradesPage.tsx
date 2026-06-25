@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, Fragment } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { Market, StockScore, Trade, TradeStats, TradeProfile, ScannerPerformance } from '../api';
-import { fetchScores, fetchTrades, fetchTradeStats, triggerScanner, fetchScannerPerformance } from '../api';
-import { ChevronLeft, ChevronDown, RefreshCw, TrendingUp, Loader2, Gauge, Activity, History, Target } from 'lucide-react';
+import type { Market, StockScore, Trade, TradeStats, TradeProfile, ScannerPerformance, ScoringWeight } from '../api';
+import { fetchScores, fetchTrades, fetchTradeStats, triggerScanner, fetchScannerPerformance, fetchScoringWeights, updateScoringWeight } from '../api';
+import { ChevronLeft, ChevronDown, RefreshCw, TrendingUp, Loader2, Gauge, Activity, History, Target, Sliders } from 'lucide-react';
 
 function fmtPct(v?: number | null): string {
   if (v == null) return '—';
@@ -63,6 +63,76 @@ function MoneyCell({ v, market }: { v?: number | null; market: Market }) {
   if (v == null) return <span className="cell-muted">—</span>;
   const color = v > 0 ? 'var(--success)' : v < 0 ? 'var(--danger)' : 'var(--text-muted)';
   return <span style={{ fontWeight: 600, color }}>{fmtMoney(v, market)}</span>;
+}
+
+interface RationaleComponent {
+  component: string;
+  weight: number;
+  score: number | null;
+  available: boolean;
+  contribution: number;
+}
+interface ConfidenceRationaleData {
+  profile?: string;
+  scanner?: string | null;
+  confidence?: number;
+  components?: RationaleComponent[];
+  notes?: { epsUpsidePct?: number | null; patternWeight?: number | null };
+}
+const COMPONENT_LABELS: Record<string, string> = {
+  pattern: 'Pattern (triggering scanner)',
+  fundamental: 'Fundamentals',
+  eps: 'EPS upside',
+  ai: 'AI signal (placeholder)',
+};
+
+function ConfidenceRationale({ trade }: { trade: Trade }) {
+  let data: ConfidenceRationaleData | null = null;
+  try {
+    data = trade.confidenceRationaleJson ? JSON.parse(trade.confidenceRationaleJson) : null;
+  } catch { data = null; }
+  if (!data) return <div className="cell-muted" style={{ padding: 8 }}>No rationale recorded for this trade.</div>;
+
+  const comps = data.components ?? [];
+  return (
+    <div style={{ padding: '10px 12px' }}>
+      <div style={{ marginBottom: 8, fontSize: '0.85rem' }}>
+        <strong>Why confidence {data.confidence}?</strong>{' '}
+        <span className="cell-muted">
+          {data.profile} trade triggered by {data.scanner || '—'}. Confidence blends each component below by
+          its profile weight: <code>100 × Σ(weight × score) / Σ(weight)</code> over the available components.
+        </span>
+      </div>
+      <table className="table" style={{ fontSize: '0.82rem' }}>
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th style={{ textAlign: 'right' }}>Mix weight</th>
+            <th style={{ textAlign: 'right' }}>Score (0–1)</th>
+            <th style={{ textAlign: 'right' }}>Contribution</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {comps.map(c => (
+            <tr key={c.component} style={{ opacity: c.available ? 1 : 0.5 }}>
+              <td style={{ fontWeight: 600 }}>{COMPONENT_LABELS[c.component] ?? c.component}</td>
+              <td className="cell-right">{c.weight.toFixed(2)}</td>
+              <td className="cell-right">{c.score != null ? c.score.toFixed(2) : '—'}</td>
+              <td className="cell-right">{c.available ? c.contribution.toFixed(3) : '—'}</td>
+              <td className="cell-muted" style={{ fontSize: '0.78rem' }}>
+                {c.component === 'pattern' && `Adaptive weight for ${data!.scanner || 'scanner'} (rises on wins, falls on losses)`}
+                {c.component === 'eps' && data!.notes?.epsUpsidePct != null && `EPS upside ${data!.notes.epsUpsidePct}% → clamped to 0–1 over 25%`}
+                {c.component === 'fundamental' && (c.available ? 'Fraction of fundamental checks passing' : 'No fundamentals for this symbol')}
+                {c.component === 'ai' && 'Neutral 0.5 until an AI signal feeds in'}
+                {!c.available && c.component !== 'ai' && c.component !== 'fundamental' && 'Not available — dropped from the blend'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 interface CheckContrib { label: string; group: string; pass: boolean; weight: number; }
@@ -179,7 +249,7 @@ export default function TradesPage() {
   const { market } = useParams<{ market: string }>();
   const m = market as Market;
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'scores' | 'trades' | 'patterns'>('scores');
+  const [tab, setTab] = useState<'scores' | 'trades' | 'patterns' | 'weights'>('scores');
 
   return (
     <div className="page">
@@ -205,11 +275,15 @@ export default function TradesPage() {
         <button className={`btn ${tab === 'patterns' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setTab('patterns')}>
           <Target size={16} /> Pattern Performance
         </button>
+        <button className={`btn ${tab === 'weights' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setTab('weights')}>
+          <Sliders size={16} /> Confidence Weights
+        </button>
       </div>
 
       {tab === 'scores' ? <ScoresTab market={m} />
         : tab === 'trades' ? <TradesTab market={m} />
-        : <PatternsTab market={m} />}
+        : tab === 'patterns' ? <PatternsTab market={m} />
+        : <WeightsTab market={m} />}
     </div>
   );
 }
@@ -282,6 +356,129 @@ function PatternsTab({ market }: { market: Market }) {
       )}
     </>
   );
+}
+
+function WeightsTab({ market }: { market: Market }) {
+  const [rows, setRows] = useState<ScoringWeight[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState<number | null>(null);
+  const [drafts, setDrafts] = useState<Record<number, string>>({});
+
+  const load = useCallback(() => {
+    setLoading(true);
+    fetchScoringWeights(market)
+      .then(rs => { setRows(rs); setDrafts({}); })
+      .catch(() => setRows([]))
+      .finally(() => setLoading(false));
+  }, [market]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const save = useCallback((id: number, update: { weight?: number; manualOverride?: boolean }) => {
+    setSaving(id);
+    updateScoringWeight(market, id, update)
+      .then(updated => setRows(rs => rs.map(r => r.id === id ? updated : r)))
+      .catch(() => { /* keep prior */ })
+      .finally(() => setSaving(null));
+  }, [market]);
+
+  const patterns = rows.filter(r => r.category === 'pattern');
+  const mix = rows.filter(r => r.category === 'mix');
+
+  const renderRow = (r: ScoringWeight) => {
+    const draft = drafts[r.id];
+    const val = draft !== undefined ? draft : r.weight.toFixed(2);
+    const commit = () => {
+      const n = parseFloat(val);
+      if (!isNaN(n) && Math.abs(n - r.weight) > 1e-9) save(r.id, { weight: n });
+      setDrafts(d => { const c = { ...d }; delete c[r.id]; return c; });
+    };
+    return (
+      <tr key={r.id}>
+        <td style={{ fontWeight: 600 }}>{r.category === 'mix' ? mixLabel(r.componentKey) : r.componentKey}</td>
+        <td className="cell-right">
+          <input className="search-input" style={{ width: 80, textAlign: 'right' }} type="number" step="0.01" min="0" max="1"
+            value={val}
+            onChange={e => setDrafts(d => ({ ...d, [r.id]: e.target.value }))}
+            onBlur={commit}
+            onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
+        </td>
+        <td className="cell-right cell-muted">{r.seedWeight.toFixed(2)}</td>
+        {r.category === 'pattern' && <td className="cell-center">{r.wins} / {r.losses}</td>}
+        <td className="cell-center">
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+            <input type="checkbox" checked={r.manualOverride}
+              onChange={e => save(r.id, { manualOverride: e.target.checked })} />
+            <span className="cell-muted" style={{ fontSize: '0.78rem' }}>{r.manualOverride ? 'pinned' : 'auto'}</span>
+          </label>
+        </td>
+        <td className="cell-center">{saving === r.id ? <Loader2 size={14} className="spin" /> : null}</td>
+      </tr>
+    );
+  };
+
+  return (
+    <>
+      <div className="toolbar" style={{ gap: 8 }}>
+        <p className="page-subtitle" style={{ margin: 0 }}>
+          Editable confidence weights. <strong>Pattern</strong> weights self-adjust as each scanner's paper trades
+          win or lose; editing one pins it (auto-adaptation stops). <strong>Mix</strong> weights set how much each
+          component drives a swing/positional trade's confidence.
+        </p>
+        <button className="btn btn-ghost btn-sm" onClick={load} style={{ marginLeft: 'auto' }}>
+          <RefreshCw size={14} /> Refresh
+        </button>
+      </div>
+      {loading ? (
+        <div className="loading"><Loader2 size={18} className="spin" /> Loading weights...</div>
+      ) : rows.length === 0 ? (
+        <div className="empty-state">
+          <div className="empty-state-icon"><Sliders size={48} /></div>
+          <p className="empty-state-text">No weights seeded yet. They are created on the next scanner run.</p>
+        </div>
+      ) : (
+        <>
+          <h3 style={{ margin: '16px 0 8px' }}>Pattern weights (per scanner, self-adjusting)</h3>
+          <div className="table-container">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Scanner</th>
+                  <th style={{ textAlign: 'right' }}>Weight (0–1)</th>
+                  <th style={{ textAlign: 'right' }}>Seed</th>
+                  <th style={{ textAlign: 'center' }}>W / L</th>
+                  <th style={{ textAlign: 'center' }}>Override</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>{patterns.map(renderRow)}</tbody>
+            </table>
+          </div>
+          <h3 style={{ margin: '24px 0 8px' }}>Mix weights (per profile blend)</h3>
+          <div className="table-container">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Component</th>
+                  <th style={{ textAlign: 'right' }}>Weight</th>
+                  <th style={{ textAlign: 'right' }}>Seed</th>
+                  <th style={{ textAlign: 'center' }}>Override</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>{mix.map(renderRow)}</tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function mixLabel(key: string): string {
+  const [profile, component] = key.split(':');
+  const comp = COMPONENT_LABELS[component] ?? component;
+  return `${profile.charAt(0).toUpperCase()}${profile.slice(1)} · ${comp}`;
 }
 
 function ScoresTab({ market }: { market: Market }) {
@@ -408,6 +605,7 @@ function TradesTab({ market }: { market: Market }) {
   const [loading, setLoading] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const [note, setNote] = useState<string>('');
+  const [expanded, setExpanded] = useState<number | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -505,13 +703,15 @@ function TradesTab({ market }: { market: Market }) {
                 <th style={{ textAlign: 'right' }}>P&amp;L %</th>
                 <th style={{ textAlign: 'right' }}>P&amp;L</th>
                 <th style={{ textAlign: 'right' }}>MFE / MAE</th>
+                <th style={{ textAlign: 'center' }}>Confidence</th>
                 <th style={{ textAlign: 'center' }}>Scanners</th>
                 <th>Status</th>
               </tr>
             </thead>
             <tbody>
               {rows.map(t => (
-                <tr key={t.id}>
+                <Fragment key={t.id}>
+                <tr>
                   <td style={{ fontWeight: 600 }}>{t.ticker}</td>
                   <td>{t.tradeType}</td>
                   <td><SideBadge side={t.direction} /></td>
@@ -528,6 +728,16 @@ function TradesTab({ market }: { market: Market }) {
                     {' / '}
                     <span style={{ color: 'var(--danger)' }}>{fmtNum(t.maePct)}</span>
                   </td>
+                  <td className="cell-center">
+                    {t.confidenceScore != null ? (
+                      <button className="btn btn-ghost btn-sm" style={{ padding: '2px 6px', gap: 4 }}
+                        title="Explain why this trade got its confidence score"
+                        onClick={() => setExpanded(expanded === t.id ? null : t.id)}>
+                        <ScoreBadge score={Math.round(t.confidenceScore)} />
+                        <ChevronDown size={12} style={{ transform: expanded === t.id ? 'rotate(180deg)' : 'none' }} />
+                      </button>
+                    ) : <span className="cell-muted">—</span>}
+                  </td>
                   <td className="cell-center" title={t.flaggedScanners.join(', ')}>
                     <span className="badge badge-count">{t.scannerHitCount}</span>
                   </td>
@@ -537,6 +747,14 @@ function TradesTab({ market }: { market: Market }) {
                       : <span style={{ color: 'var(--success)', fontSize: '0.8rem' }}>active{t.movedToBe ? ' · BE+' : ''}</span>}
                   </td>
                 </tr>
+                {expanded === t.id && (
+                  <tr>
+                    <td colSpan={14} style={{ background: 'var(--bg-subtle, rgba(127,127,127,0.06))' }}>
+                      <ConfidenceRationale trade={t} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>

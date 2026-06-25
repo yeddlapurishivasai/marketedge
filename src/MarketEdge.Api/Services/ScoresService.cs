@@ -12,6 +12,8 @@ public interface IScoresService
     Task<List<TradeDto>> GetTradesAsync(string market, string? status, string? tradeType);
     Task<TradeStatsDto> GetTradeStatsAsync(string market);
     Task<List<ScannerPerformanceDto>> GetScannerPerformanceAsync(string market);
+    Task<List<ScoringWeightDto>> GetScoringWeightsAsync(string market);
+    Task<ScoringWeightDto?> UpdateScoringWeightAsync(string market, int id, ScoringWeightUpdateDto update);
 }
 
 public class ScoresService : IScoresService
@@ -170,6 +172,36 @@ public class ScoresService : IScoresService
             t.Id, t.Ticker, t.CompanyName, t.TradeType, t.Direction, t.Status,
             t.EntryScanner, flagged, t.ScannerHitCount, t.EntryAt, t.EntryPrice, t.Qty,
             t.InitialStop, t.CurrentStop, t.StopBasis, t.RiskPerShare, t.MovedToBe,
-            t.LastPrice, t.PnLPct, t.PnLAmount, t.MfePct, t.MaePct, t.ExitAt, t.ExitPrice, t.ExitReason, t.UpdatedAt);
+            t.LastPrice, t.PnLPct, t.PnLAmount, t.MfePct, t.MaePct, t.ExitAt, t.ExitPrice, t.ExitReason,
+            t.ConfidenceScore, t.ConfidenceRationaleJson, t.UpdatedAt);
+    }
+
+    public async Task<List<ScoringWeightDto>> GetScoringWeightsAsync(string market)
+    {
+        var mk = market.ToLowerInvariant();
+        var rows = await _db.ScoringWeights.Where(w => w.Market == mk)
+            .OrderBy(w => w.Category).ThenBy(w => w.ComponentKey).ToListAsync();
+        return rows.Select(w => new ScoringWeightDto(
+            w.Id, w.Market, w.Category, w.ComponentKey, w.Weight, w.SeedWeight,
+            w.Wins, w.Losses, w.ManualOverride, w.UpdatedAt)).ToList();
+    }
+
+    public async Task<ScoringWeightDto?> UpdateScoringWeightAsync(string market, int id, ScoringWeightUpdateDto update)
+    {
+        var mk = market.ToLowerInvariant();
+        var w = await _db.ScoringWeights.FirstOrDefaultAsync(x => x.Id == id && x.Market == mk);
+        if (w == null) return null;
+        if (update.Weight.HasValue)
+        {
+            // Editing a weight pins it: clamp to 0..1 and freeze auto-adaptation.
+            w.Weight = Math.Clamp(update.Weight.Value, 0m, 1m);
+            w.ManualOverride = true;
+        }
+        if (update.ManualOverride.HasValue)
+            w.ManualOverride = update.ManualOverride.Value;
+        w.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return new ScoringWeightDto(w.Id, w.Market, w.Category, w.ComponentKey, w.Weight, w.SeedWeight,
+            w.Wins, w.Losses, w.ManualOverride, w.UpdatedAt);
     }
 }

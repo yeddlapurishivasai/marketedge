@@ -36,6 +36,12 @@ CREATE TABLE [dbo].[IndianTrades]
     [ExitPrice]           DECIMAL(18,4) NULL,
     [ExitReason]          NVARCHAR(16)  NULL,        -- sl_hit / ema_close / trail
 
+    -- Trade-confidence score (0..100) computed at entry from the weighted blend of
+    -- the triggering pattern, fundamentals, EPS upside and AI inputs, plus the JSON
+    -- rationale describing each component's contribution.
+    [ConfidenceScore]        DECIMAL(5,2)  NULL,
+    [ConfidenceRationaleJson] NVARCHAR(MAX) NULL,
+
     [CreatedAt]           DATETIME2     NOT NULL CONSTRAINT [DF_IndianTrades_CreatedAt] DEFAULT GETUTCDATE(),
     [UpdatedAt]           DATETIME2     NOT NULL CONSTRAINT [DF_IndianTrades_UpdatedAt] DEFAULT GETUTCDATE(),
 

@@ -612,6 +612,8 @@ export interface Trade {
   exitAt?: string | null;
   exitPrice?: number | null;
   exitReason?: string | null;
+  confidenceScore?: number | null;
+  confidenceRationaleJson?: string | null;
   updatedAt: string;
 }
 
@@ -679,5 +681,38 @@ export interface ScannerPerformance {
 export async function fetchScannerPerformance(market: Market): Promise<ScannerPerformance[]> {
   const res = await fetch(`${BASE}/${market}/scanners/performance`);
   if (!res.ok) throw new Error('Failed to fetch scanner performance');
+  return res.json();
+}
+
+export interface ScoringWeight {
+  id: number;
+  market: string;
+  category: string;       // 'pattern' | 'mix'
+  componentKey: string;   // scanner name OR '{profile}:{component}'
+  weight: number;
+  seedWeight: number;
+  wins: number;
+  losses: number;
+  manualOverride: boolean;
+  updatedAt: string;
+}
+
+export async function fetchScoringWeights(market: Market): Promise<ScoringWeight[]> {
+  const res = await fetch(`${BASE}/${market}/scoring/weights`);
+  if (!res.ok) throw new Error('Failed to fetch scoring weights');
+  return res.json();
+}
+
+export async function updateScoringWeight(
+  market: Market,
+  id: number,
+  update: { weight?: number; manualOverride?: boolean }
+): Promise<ScoringWeight> {
+  const res = await fetch(`${BASE}/${market}/scoring/weights/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(update),
+  });
+  if (!res.ok) throw new Error('Failed to update scoring weight');
   return res.json();
 }

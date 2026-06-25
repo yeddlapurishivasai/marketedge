@@ -52,6 +52,8 @@ public record TradeDto(
     DateTime? ExitAt,
     decimal? ExitPrice,
     string? ExitReason,
+    decimal? ConfidenceScore,
+    string? ConfidenceRationaleJson,
     DateTime UpdatedAt);
 
 public record TradeStatsDto(
@@ -80,4 +82,20 @@ public record ScannerPerformanceDto(
     decimal? AvgPnLPct,
     decimal? RealizedPnLAmount,
     decimal? OpenPnLAmount);
+
+public record ScoringWeightDto(
+    int Id,
+    string Market,
+    string Category,
+    string ComponentKey,
+    decimal Weight,
+    decimal SeedWeight,
+    int Wins,
+    int Losses,
+    bool ManualOverride,
+    DateTime UpdatedAt);
+
+public record ScoringWeightUpdateDto(
+    decimal? Weight,
+    bool? ManualOverride);
 

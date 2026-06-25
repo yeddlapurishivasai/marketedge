@@ -148,7 +148,25 @@ public abstract class TradeBase
     public decimal? ExitPrice { get; set; }
     public string? ExitReason { get; set; }
 
+    public decimal? ConfidenceScore { get; set; }
+    public string? ConfidenceRationaleJson { get; set; }
+
     public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+[Table("ScoringWeights")]
+public class ScoringWeight
+{
+    public int Id { get; set; }
+    public string Market { get; set; } = string.Empty;       // india / us
+    public string Category { get; set; } = string.Empty;     // pattern / mix
+    public string ComponentKey { get; set; } = string.Empty; // scanner name OR '{profile}:{component}'
+    public decimal Weight { get; set; }
+    public decimal SeedWeight { get; set; }
+    public int Wins { get; set; }
+    public int Losses { get; set; }
+    public bool ManualOverride { get; set; }
     public DateTime UpdatedAt { get; set; }
 }
 
