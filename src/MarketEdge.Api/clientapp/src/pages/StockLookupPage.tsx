@@ -101,29 +101,48 @@ function fmtDate(d?: string | null): string {
   return `${dt.getMonth() + 1}/${dt.getDate()}/${String(dt.getFullYear()).slice(-2)}`;
 }
 
-function EpsTable({ rows, market }: { rows: LookupEpsForecast[]; market: Market }) {
+function EpsTable({ rows, market, periodLabel }: { rows: LookupEpsForecast[]; market: Market; periodLabel: string }) {
   const sym = currencySymbol(market);
   if (rows.length === 0) return <p className="muted-note">No estimates available.</p>;
+  // Constant-P/E upside: price scales with EPS, so each period's implied price move vs the
+  // current (nearest) period is (eps / currentEps - 1) * 100. Only meaningful when the
+  // current-period consensus is positive.
+  const base = rows[0]?.consensusEps;
+  const hasBase = base != null && base > 0;
   return (
     <table className="table eps-table">
       <thead>
-        <tr><th>Period</th><th>Consensus EPS</th><th>High</th><th>Low</th><th>Estimates</th><th>Revisions</th></tr>
+        <tr><th>Period</th><th>Consensus EPS</th><th>Upside @ const P/E</th><th>High</th><th>Low</th><th>Estimates</th><th>Revisions</th></tr>
       </thead>
       <tbody>
-        {rows.map((r, i) => (
-          <tr key={i}>
-            <td>{fmtPeriod(r.periodEndDate)}</td>
-            <td>{r.consensusEps != null ? `${sym}${r.consensusEps.toFixed(2)}` : '—'}</td>
-            <td>{r.highEps != null ? `${sym}${r.highEps.toFixed(2)}` : '—'}</td>
-            <td>{r.lowEps != null ? `${sym}${r.lowEps.toFixed(2)}` : '—'}</td>
-            <td>{r.numEstimates ?? '—'}</td>
-            <td>
-              <span className="rev-up">▲ {r.revisionsUp}</span>
-              <span className="rev-down">▼ {r.revisionsDown}</span>
-            </td>
-          </tr>
-        ))}
+        {rows.map((r, i) => {
+          const up = hasBase && r.consensusEps != null ? (r.consensusEps / (base as number) - 1) * 100 : null;
+          return (
+            <tr key={i}>
+              <td>{fmtPeriod(r.periodEndDate)}</td>
+              <td>{r.consensusEps != null ? `${sym}${r.consensusEps.toFixed(2)}` : '—'}</td>
+              <td>
+                {i === 0
+                  ? <span className="muted-note">current</span>
+                  : up != null
+                    ? <span className={up >= 0 ? 'rev-up' : 'rev-down'}>{up >= 0 ? '+' : ''}{up.toFixed(1)}%</span>
+                    : '—'}
+              </td>
+              <td>{r.highEps != null ? `${sym}${r.highEps.toFixed(2)}` : '—'}</td>
+              <td>{r.lowEps != null ? `${sym}${r.lowEps.toFixed(2)}` : '—'}</td>
+              <td>{r.numEstimates ?? '—'}</td>
+              <td>
+                <span className="rev-up">▲ {r.revisionsUp}</span>
+                <span className="rev-down">▼ {r.revisionsDown}</span>
+              </td>
+            </tr>
+          );
+        })}
       </tbody>
+      <caption className="muted-note" style={{ captionSide: 'bottom', textAlign: 'left', paddingTop: 4 }}>
+        Upside assumes the current P/E is held constant — implied price moves in line with
+        consensus EPS vs the current {periodLabel}.
+      </caption>
     </table>
   );
 }
@@ -131,6 +150,45 @@ function EpsTable({ rows, market }: { rows: LookupEpsForecast[]; market: Market 
 function fmtPeriod(d: string): string {
   const dt = new Date(d);
   return dt.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+}
+
+// Constant-P/E upside: at a held P/E, price scales with EPS, so the implied price move
+// from a base EPS to a projected EPS is (projected / base - 1) * 100. Only meaningful when
+// the base EPS is positive.
+function constPeUpside(base?: number | null, projected?: number | null): number | null {
+  if (base == null || projected == null || base <= 0) return null;
+  return (projected / base - 1) * 100;
+}
+
+// Fallback when analyst quarter/year EPS is missing: use the nearest two consensus EPS rows
+// from the forecast list (ordered by period end date) to derive the period-over-period move.
+function forecastUpside(rows: LookupEpsForecast[]): number | null {
+  if (rows.length < 2) return null;
+  return constPeUpside(rows[0].consensusEps, rows[1].consensusEps);
+}
+
+function UpsideCallout({ quarterUpside, yearUpside }: { quarterUpside: number | null; yearUpside: number | null }) {
+  if (quarterUpside == null && yearUpside == null) return null;
+  const cell = (label: string, v: number | null) => (
+    <div className="upside-cell">
+      <span className="upside-label">{label}</span>
+      <span className={`upside-value ${v == null ? '' : v >= 0 ? 'rev-up' : 'rev-down'}`}>
+        {v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
+      </span>
+    </div>
+  );
+  return (
+    <div className="upside-callout">
+      <span className="upside-title">Potential upside @ constant P/E</span>
+      <div className="upside-grid">
+        {cell('Per quarter', quarterUpside)}
+        {cell('Per year', yearUpside)}
+      </div>
+      <p className="muted-note">
+        Implied price move if the current P/E holds and EPS reaches the next-quarter / next-year estimate.
+      </p>
+    </div>
+  );
 }
 
 /**
@@ -325,17 +383,21 @@ export function StockDetailView({ market, symbol }: { market: Market; symbol: st
               </tr>
             </tbody>
           </table>
+          <UpsideCallout
+            quarterUpside={constPeUpside(a.currentQuarterEps, a.nextQuarterEps) ?? forecastUpside(detail.quarterlyEps)}
+            yearUpside={constPeUpside(a.currentYearEps, a.nextYearEps) ?? forecastUpside(detail.yearlyEps)}
+          />
           {a.numAnalysts != null && <p className="muted-note">Based on {a.numAnalysts} analysts offering recommendations for '{detail.symbol}'.</p>}
         </div>
       )}
 
       <div className="lookup-section">
         <h2 className="section-title">Quarterly EPS Forecasts <span className="pill">{detail.quarterlyEps.length} rows</span></h2>
-        <EpsTable rows={detail.quarterlyEps} market={market} />
+        <EpsTable rows={detail.quarterlyEps} market={market} periodLabel="quarter" />
       </div>
       <div className="lookup-section">
         <h2 className="section-title">Yearly EPS Forecasts <span className="pill">{detail.yearlyEps.length} rows</span></h2>
-        <EpsTable rows={detail.yearlyEps} market={market} />
+        <EpsTable rows={detail.yearlyEps} market={market} periodLabel="year" />
       </div>
     </div>
   );

@@ -1231,6 +1231,16 @@ body {
   margin-top: 16px; padding: 14px 16px; background: var(--surface-hover); border-radius: var(--radius-sm);
 }
 
+.upside-callout {
+  margin-top: 14px; padding: 14px 16px; background: var(--surface-hover);
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
+}
+.upside-title { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-secondary); }
+.upside-grid { display: flex; gap: 28px; margin: 10px 0 6px; flex-wrap: wrap; }
+.upside-cell { display: flex; flex-direction: column; gap: 2px; }
+.upside-label { font-size: 0.72rem; color: var(--text-secondary); }
+.upside-value { font-size: 1.35rem; font-weight: 800; }
+
 .lookup-chart-card { padding: 16px; }
 .chart-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 10px; }
 .seg-toggle, .ema-toggle { display: inline-flex; gap: 6px; }
