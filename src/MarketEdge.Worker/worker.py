@@ -194,6 +194,12 @@ def process_message(message_content: str) -> None:
         run_scanner_job(payload)
         return
 
+    # Data-ingestion jobs run the bundled ingestion CLI on the worker (the Python host).
+    if str(payload.get("jobType", "")).lower() == "ingestion":
+        from ingestion_runner import run_ingestion_job
+        run_ingestion_job(payload)
+        return
+
     market = str(payload["market"]).lower()
     run_id = int(payload["runId"])
     min_market_cap = _coerce_number(payload.get("minMarketCap"))
