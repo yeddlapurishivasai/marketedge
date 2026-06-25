@@ -12,6 +12,7 @@ from azure.core.exceptions import AzureError, ResourceExistsError
 from azure.storage.queue import QueueClient
 
 from config import Config
+from rs_rating import compute_rs_ratings
 from db import (
     get_completed_symbols_for_week,
     get_connection,
@@ -276,6 +277,19 @@ def process_message(message_content: str) -> None:
         sector_list = list(sectors_map.items())
         total_sectors = len(sector_list)
         logger.info("Found %s stocks across %s sectors", total_stocks, total_sectors)
+
+        # Workflow step: refresh persisted RS ratings from ingested bars for this run's
+        # universe. Reads only ingested data (no network); failures must not abort Stage 2.
+        try:
+            rs_summary = compute_rs_ratings(
+                conn,
+                market,
+                test_sample_only=test_sample_only,
+                symbols=[s["symbol"] for s in all_stocks],
+            )
+            logger.info("RS ratings step complete: %s", rs_summary)
+        except Exception:
+            logger.exception("RS ratings step failed — continuing Stage 2 run")
 
         # Fetch benchmark once
         benchmark_data = fetch_benchmark_data(market, end_date=as_of_end)
