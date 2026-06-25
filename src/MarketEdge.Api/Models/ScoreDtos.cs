@@ -67,3 +67,17 @@ public record TradeStatsDto(
     decimal? SwingRealizedPnLAmount,
     decimal? PositionalOpenPnLAmount,
     decimal? PositionalRealizedPnLAmount);
+
+public record ScannerPerformanceDto(
+    string Scanner,
+    int Trades,
+    int Closed,
+    int OpenCount,
+    int Wins,
+    int Losses,
+    decimal? WinRatePct,
+    decimal ReliabilityScore,
+    decimal? AvgPnLPct,
+    decimal? RealizedPnLAmount,
+    decimal? OpenPnLAmount);
+

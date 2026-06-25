@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, Fragment } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { Market, StockScore, Trade, TradeStats, TradeProfile } from '../api';
-import { fetchScores, fetchTrades, fetchTradeStats, triggerScanner } from '../api';
-import { ChevronLeft, ChevronDown, RefreshCw, TrendingUp, Loader2, Gauge, Activity, History } from 'lucide-react';
+import type { Market, StockScore, Trade, TradeStats, TradeProfile, ScannerPerformance } from '../api';
+import { fetchScores, fetchTrades, fetchTradeStats, triggerScanner, fetchScannerPerformance } from '../api';
+import { ChevronLeft, ChevronDown, RefreshCw, TrendingUp, Loader2, Gauge, Activity, History, Target } from 'lucide-react';
 
 function fmtPct(v?: number | null): string {
   if (v == null) return '—';
@@ -67,12 +67,14 @@ function MoneyCell({ v, market }: { v?: number | null; market: Market }) {
 
 interface CheckContrib { label: string; group: string; pass: boolean; weight: number; }
 interface ProfileComp { bull: number; bear: number; phat: number; n: number; z: number; contribs: CheckContrib[]; }
+interface ScannerTag { name: string; winRate?: number | null; wilson?: number | null; trades?: number | null; }
 interface ScoreComponents {
   groups?: Record<string, string>;
   freshness?: number;
   daysSinceEarnings?: number | null;
   scannerHits?: number | null;
   upsideSource?: string | null;
+  scanners?: ScannerTag[];
   swing?: ProfileComp;
   positional?: ProfileComp;
 }
@@ -119,6 +121,26 @@ function ScoreBreakdown({ comp, profile }: { comp: ScoreComponents; profile: Tra
           <> EPS upside source: {UPSIDE_SRC_LABELS[comp.upsideSource] ?? comp.upsideSource}.</>
         )}
       </div>
+      {comp.scanners && comp.scanners.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Patterns that flagged this stock</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {comp.scanners.map((s, i) => {
+              const wr = s.winRate != null ? Math.round(s.winRate * 100) : null;
+              const proven = (s.wilson ?? 0) >= 0.5 && (s.trades ?? 0) >= 3;
+              return (
+                <span key={i} className="badge" style={{
+                  background: proven ? 'rgba(22,163,74,0.15)' : 'rgba(127,127,127,0.12)',
+                  color: proven ? 'var(--success)' : 'var(--text-muted)',
+                  fontSize: '0.72rem', padding: '2px 8px', fontWeight: 600,
+                }} title={s.trades ? `${s.trades} paper trades` : 'no trade history yet'}>
+                  {s.name}{wr != null ? ` · ${wr}% win` : ' · untested'}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <table className="table" style={{ fontSize: '0.82rem' }}>
         <thead>
           <tr>
@@ -157,7 +179,7 @@ export default function TradesPage() {
   const { market } = useParams<{ market: string }>();
   const m = market as Market;
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'scores' | 'trades'>('scores');
+  const [tab, setTab] = useState<'scores' | 'trades' | 'patterns'>('scores');
 
   return (
     <div className="page">
@@ -180,10 +202,85 @@ export default function TradesPage() {
         <button className={`btn ${tab === 'trades' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setTab('trades')}>
           <Activity size={16} /> Paper Trades
         </button>
+        <button className={`btn ${tab === 'patterns' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setTab('patterns')}>
+          <Target size={16} /> Pattern Performance
+        </button>
       </div>
 
-      {tab === 'scores' ? <ScoresTab market={m} /> : <TradesTab market={m} />}
+      {tab === 'scores' ? <ScoresTab market={m} />
+        : tab === 'trades' ? <TradesTab market={m} />
+        : <PatternsTab market={m} />}
     </div>
+  );
+}
+
+function PatternsTab({ market }: { market: Market }) {
+  const [rows, setRows] = useState<ScannerPerformance[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    fetchScannerPerformance(market)
+      .then(setRows)
+      .catch(() => setRows([]))
+      .finally(() => setLoading(false));
+  }, [market]);
+
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <>
+      <div className="toolbar" style={{ gap: 8 }}>
+        <p className="page-subtitle" style={{ margin: 0 }}>
+          Each scanner is a pattern. Reliability is the Wilson lower bound of its paper-trade win rate —
+          which patterns are actually paying off.
+        </p>
+        <button className="btn btn-ghost btn-sm" onClick={load} style={{ marginLeft: 'auto' }}>
+          <RefreshCw size={14} /> Refresh
+        </button>
+      </div>
+      {loading ? (
+        <div className="loading"><Loader2 size={18} className="spin" /> Loading pattern performance...</div>
+      ) : rows.length === 0 ? (
+        <div className="empty-state">
+          <div className="empty-state-icon"><Target size={48} /></div>
+          <p className="empty-state-text">No paper trades yet, so no pattern performance to show. Backfill trades from the Paper Trades tab.</p>
+        </div>
+      ) : (
+        <div className="table-container">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Pattern (scanner)</th>
+                <th style={{ textAlign: 'center' }}>Reliability</th>
+                <th style={{ textAlign: 'center' }}>Win rate</th>
+                <th style={{ textAlign: 'center' }}>Trades</th>
+                <th style={{ textAlign: 'center' }}>Open</th>
+                <th style={{ textAlign: 'center' }}>W / L</th>
+                <th style={{ textAlign: 'right' }}>Avg P&amp;L</th>
+                <th style={{ textAlign: 'right' }}>Realized</th>
+                <th style={{ textAlign: 'right' }}>Open P&amp;L</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.scanner}>
+                  <td style={{ fontWeight: 600 }}>{r.scanner}</td>
+                  <td className="cell-center"><ScoreBadge score={Math.round(r.reliabilityScore)} /></td>
+                  <td className="cell-center">{r.winRatePct != null ? `${r.winRatePct.toFixed(0)}%` : '—'}</td>
+                  <td className="cell-center">{r.trades}</td>
+                  <td className="cell-center">{r.openCount}</td>
+                  <td className="cell-center">{r.wins} / {r.losses}</td>
+                  <td className="cell-right"><PnLCell v={r.avgPnLPct} /></td>
+                  <td className="cell-right"><MoneyCell v={r.realizedPnLAmount} market={market} /></td>
+                  <td className="cell-right"><MoneyCell v={r.openPnLAmount} market={market} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
   );
 }
 

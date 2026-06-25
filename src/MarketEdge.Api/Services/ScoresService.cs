@@ -11,6 +11,7 @@ public interface IScoresService
     Task<StockScoreDto?> GetScoreAsync(string market, string ticker);
     Task<List<TradeDto>> GetTradesAsync(string market, string? status, string? tradeType);
     Task<TradeStatsDto> GetTradeStatsAsync(string market);
+    Task<List<ScannerPerformanceDto>> GetScannerPerformanceAsync(string market);
 }
 
 public class ScoresService : IScoresService
@@ -97,6 +98,54 @@ public class ScoresService : IScoresService
             Sum("closed", null), Sum("active", null),
             Sum("active", "swing"), Sum("closed", "swing"),
             Sum("active", "positional"), Sum("closed", "positional"));
+    }
+
+    public Task<List<ScannerPerformanceDto>> GetScannerPerformanceAsync(string market)
+        => market == "india" ? GetScannerPerf<IndianTrade>() : GetScannerPerf<USTrade>();
+
+    // Wilson lower bound (z=1.28, matching the worker scoring engine) of the realised win rate.
+    private static decimal WilsonLb(int wins, int total)
+    {
+        if (total <= 0) return 0m;
+        const double z = 1.28;
+        double phat = (double)wins / total;
+        double denom = 1.0 + z * z / total;
+        double centre = phat + z * z / (2.0 * total);
+        double margin = z * Math.Sqrt((phat * (1 - phat) + z * z / (4.0 * total)) / total);
+        return (decimal)Math.Max(0.0, (centre - margin) / denom);
+    }
+
+    private async Task<List<ScannerPerformanceDto>> GetScannerPerf<T>() where T : TradeBase
+    {
+        var rows = await TradeSet<T>()
+            .Where(t => t.EntryScanner != null)
+            .Select(t => new { t.EntryScanner, t.Status, t.PnLPct, t.PnLAmount })
+            .ToListAsync();
+
+        return rows
+            .GroupBy(r => r.EntryScanner!)
+            .Select(g =>
+            {
+                var closed = g.Where(r => r.Status == "closed").ToList();
+                var open = g.Where(r => r.Status == "active").ToList();
+                // wins = closed-in-profit + active-in-profit (provisional), consistent with worker
+                int wins = g.Count(r => (r.Status == "closed" || r.Status == "active") && r.PnLPct > 0);
+                int losses = closed.Count(r => r.PnLPct <= 0);
+                int total = g.Count(r => r.Status == "closed" || (r.Status == "active" && r.PnLPct != null));
+                var withPnl = g.Where(r => r.PnLPct.HasValue).Select(r => r.PnLPct!.Value).ToList();
+                decimal? avgPnl = withPnl.Count > 0 ? Math.Round(withPnl.Average(), 2) : null;
+                decimal Sum(IEnumerable<decimal?> xs) => Math.Round(xs.Where(x => x.HasValue).Select(x => x!.Value).DefaultIfEmpty(0).Sum(), 2);
+                return new ScannerPerformanceDto(
+                    g.Key, g.Count(), closed.Count, open.Count, wins, losses,
+                    total > 0 ? Math.Round(100m * wins / total, 2) : null,
+                    Math.Round(100m * WilsonLb(wins, total), 1),
+                    avgPnl,
+                    Sum(closed.Select(r => r.PnLAmount)),
+                    Sum(open.Select(r => r.PnLAmount)));
+            })
+            .OrderByDescending(d => d.ReliabilityScore)
+            .ThenByDescending(d => d.Trades)
+            .ToList();
     }
 
     private static StockScoreDto ToDto(StockScoresBase s) => new(

@@ -661,3 +661,23 @@ export async function fetchTradeStats(market: Market): Promise<TradeStats> {
   if (!res.ok) throw new Error('Failed to fetch trade stats');
   return res.json();
 }
+
+export interface ScannerPerformance {
+  scanner: string;
+  trades: number;
+  closed: number;
+  openCount: number;
+  wins: number;
+  losses: number;
+  winRatePct?: number | null;
+  reliabilityScore: number;
+  avgPnLPct?: number | null;
+  realizedPnLAmount?: number | null;
+  openPnLAmount?: number | null;
+}
+
+export async function fetchScannerPerformance(market: Market): Promise<ScannerPerformance[]> {
+  const res = await fetch(`${BASE}/${market}/scanners/performance`);
+  if (!res.ok) throw new Error('Failed to fetch scanner performance');
+  return res.json();
+}

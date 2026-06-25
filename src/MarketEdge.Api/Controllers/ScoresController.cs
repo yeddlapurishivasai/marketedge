@@ -44,4 +44,11 @@ public class ScoresController : ControllerBase
         if (!ValidMarket(market)) return BadRequest("Market must be 'india' or 'us'");
         return Ok(await _scores.GetTradeStatsAsync(market));
     }
+
+    [HttpGet("api/{market}/scanners/performance")]
+    public async Task<IActionResult> GetScannerPerformance(string market)
+    {
+        if (!ValidMarket(market)) return BadRequest("Market must be 'india' or 'us'");
+        return Ok(await _scores.GetScannerPerformanceAsync(market));
+    }
 }

@@ -142,13 +142,80 @@ def _track_records(conn, market: str) -> dict[str, dict[str, int]]:
     return {r.Ticker: {"wins": int(r.Wins or 0), "total": int(r.Total or 0)} for r in rows}
 
 
+def _scanner_reliability(conn, market: str) -> dict[str, dict[str, Any]]:
+    """Per-scanner paper-trade success keyed by EntryScanner.
+
+    A scanner's reliability is the Wilson lower bound of its realised win rate
+    (closed trades), with active-in-profit trades counted as provisional wins so a
+    young scanner isn't stuck at zero. This is the per-scanner feedback loop: setups
+    from scanners that have actually paid off carry more weight in the stock score.
+    """
+    table = _t(_TRADES, market)
+    cur = conn.cursor()
+    rows = cur.execute(
+        f"""
+        SELECT EntryScanner,
+               SUM(CASE WHEN Status='closed' THEN 1 ELSE 0 END) AS Closed,
+               SUM(CASE WHEN Status='closed' AND PnLPct > 0 THEN 1 ELSE 0 END) AS ClosedWins,
+               SUM(CASE WHEN (Status='closed' AND PnLPct > 0)
+                          OR (Status='active' AND PnLPct > 0) THEN 1 ELSE 0 END) AS Wins,
+               SUM(CASE WHEN Status='closed' OR (Status='active' AND PnLPct IS NOT NULL)
+                        THEN 1 ELSE 0 END) AS Total,
+               AVG(CAST(PnLPct AS FLOAT)) AS AvgPnL
+        FROM dbo.{table}
+        WHERE EntryScanner IS NOT NULL
+        GROUP BY EntryScanner
+        """
+    ).fetchall()
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        total = int(r.Total or 0)
+        wins = int(r.Wins or 0)
+        wilson = _wilson_lb(float(wins), float(total)) if total > 0 else 0.0
+        out[r.EntryScanner] = {
+            "closed": int(r.Closed or 0),
+            "closedWins": int(r.ClosedWins or 0),
+            "wins": wins,
+            "total": total,
+            "winRate": round(wins / total, 4) if total > 0 else None,
+            "wilson": round(wilson, 4),
+            "avgPnLPct": round(float(r.AvgPnL), 2) if r.AvgPnL is not None else None,
+        }
+    return out
+
+
+def _scanner_flags(conn, market: str, symbols: list[str], scan_date: date) -> dict[str, list[str]]:
+    """Distinct scanners that flagged each symbol on ``scan_date``."""
+    table = _t(_RESULTS, market)
+    out: dict[str, list[str]] = {}
+    if not symbols:
+        return out
+    cur = conn.cursor()
+    for i in range(0, len(symbols), 1000):
+        batch = symbols[i:i + 1000]
+        ph = ",".join("?" * len(batch))
+        rows = cur.execute(
+            f"""
+            SELECT DISTINCT Symbol, ScannerName
+            FROM dbo.{table}
+            WHERE ScanDate = ? AND Symbol IN ({ph})
+            """,
+            [scan_date, *batch],
+        ).fetchall()
+        for r in rows:
+            out.setdefault(r.Symbol, []).append(r.ScannerName)
+    return out
+
+
 # --- check construction -------------------------------------------------------
 def _bool(v: Any) -> bool:
     return bool(v) if v is not None else False
 
 
 def _build_checks(sym: str, *, tech, earn, sig, analyst, stage, series, track,
-                  scanner_hits: int | None = None) -> list[dict]:
+                  scanner_hits: int | None = None,
+                  flag_scanners: list[str] | None = None,
+                  scanner_reliability: dict[str, dict] | None = None) -> list[dict]:
     """Return a list of checks: {group, weight(intra), applicable, bull, label}."""
     checks: list[dict] = []
 
@@ -156,33 +223,30 @@ def _build_checks(sym: str, *, tech, earn, sig, analyst, stage, series, track,
         checks.append({"group": group, "weight": weight, "applicable": bool(applicable),
                        "bull": bool(bull), "label": label})
 
-    close = _fin(getattr(tech, "Close", None)) if tech else None
-    ema50 = ema200 = sma10 = ema20 = None
-    if series is not None and series.n >= 1:
-        last = series.last
-        close = float(series.close[last]) if close is None else close
-        if series.n >= 50:
-            ema50 = float(series.ema(50)[last])
-        if series.n >= 200:
-            ema200 = float(series.ema(200)[last])
-
-    # --- TECHNICAL ---
+    # --- TECHNICAL (screeners + stage-2 screener only; no raw indicators) ---
+    # Raw technical indicators (EMAs, RS, distance-from-high) are intentionally NOT
+    # scored here: they are already encoded by the technical scanners and the stage-2
+    # screener. Technical evidence is therefore which patterns fired and how stage
+    # analysis classifies the name -- "which pattern is performing" drives the score.
     add("tech", 1.0, stage is not None, _bool(getattr(stage, "IsStage2", None)) if stage else False,
         "In Stage-2 uptrend")
-    add("tech", 1.0, close is not None and ema50 is not None, bool(close and ema50 and close > ema50),
-        "Price above 50 EMA")
-    add("tech", 1.0, close is not None and ema200 is not None, bool(close and ema200 and close > ema200),
-        "Price above 200 EMA")
-    rs = _fin(getattr(tech, "Rs", None)) if tech else None
-    add("tech", 1.0, rs is not None, bool(rs is not None and rs >= 70), "RS rating >= 70")
     mom = _fin(getattr(stage, "MomentumScore", None)) if stage else None
-    add("tech", 1.0, mom is not None, bool(mom is not None and mom > 0), "Positive momentum score")
-    f52 = _fin(getattr(tech, "From52wHigh", None)) if tech else None
-    add("tech", 1.0, f52 is not None, bool(f52 is not None and f52 >= -15), "Within 15% of 52w high")
+    add("tech", 1.0, mom is not None, bool(mom is not None and mom > 0), "Positive momentum (stage screen)")
     hits = scanner_hits if scanner_hits is not None else (
         _fin(getattr(tech, "ScannerHits", None)) if tech else None)
     add("tech", 1.5, hits is not None, bool(hits is not None and hits >= 2),
         "Flagged by 2+ scanners")  # scanner-hit-count evidence
+    # Scanner *quality*: weight a flagging scanner by its own paper-trade success.
+    rel = scanner_reliability or {}
+    flags = flag_scanners or []
+    rated = [(s, rel[s]) for s in flags if s in rel and rel[s].get("total", 0) >= 3]
+    if rated:
+        best_name, best = max(rated, key=lambda kv: kv[1]["wilson"])
+        win_pct = round((best["winRate"] or 0) * 100)
+        # weight scales with the best scanner's reliability (1.0 .. 2.5)
+        qweight = 1.0 + 1.5 * best["wilson"]
+        add("tech", qweight, True, best["wilson"] >= 0.5,
+            f"Triggered by proven scanner ({best_name}: {win_pct}% win, {best['total']} trades)")
     quad = (getattr(stage, "Quadrant", None) or "") if stage else ""
     add("tech", 0.5, stage is not None, quad in ("leading", "improving"), "RRG leading/improving")
     adc = (getattr(stage, "ADClassification", None) or "") if stage else ""
@@ -295,6 +359,8 @@ def score_universe(conn, market: str, symbols: list[str], scan_date: date,
     series_cache = series_cache or {}
     if scanner_hits is None:
         scanner_hits = _scanner_hit_counts(conn, market, symbols, scan_date)
+    scanner_reliability = _scanner_reliability(conn, market)
+    scanner_flags = _scanner_flags(conn, market, symbols, scan_date)
 
     tech = _latest_tech(conn, market, symbols)
     earn = _rows_by_symbol(conn, _t(_EARN, market), symbols,
@@ -317,6 +383,7 @@ def score_universe(conn, market: str, symbols: list[str], scan_date: date,
         tr = track.get(sym)
         is_fno = sym in fno
         hits = scanner_hits.get(sym)
+        flags = scanner_flags.get(sym, [])
 
         days_since = None
         freshness = 1.0
@@ -326,7 +393,8 @@ def score_universe(conn, market: str, symbols: list[str], scan_date: date,
                 freshness = 0.5 ** (days_since / 30.0)
 
         checks = _build_checks(sym, tech=t, earn=e, sig=s, analyst=a, stage=st, series=series,
-                               track=tr, scanner_hits=hits)
+                               track=tr, scanner_hits=hits, flag_scanners=flags,
+                               scanner_reliability=scanner_reliability)
         if not any(c["applicable"] for c in checks):
             continue
 
@@ -342,6 +410,15 @@ def score_universe(conn, market: str, symbols: list[str], scan_date: date,
             "daysSinceEarnings": days_since,
             "scannerHits": hits,
             "upsideSource": upside_src,
+            "scanners": [
+                {
+                    "name": s,
+                    "winRate": scanner_reliability.get(s, {}).get("winRate"),
+                    "wilson": scanner_reliability.get(s, {}).get("wilson"),
+                    "trades": scanner_reliability.get(s, {}).get("total", 0),
+                }
+                for s in flags
+            ],
             "swing": {
                 "bull": swing["bull"], "bear": swing["bear"],
                 "phat": swing["phat"], "n": swing["n"], "z": swing["z"],
