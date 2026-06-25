@@ -186,6 +186,14 @@ def process_message(message_content: str) -> None:
         payload = json.loads(decoded)
     except Exception:
         payload = json.loads(message_content)
+
+    # Scanner jobs (feature 011) are dispatched to a dedicated runner. Existing stage-2
+    # messages have no jobType, so default to the stage-2 path below.
+    if str(payload.get("jobType", "")).lower() == "scanner":
+        from scanners.runner import run_scanner_job
+        run_scanner_job(payload)
+        return
+
     market = str(payload["market"]).lower()
     run_id = int(payload["runId"])
     min_market_cap = _coerce_number(payload.get("minMarketCap"))
