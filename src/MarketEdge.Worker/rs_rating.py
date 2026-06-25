@@ -73,30 +73,44 @@ def _load_bars(
     test_sample_only: bool,
     symbols: list[str] | None,
 ) -> pd.DataFrame:
-    """Load recent (Ticker, BarDate, Close) rows for the evaluated universe."""
-    where: list[str] = []
-    params: list[Any] = []
+    """Load recent (Ticker, BarDate, Close) rows for the evaluated universe.
 
-    if symbols:
-        placeholders = ",".join("?" * len(symbols))
-        where.append(f"b.Ticker IN ({placeholders})")
-        params.extend(symbols)
-
+    The symbol filter is chunked: SQL Server caps a statement at 2100 parameters,
+    so a single ``Ticker IN (?,?,...)`` over the full universe (>2100 symbols)
+    fails with a 07002 error. We batch the IN list and concatenate the results.
+    """
+    sample_clause = ""
     if test_sample_only:
-        where.append(
-            f"b.Ticker IN (SELECT Symbol FROM dbo.{stocks_table} WHERE IsTestSample = 1)"
+        sample_clause = (
+            f" AND b.Ticker IN (SELECT Symbol FROM dbo.{stocks_table} WHERE IsTestSample = 1)"
+            if symbols
+            else f"b.Ticker IN (SELECT Symbol FROM dbo.{stocks_table} WHERE IsTestSample = 1)"
         )
 
-    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-
-    query = f"""
-        SELECT b.Ticker, b.BarDate, b.[Close]
-        FROM dbo.{bars_table} b
-        {where_sql}
-        ORDER BY b.Ticker, b.BarDate
-    """
     cursor = conn.cursor()
-    rows = cursor.execute(query, params).fetchall()
+    rows: list[Any] = []
+
+    def _run(where_sql: str, params: list[Any]) -> None:
+        query = f"""
+            SELECT b.Ticker, b.BarDate, b.[Close]
+            FROM dbo.{bars_table} b
+            {where_sql}
+            ORDER BY b.Ticker, b.BarDate
+        """
+        rows.extend(cursor.execute(query, params).fetchall())
+
+    if symbols:
+        # Keep well under the 2100-parameter ceiling.
+        batch_size = 1000
+        for start in range(0, len(symbols), batch_size):
+            chunk = symbols[start:start + batch_size]
+            placeholders = ",".join("?" * len(chunk))
+            where_sql = f"WHERE b.Ticker IN ({placeholders}){sample_clause}"
+            _run(where_sql, list(chunk))
+    else:
+        where_sql = f"WHERE {sample_clause}" if sample_clause else ""
+        _run(where_sql, [])
+
     if not rows:
         return pd.DataFrame(columns=["ticker", "bar_date", "close"])
     return pd.DataFrame(
