@@ -345,6 +345,22 @@ export interface LookupEpsForecast {
   revisionsDown: number;
 }
 
+export interface UpsideCase {
+  eps?: number | null;
+  upsidePct?: number | null;
+  impliedPrice?: number | null;
+}
+
+export interface UpsideProjection {
+  horizon: string;            // 'quarter' | 'year'
+  source: string;            // 'deterministic' | 'ai'
+  currentPrice?: number | null;
+  baseEps?: number | null;
+  bear?: UpsideCase | null;
+  base?: UpsideCase | null;
+  bull?: UpsideCase | null;
+}
+
 export interface StockLookupDetail {
   symbol: string;
   companyName: string;
@@ -359,6 +375,8 @@ export interface StockLookupDetail {
   analyst?: LookupAnalyst | null;
   quarterlyEps: LookupEpsForecast[];
   yearlyEps: LookupEpsForecast[];
+  quarterUpside?: UpsideProjection | null;
+  yearUpside?: UpsideProjection | null;
 }
 
 export interface LookupBar {

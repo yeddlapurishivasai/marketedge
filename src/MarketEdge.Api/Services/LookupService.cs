@@ -74,11 +74,14 @@ public class LookupService : ILookupService
             ? await _db.USTickers.FirstOrDefaultAsync(t => t.Ticker.ToUpper() == upper)
             : await _db.IndianTickers.FirstOrDefaultAsync(t => t.Ticker.ToUpper() == upper);
 
-        TickerTechnicalBase? tech = IsUs(market)
-            ? await _db.USTickerTechnical.Where(t => t.Ticker.ToUpper() == upper)
-                .OrderByDescending(t => t.AsOfDate).FirstOrDefaultAsync()
-            : await _db.IndianTickerTechnical.Where(t => t.Ticker.ToUpper() == upper)
-                .OrderByDescending(t => t.AsOfDate).FirstOrDefaultAsync();
+        // The RS step and the price/technical step write separate dated rows (RS-only today,
+        // prices on the last bar date). Coalesce the most recent rows so every field is filled.
+        List<TickerTechnicalBase> techRows = IsUs(market)
+            ? (await _db.USTickerTechnical.Where(t => t.Ticker.ToUpper() == upper)
+                .OrderByDescending(t => t.AsOfDate).Take(5).ToListAsync()).Cast<TickerTechnicalBase>().ToList()
+            : (await _db.IndianTickerTechnical.Where(t => t.Ticker.ToUpper() == upper)
+                .OrderByDescending(t => t.AsOfDate).Take(5).ToListAsync()).Cast<TickerTechnicalBase>().ToList();
+        LookupTechnicalDto? tech = techRows.Count == 0 ? null : ToTechDtoCoalesced(techRows);
 
         AnalystSnapshotBase? analyst = IsUs(market)
             ? await _db.USAnalystSnapshots.Where(a => a.Ticker.ToUpper() == upper)
@@ -101,12 +104,18 @@ public class LookupService : ILookupService
         var quarterly = eps.Where(e => e.PeriodType == "Q").OrderBy(e => e.PeriodEndDate).Select(ToEpsDto).ToList();
         var yearly = eps.Where(e => e.PeriodType == "Y").OrderBy(e => e.PeriodEndDate).Select(ToEpsDto).ToList();
 
+        var analystDto = analyst == null ? null : ToAnalystDto(analyst);
+        decimal? currentPrice = tech?.Close;
+        var yearUpside = BuildProjection("year", currentPrice, analystDto?.CurrentYearEps, yearly);
+        var quarterUpside = BuildProjection("quarter", currentPrice, analystDto?.CurrentQuarterEps, quarterly);
+
         return new StockLookupDetail(
             symbol, companyName, broadSector, industry, market,
             ticker?.Exchange, ticker?.Active ?? true, ticker?.IsFno ?? false, ticker?.BarsAvailable,
-            tech == null ? null : ToTechDto(tech),
-            analyst == null ? null : ToAnalystDto(analyst),
-            quarterly, yearly);
+            tech,
+            analystDto,
+            quarterly, yearly,
+            quarterUpside, yearUpside);
     }
 
     public async Task<IReadOnlyList<LookupBarDto>> GetBarsAsync(string market, string symbol, string timeframe)
@@ -159,9 +168,53 @@ public class LookupService : ILookupService
         return result;
     }
 
-    private static LookupTechnicalDto ToTechDto(TickerTechnicalBase t) => new(
-        t.AsOfDate, t.Close, t.DayPct, t.Open, t.High, t.Low, t.High52w, t.From52wHigh, t.MarketCap,
-        t.Rs, t.Rs1d, t.Rs1w, t.Rs1m, t.Rs3m, t.Rs6m, t.RsType, t.RsDate, t.ScannerHits, t.LastScannerHit);
+    private static LookupTechnicalDto ToTechDtoCoalesced(List<TickerTechnicalBase> rows)
+    {
+        // rows are newest-first; pick the newest non-null value for each field so a fresh
+        // RS-only row doesn't blank out prices written on an earlier dated row.
+        decimal? D(Func<TickerTechnicalBase, decimal?> f) => rows.Select(f).FirstOrDefault(v => v.HasValue);
+        long? L(Func<TickerTechnicalBase, long?> f) => rows.Select(f).FirstOrDefault(v => v.HasValue);
+        int? I(Func<TickerTechnicalBase, int?> f) => rows.Select(f).FirstOrDefault(v => v.HasValue);
+        DateOnly? Dt(Func<TickerTechnicalBase, DateOnly?> f) => rows.Select(f).FirstOrDefault(v => v.HasValue);
+        string? S(Func<TickerTechnicalBase, string?> f) => rows.Select(f).FirstOrDefault(v => !string.IsNullOrEmpty(v));
+        return new LookupTechnicalDto(
+            rows[0].AsOfDate,
+            D(t => t.Close), D(t => t.DayPct), D(t => t.Open), D(t => t.High), D(t => t.Low),
+            D(t => t.High52w), D(t => t.From52wHigh), L(t => t.MarketCap),
+            I(t => t.Rs), I(t => t.Rs1d), I(t => t.Rs1w), I(t => t.Rs1m), I(t => t.Rs3m), I(t => t.Rs6m),
+            S(t => t.RsType), Dt(t => t.RsDate), I(t => t.ScannerHits), Dt(t => t.LastScannerHit));
+    }
+
+    // Best/base/worst EPS upside at constant P/E for a horizon. Base EPS is the trailing
+    // figure (analyst current quarter/year EPS); if absent, the current-period forecast
+    // consensus is used. The projection target is the forward-most forecast row, whose
+    // Low / Consensus / High estimates give the bear / base / bull cases.
+    private static UpsideProjectionDto? BuildProjection(
+        string horizon, decimal? currentPrice, decimal? baseEpsFromAnalyst,
+        IReadOnlyList<LookupEpsForecastDto> forecasts)
+    {
+        if (forecasts.Count == 0) return null;
+        var proj = forecasts[^1];
+
+        decimal? baseEps = baseEpsFromAnalyst;
+        if ((baseEps is null || baseEps <= 0) && forecasts.Count >= 2)
+            baseEps = forecasts[0].ConsensusEps;
+        if (baseEps is null || baseEps <= 0)
+            return new UpsideProjectionDto(horizon, "deterministic", currentPrice, baseEps, null, null, null);
+
+        UpsideCaseDto? Case(decimal? eps)
+        {
+            if (eps is null) return null;
+            var ratio = eps.Value / baseEps.Value;
+            var pct = decimal.Round((ratio - 1m) * 100m, 2);
+            decimal? price = currentPrice.HasValue ? decimal.Round(currentPrice.Value * ratio, 2) : null;
+            return new UpsideCaseDto(eps, pct, price);
+        }
+
+        return new UpsideProjectionDto(
+            horizon, "deterministic", currentPrice, baseEps,
+            Case(proj.LowEps), Case(proj.ConsensusEps), Case(proj.HighEps));
+    }
 
     private static LookupAnalystDto ToAnalystDto(AnalystSnapshotBase a) => new(
         a.AsOfDate, a.ConsensusRating, a.NumAnalysts,

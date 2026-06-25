@@ -5,7 +5,8 @@ import {
   type IChartApi, type ISeriesApi
 } from 'lightweight-charts';
 import type {
-  Market, StockLookupDetail, LookupBar, LookupCandidate, LookupEpsForecast
+  Market, StockLookupDetail, LookupBar, LookupCandidate, LookupEpsForecast,
+  UpsideProjection, UpsideCase
 } from '../api';
 import {
   searchLookup, fetchLookupDetail, fetchLookupBars, refreshAnalystData
@@ -152,40 +153,55 @@ function fmtPeriod(d: string): string {
   return dt.toLocaleString('en-US', { month: 'short', year: 'numeric' });
 }
 
-// Constant-P/E upside: at a held P/E, price scales with EPS, so the implied price move
-// from a base EPS to a projected EPS is (projected / base - 1) * 100. Only meaningful when
-// the base EPS is positive.
-function constPeUpside(base?: number | null, projected?: number | null): number | null {
-  if (base == null || projected == null || base <= 0) return null;
-  return (projected / base - 1) * 100;
-}
+// Best/base/worst EPS upside, computed server-side at constant P/E. Each case shows the
+// implied % price move and the implied stock price for the Low / Consensus / High estimate.
+function UpsideCases({ year, quarter, market }: { year?: UpsideProjection | null; quarter?: UpsideProjection | null; market: Market }) {
+  const sym = currencySymbol(market);
+  const has = (p?: UpsideProjection | null): p is UpsideProjection => !!p && !!(p.bear || p.base || p.bull);
+  if (!has(year) && !has(quarter)) return null;
 
-// Fallback when analyst quarter/year EPS is missing: use the nearest two consensus EPS rows
-// from the forecast list (ordered by period end date) to derive the period-over-period move.
-function forecastUpside(rows: LookupEpsForecast[]): number | null {
-  if (rows.length < 2) return null;
-  return constPeUpside(rows[0].consensusEps, rows[1].consensusEps);
-}
+  const caseCell = (c?: UpsideCase | null) => {
+    if (!c || c.upsidePct == null) return <span className="muted-note">—</span>;
+    const up = c.upsidePct;
+    return (
+      <div className="upside-case">
+        <span className={`upside-value-sm ${up >= 0 ? 'rev-up' : 'rev-down'}`}>{up >= 0 ? '+' : ''}{up.toFixed(1)}%</span>
+        {c.impliedPrice != null && <span className="upside-price">{sym}{c.impliedPrice.toFixed(2)}</span>}
+      </div>
+    );
+  };
 
-function UpsideCallout({ quarterUpside, yearUpside }: { quarterUpside: number | null; yearUpside: number | null }) {
-  if (quarterUpside == null && yearUpside == null) return null;
-  const cell = (label: string, v: number | null) => (
-    <div className="upside-cell">
-      <span className="upside-label">{label}</span>
-      <span className={`upside-value ${v == null ? '' : v >= 0 ? 'rev-up' : 'rev-down'}`}>
-        {v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
-      </span>
-    </div>
-  );
+  const row = (label: string, p?: UpsideProjection | null) => has(p) ? (
+    <tr>
+      <td style={{ fontWeight: 600 }}>
+        {label}{p.source === 'ai' && <span className="pill" style={{ marginLeft: 6 }}>AI</span>}
+      </td>
+      <td className="cell-center">{caseCell(p.bear)}</td>
+      <td className="cell-center">{caseCell(p.base)}</td>
+      <td className="cell-center">{caseCell(p.bull)}</td>
+    </tr>
+  ) : null;
+
   return (
     <div className="upside-callout">
       <span className="upside-title">Potential upside @ constant P/E</span>
-      <div className="upside-grid">
-        {cell('Per quarter', quarterUpside)}
-        {cell('Per year', yearUpside)}
-      </div>
+      <table className="table" style={{ marginTop: 8 }}>
+        <thead>
+          <tr>
+            <th>Horizon</th>
+            <th style={{ textAlign: 'center' }}>Bear · low EPS</th>
+            <th style={{ textAlign: 'center' }}>Base · consensus</th>
+            <th style={{ textAlign: 'center' }}>Bull · high EPS</th>
+          </tr>
+        </thead>
+        <tbody>
+          {row('Per quarter', quarter)}
+          {row('Per year', year)}
+        </tbody>
+      </table>
       <p className="muted-note">
-        Implied price move if the current P/E holds and EPS reaches the next-quarter / next-year estimate.
+        Holds the current P/E and moves price with the analyst Low / Consensus / High EPS estimate —
+        each cell shows the implied % move and price.
       </p>
     </div>
   );
@@ -383,10 +399,7 @@ export function StockDetailView({ market, symbol }: { market: Market; symbol: st
               </tr>
             </tbody>
           </table>
-          <UpsideCallout
-            quarterUpside={constPeUpside(a.currentQuarterEps, a.nextQuarterEps) ?? forecastUpside(detail.quarterlyEps)}
-            yearUpside={constPeUpside(a.currentYearEps, a.nextYearEps) ?? forecastUpside(detail.yearlyEps)}
-          />
+          <UpsideCases year={detail.yearUpside} quarter={detail.quarterUpside} market={market} />
           {a.numAnalysts != null && <p className="muted-note">Based on {a.numAnalysts} analysts offering recommendations for '{detail.symbol}'.</p>}
         </div>
       )}

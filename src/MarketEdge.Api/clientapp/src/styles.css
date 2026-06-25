@@ -1240,6 +1240,9 @@ body {
 .upside-cell { display: flex; flex-direction: column; gap: 2px; }
 .upside-label { font-size: 0.72rem; color: var(--text-secondary); }
 .upside-value { font-size: 1.35rem; font-weight: 800; }
+.upside-case { display: flex; flex-direction: column; gap: 1px; align-items: center; }
+.upside-value-sm { font-size: 0.95rem; font-weight: 800; }
+.upside-price { font-size: 0.74rem; color: var(--text-secondary); }
 
 .sub-tabs {
   display: inline-flex; gap: 4px; margin: 4px 0 14px;
