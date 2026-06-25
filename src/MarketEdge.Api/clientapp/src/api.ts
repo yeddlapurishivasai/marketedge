@@ -497,6 +497,48 @@ export async function updateScannerSchedule(market: Market, body: { enabled: boo
   return res.json();
 }
 
+// Nightly/weekend job schedules (fundamentals refresh, weekend stage2 analysis).
+export interface JobSchedule {
+  market: string;
+  enabled: boolean;
+  hourLocal: number;
+  lastEnqueuedAt?: string | null;
+  updatedAt: string;
+  lastRunAt?: string | null;
+}
+
+export async function fetchFundamentalsSchedule(market: Market): Promise<JobSchedule> {
+  const res = await fetch(`${BASE}/${market}/ingestion/fundamentals-schedule`);
+  if (!res.ok) throw new Error('Failed to load fundamentals schedule');
+  return res.json();
+}
+
+export async function updateFundamentalsSchedule(market: Market, body: { enabled: boolean; hourLocal?: number }): Promise<JobSchedule> {
+  const res = await fetch(`${BASE}/${market}/ingestion/fundamentals-schedule`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error('Failed to update fundamentals schedule');
+  return res.json();
+}
+
+export async function fetchStage2Schedule(market: Market): Promise<JobSchedule> {
+  const res = await fetch(`${BASE}/${market}/analysis/schedule`);
+  if (!res.ok) throw new Error('Failed to load stage2 schedule');
+  return res.json();
+}
+
+export async function updateStage2Schedule(market: Market, body: { enabled: boolean; hourLocal?: number }): Promise<JobSchedule> {
+  const res = await fetch(`${BASE}/${market}/analysis/schedule`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error('Failed to update stage2 schedule');
+  return res.json();
+}
+
 // ---------- Fundamental Scanners ----------
 
 export interface FundamentalRow {

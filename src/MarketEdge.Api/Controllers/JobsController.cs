@@ -41,6 +41,22 @@ public class JobsController : ControllerBase
 
     // ── Stage 2 Analysis ──
 
+    [HttpGet("api/{market}/analysis/schedule")]
+    public async Task<IActionResult> GetStage2Schedule(string market)
+    {
+        if (market != "india" && market != "us")
+            return BadRequest("Market must be 'india' or 'us'");
+        return Ok(await _jobService.GetStage2ScheduleAsync(market));
+    }
+
+    [HttpPut("api/{market}/analysis/schedule")]
+    public async Task<IActionResult> UpdateStage2Schedule(string market, [FromBody] UpdateJobScheduleRequest request)
+    {
+        if (market != "india" && market != "us")
+            return BadRequest("Market must be 'india' or 'us'");
+        return Ok(await _jobService.UpdateStage2ScheduleAsync(market, request));
+    }
+
     [HttpPost("api/{market}/analysis/trigger")]
     public async Task<IActionResult> TriggerAnalysis(
         string market,

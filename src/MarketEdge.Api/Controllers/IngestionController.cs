@@ -1,3 +1,4 @@
+using MarketEdge.Api.Models;
 using MarketEdge.Api.Services;
 using Microsoft.AspNetCore.Mvc;
 
@@ -26,5 +27,21 @@ public class IngestionController : ControllerBase
             return BadRequest(ex.Message);
         }
         return Ok(new { runId });
+    }
+
+    private static bool ValidMarket(string market) => market is "india" or "us";
+
+    [HttpGet("api/{market}/ingestion/fundamentals-schedule")]
+    public async Task<IActionResult> GetFundamentalsSchedule(string market)
+    {
+        if (!ValidMarket(market)) return BadRequest("Market must be 'india' or 'us'");
+        return Ok(await _ingestionService.GetFundamentalsScheduleAsync(market));
+    }
+
+    [HttpPut("api/{market}/ingestion/fundamentals-schedule")]
+    public async Task<IActionResult> UpdateFundamentalsSchedule(string market, [FromBody] UpdateJobScheduleRequest request)
+    {
+        if (!ValidMarket(market)) return BadRequest("Market must be 'india' or 'us'");
+        return Ok(await _ingestionService.UpdateFundamentalsScheduleAsync(market, request));
     }
 }

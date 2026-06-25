@@ -18,6 +18,8 @@ public interface IIngestionService
     Task<int> TriggerAsync(string market, TriggerIngestionRequest request);
     Task<int> RefreshStockAsync(string market, string symbol);
     Task<int> TriggerFundamentalsAsync(string market, string triggeredBy = "manual");
+    Task<JobScheduleDto> GetFundamentalsScheduleAsync(string market);
+    Task<JobScheduleDto> UpdateFundamentalsScheduleAsync(string market, UpdateJobScheduleRequest request);
 }
 
 /// <summary>
@@ -237,6 +239,46 @@ public class IngestionService : IIngestionService
         await _queueClient.CreateIfNotExistsAsync();
         await _queueClient.SendMessageAsync(Convert.ToBase64String(Encoding.UTF8.GetBytes(json)));
         _logger.LogInformation("Enqueued ingestion message: {Message}", json);
+    }
+
+    public async Task<JobScheduleDto> GetFundamentalsScheduleAsync(string market)
+    {
+        var s = await _db.FundamentalsSchedules.FirstOrDefaultAsync(x => x.Market == market);
+        if (s == null)
+        {
+            s = new FundamentalsSchedule { Market = market, Enabled = true, HourLocal = 20, UpdatedAt = DateTime.UtcNow };
+            _db.FundamentalsSchedules.Add(s);
+            await _db.SaveChangesAsync();
+        }
+        return new JobScheduleDto(s.Market, s.Enabled, s.HourLocal, s.LastEnqueuedAt, s.UpdatedAt,
+            await GetLastRunAtAsync(FundamentalsJobType, market));
+    }
+
+    public async Task<JobScheduleDto> UpdateFundamentalsScheduleAsync(string market, UpdateJobScheduleRequest request)
+    {
+        var s = await _db.FundamentalsSchedules.FirstOrDefaultAsync(x => x.Market == market);
+        if (s == null)
+        {
+            s = new FundamentalsSchedule { Market = market };
+            _db.FundamentalsSchedules.Add(s);
+        }
+        s.Enabled = request.Enabled;
+        if (request.HourLocal is int h && h is >= 0 and <= 23) s.HourLocal = h;
+        s.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return new JobScheduleDto(s.Market, s.Enabled, s.HourLocal, s.LastEnqueuedAt, s.UpdatedAt,
+            await GetLastRunAtAsync(FundamentalsJobType, market));
+    }
+
+    private async Task<DateTime?> GetLastRunAtAsync(string jobType, string market)
+    {
+        var job = await _db.JobRuns
+            .Where(j => j.JobType == jobType && j.Market == market)
+            .OrderByDescending(j => j.Id)
+            .Select(j => new { j.CompletedAt, j.StartedAt, j.CreatedAt })
+            .FirstOrDefaultAsync();
+        if (job == null) return null;
+        return job.CompletedAt ?? job.StartedAt ?? job.CreatedAt;
     }
 
     private static string GetIsoWeekNumber(DateTime date)
