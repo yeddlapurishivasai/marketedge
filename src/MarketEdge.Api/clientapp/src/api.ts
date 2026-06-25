@@ -423,6 +423,7 @@ export interface ScannerSchedule {
   intervalMinutes: number;
   lastEnqueuedAt?: string | null;
   updatedAt: string;
+  isMarketOpen: boolean;
 }
 
 export async function fetchScanners(market: Market): Promise<ScannerInfo[]> {

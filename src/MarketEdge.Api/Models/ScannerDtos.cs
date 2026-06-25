@@ -59,7 +59,7 @@ public record ScannerResultDto(
     decimal? ClosePrice, decimal? DayChangePct, long? Volume, decimal? RelVolume,
     int? RsRating, string? TriggerDetails);
 
-public record ScannerScheduleDto(string Market, bool Enabled, int IntervalMinutes, DateTime? LastEnqueuedAt, DateTime UpdatedAt);
+public record ScannerScheduleDto(string Market, bool Enabled, int IntervalMinutes, DateTime? LastEnqueuedAt, DateTime UpdatedAt, bool IsMarketOpen);
 
 public class TriggerScannerRequest
 {

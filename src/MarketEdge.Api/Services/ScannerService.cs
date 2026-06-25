@@ -140,9 +140,10 @@ public class ScannerService : IScannerService
     public async Task<ScannerScheduleDto> GetScheduleAsync(string market)
     {
         var s = await _db.ScannerSchedules.FirstOrDefaultAsync(x => x.Market == market);
+        var open = MarketHours.IsOpen(market);
         if (s == null)
-            return new ScannerScheduleDto(market, false, 15, null, DateTime.UtcNow);
-        return new ScannerScheduleDto(s.Market, s.Enabled, s.IntervalMinutes, s.LastEnqueuedAt, s.UpdatedAt);
+            return new ScannerScheduleDto(market, false, 15, null, DateTime.UtcNow, open);
+        return new ScannerScheduleDto(s.Market, s.Enabled, s.IntervalMinutes, s.LastEnqueuedAt, s.UpdatedAt, open);
     }
 
     public async Task<ScannerScheduleDto> UpdateScheduleAsync(string market, UpdateScannerScheduleRequest request)
@@ -157,7 +158,7 @@ public class ScannerService : IScannerService
         if (request.IntervalMinutes is int iv && iv > 0) s.IntervalMinutes = iv;
         s.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
-        return new ScannerScheduleDto(s.Market, s.Enabled, s.IntervalMinutes, s.LastEnqueuedAt, s.UpdatedAt);
+        return new ScannerScheduleDto(s.Market, s.Enabled, s.IntervalMinutes, s.LastEnqueuedAt, s.UpdatedAt, MarketHours.IsOpen(market));
     }
 }
 

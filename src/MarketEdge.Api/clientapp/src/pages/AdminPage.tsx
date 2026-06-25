@@ -1,72 +1,43 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { Market, JobRun } from '../api';
-import { fetchJobRuns, triggerIngestion } from '../api';
+import type { Market, ScannerSchedule } from '../api';
+import { triggerIngestion, fetchScannerSchedule, updateScannerSchedule } from '../api';
 import {
-  ChevronLeft, RefreshCw, Database, PlayCircle,
-  Clock, CheckCircle2, XCircle, Loader2, AlertCircle
+  ChevronLeft, Database, PlayCircle, Loader2, Clock
 } from 'lucide-react';
 
-const STATUS_ICON: Record<string, React.ReactNode> = {
-  queued: <Clock size={16} />,
-  running: <Loader2 size={16} className="spin-icon" />,
-  completed: <CheckCircle2 size={16} />,
-  failed: <XCircle size={16} />,
-  cancelled: <AlertCircle size={16} />
-};
-
-const STATUS_CLASS: Record<string, string> = {
-  queued: 'status-queued',
-  running: 'status-running',
-  completed: 'status-completed',
-  failed: 'status-failed',
-  cancelled: 'status-cancelled'
-};
-
-function formatDuration(seconds?: number): string {
-  if (!seconds) return '—';
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  const min = Math.floor(seconds / 60);
-  const sec = Math.round(seconds % 60);
-  return `${min}m ${sec}s`;
-}
-
-function formatDate(dateStr?: string): string {
-  return dateStr ? new Date(dateStr).toLocaleString() : '—';
-}
-
-function runMode(run: JobRun): string {
-  return run.parameters?.testSample ? 'Sample (200)' : 'Full universe';
-}
+const SCHEDULE_MARKETS: { market: Market; label: string }[] = [
+  { market: 'india', label: '🇮🇳 India (NSE)' },
+  { market: 'us', label: '🇺🇸 US' },
+];
 
 export default function AdminPage() {
   const { market } = useParams<{ market: string }>();
   const navigate = useNavigate();
   const m = market as Market;
 
-  const [runs, setRuns] = useState<JobRun[]>([]);
-  const [loading, setLoading] = useState(true);
   const [testSample, setTestSample] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  const [schedules, setSchedules] = useState<Record<string, ScannerSchedule>>({});
+
+  const loadSchedules = useCallback(async () => {
     try {
-      const data = await fetchJobRuns({ market: m, jobType: 'data_ingestion', pageSize: 25 });
-      setRuns(data);
+      const entries = await Promise.all(
+        SCHEDULE_MARKETS.map(async ({ market }) => [market, await fetchScannerSchedule(market)] as const)
+      );
+      setSchedules(Object.fromEntries(entries));
     } catch { /* ignore */ }
-    setLoading(false);
-  }, [m]);
+  }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadSchedules(); }, [loadSchedules]);
 
-  // Auto-refresh every 4s while a run is active.
+  // Keep the market-open indicators fresh.
   useEffect(() => {
-    const hasActive = runs.some(r => r.status === 'running' || r.status === 'queued');
-    if (!hasActive) return;
-    const interval = setInterval(load, 4000);
+    const interval = setInterval(loadSchedules, 30000);
     return () => clearInterval(interval);
-  }, [runs, load]);
+  }, [loadSchedules]);
 
   const ingest = async () => {
     setBusy(true);
@@ -74,11 +45,22 @@ export default function AdminPage() {
     try {
       const { runId } = await triggerIngestion(m, { testSample });
       setMessage(`Started ingestion run #${runId} (${testSample ? 'Sample 200' : 'Full universe'}).`);
-      await load();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Failed to trigger ingestion.');
     }
     setBusy(false);
+  };
+
+  const toggleSchedule = async (market: Market) => {
+    const s = schedules[market];
+    if (!s) return;
+    try {
+      const updated = await updateScannerSchedule(market, {
+        enabled: !s.enabled,
+        intervalMinutes: s.intervalMinutes,
+      });
+      setSchedules(prev => ({ ...prev, [market]: updated }));
+    } catch { /* ignore */ }
   };
 
   return (
@@ -92,11 +74,6 @@ export default function AdminPage() {
           Data Ingestion
         </h1>
         <span className="page-subtitle">{m === 'india' ? '🇮🇳 India' : '🇺🇸 US'}</span>
-        <div style={{ marginLeft: 'auto' }}>
-          <button className="btn btn-outline btn-sm" onClick={load}>
-            <RefreshCw size={14} /> Refresh
-          </button>
-        </div>
       </div>
 
       {/* Ingest panel */}
@@ -106,7 +83,6 @@ export default function AdminPage() {
           (seeds tickers, rolling 1-year window) → technicals → fundamentals.
         </p>
 
-        {/* Run mode: sample vs full universe (mirrors Stage 2) */}
         <div className="form-group">
           <label className="form-label">Run Mode</label>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -149,59 +125,57 @@ export default function AdminPage() {
             {message}
           </div>
         )}
+
+        <div style={{ marginTop: 14, fontSize: '0.82rem' }}>
+          <button className="btn btn-outline btn-sm" onClick={() => navigate(`/${m}/jobs`)}>
+            View job runs →
+          </button>
+        </div>
       </div>
 
-      {/* Recent runs */}
-      <h2 className="section-title">Recent ingestion runs</h2>
-      <div className="table-container">
-        {loading ? (
-          <div className="loading"><div className="spinner" />Loading...</div>
-        ) : runs.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-state-icon">🗄️</div>
-            <p className="empty-state-text">No ingestion runs yet. Click "Ingest Data" above.</p>
-          </div>
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Mode</th>
-                <th>Status</th>
-                <th>Progress</th>
-                <th>Started</th>
-                <th>Duration</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {runs.map(run => (
-                <tr key={run.id}>
-                  <td style={{ fontWeight: 600 }}>#{run.id}</td>
-                  <td>{runMode(run)}</td>
-                  <td>
-                    <span className={`status-badge ${STATUS_CLASS[run.status]}`}>
-                      {STATUS_ICON[run.status]} {run.status}
-                    </span>
-                  </td>
-                  <td>
-                    <div className="progress-bar-container">
-                      <div className="progress-bar-fill" style={{ width: `${run.progress}%` }} />
-                      <span className="progress-bar-text">{run.progress}%</span>
-                    </div>
-                  </td>
-                  <td className="cell-muted">{formatDate(run.startedAt)}</td>
-                  <td className="cell-muted">{formatDuration(run.durationSeconds)}</td>
-                  <td>
-                    <button className="btn btn-outline btn-sm" onClick={() => navigate(`/${m}/jobs`)}>
-                      Details
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+      {/* Scanner schedule */}
+      <div className="card" style={{ padding: 20, marginBottom: 20, maxWidth: 560 }}>
+        <h2 className="section-title" style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Clock size={18} /> Scanner Schedule
+        </h2>
+        <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+          When enabled, all technical scanners run every 15 minutes during market hours
+          (auto start/stop on each exchange's local trading session).
+        </p>
+
+        {SCHEDULE_MARKETS.map(({ market, label }) => {
+          const s = schedules[market];
+          const open = s?.isMarketOpen ?? false;
+          return (
+            <div
+              key={market}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                padding: '10px 0', borderTop: '1px solid var(--border)',
+              }}
+            >
+              <span style={{ fontWeight: 600, minWidth: 140 }}>{label}</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem' }}>
+                <span
+                  style={{
+                    width: 9, height: 9, borderRadius: '50%',
+                    background: open ? 'var(--success)' : 'var(--danger)',
+                    display: 'inline-block',
+                  }}
+                />
+                {open ? 'Market open' : 'Market closed'}
+              </span>
+              <button
+                className={`btn btn-sm ${s?.enabled ? 'btn-primary' : 'btn-outline'}`}
+                style={{ marginLeft: 'auto' }}
+                disabled={!s}
+                onClick={() => toggleSchedule(market)}
+              >
+                {s?.enabled ? 'Enabled' : 'Disabled'}
+              </button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

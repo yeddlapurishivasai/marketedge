@@ -1,13 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { Market, ScannerInfo, ScannerResult, ScannerSchedule } from '../api';
+import type { Market, ScannerInfo, ScannerResult } from '../api';
 import {
-  fetchScanners, triggerScanner, fetchScannerDates, fetchScannerResults,
-  fetchScannerSchedule, updateScannerSchedule
+  fetchScanners, triggerScanner, fetchScannerDates, fetchScannerResults
 } from '../api';
 import { StockLookupModal } from './StockLookupPage';
 import {
-  ChevronLeft, RefreshCw, Radar, PlayCircle, Loader2, Clock
+  ChevronLeft, RefreshCw, Radar, PlayCircle, Loader2
 } from 'lucide-react';
 
 function fmtVol(v?: number | null): string {
@@ -195,7 +194,6 @@ export default function ScannersPage() {
   const m = market as Market;
 
   const [scanners, setScanners] = useState<ScannerInfo[]>([]);
-  const [schedule, setSchedule] = useState<ScannerSchedule | null>(null);
   const [universe, setUniverse] = useState<'stage2' | 'all'>('stage2');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -205,9 +203,8 @@ export default function ScannersPage() {
 
   const load = useCallback(async () => {
     try {
-      const [s, sch] = await Promise.all([fetchScanners(m), fetchScannerSchedule(m)]);
+      const s = await fetchScanners(m);
       setScanners(s);
-      setSchedule(sch);
       setSelected(prev => prev ?? s.find(x => !x.comingSoon)?.name ?? null);
     } catch { /* ignore */ }
     setLoading(false);
@@ -237,14 +234,6 @@ export default function ScannersPage() {
       setMessage(e instanceof Error ? e.message : 'Failed to trigger scan.');
     }
     setBusy(false);
-  };
-
-  const toggleSchedule = async () => {
-    if (!schedule) return;
-    try {
-      const updated = await updateScannerSchedule(m, { enabled: !schedule.enabled, intervalMinutes: schedule.intervalMinutes });
-      setSchedule(updated);
-    } catch { /* ignore */ }
   };
 
   // Group scanners by family for the side panel.
@@ -296,21 +285,6 @@ export default function ScannersPage() {
           {busy ? <Loader2 size={15} className="spin-icon" /> : <PlayCircle size={15} />}
           &nbsp;Run Pre-Close Scan
         </button>
-
-        {schedule && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 'auto' }}>
-            <Clock size={15} style={{ color: 'var(--text-muted)' }} />
-            <span style={{ fontSize: '0.84rem' }} className="cell-muted">
-              Auto every {schedule.intervalMinutes}m (market hours)
-            </span>
-            <button
-              className={`btn btn-sm ${schedule.enabled ? 'btn-primary' : 'btn-outline'}`}
-              onClick={toggleSchedule}
-            >
-              {schedule.enabled ? 'Enabled' : 'Disabled'}
-            </button>
-          </div>
-        )}
       </div>
 
       {message && (

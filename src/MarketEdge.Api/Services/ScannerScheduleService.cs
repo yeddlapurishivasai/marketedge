@@ -16,11 +16,7 @@ public class ScannerScheduleService : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<ScannerScheduleService> _logger;
 
-    private static readonly (string Market, string TzId, TimeSpan Open, TimeSpan Close)[] Markets =
-    {
-        ("india", "India Standard Time", new TimeSpan(9, 15, 0), new TimeSpan(15, 30, 0)),
-        ("us", "Eastern Standard Time", new TimeSpan(9, 30, 0), new TimeSpan(16, 0, 0)),
-    };
+    private static readonly string[] Markets = { "india", "us" };
 
     public ScannerScheduleService(IServiceScopeFactory scopeFactory, ILogger<ScannerScheduleService> logger)
     {
@@ -50,12 +46,12 @@ public class ScannerScheduleService : BackgroundService
         var db = scope.ServiceProvider.GetRequiredService<MarketEdgeDbContext>();
         var scanners = scope.ServiceProvider.GetRequiredService<IScannerService>();
 
-        foreach (var (market, tzId, open, close) in Markets)
+        foreach (var market in Markets)
         {
             var schedule = await db.ScannerSchedules.FirstOrDefaultAsync(s => s.Market == market, ct);
             if (schedule is not { Enabled: true }) continue;
 
-            if (!IsMarketOpen(tzId, open, close)) continue;
+            if (!MarketHours.IsOpen(market)) continue;
 
             var interval = TimeSpan.FromMinutes(Math.Max(schedule.IntervalMinutes, 1));
             if (schedule.LastEnqueuedAt is DateTime last && DateTime.UtcNow - last < interval) continue;
@@ -72,23 +68,5 @@ public class ScannerScheduleService : BackgroundService
             await db.SaveChangesAsync(ct);
             _logger.LogInformation("Scheduled pre-close scan enqueued for {Market}", market);
         }
-    }
-
-    private bool IsMarketOpen(string tzId, TimeSpan open, TimeSpan close)
-    {
-        TimeZoneInfo tz;
-        try
-        {
-            tz = TimeZoneInfo.FindSystemTimeZoneById(tzId);
-        }
-        catch (TimeZoneNotFoundException)
-        {
-            _logger.LogWarning("Time zone {Tz} not found; skipping market-hours check", tzId);
-            return false;
-        }
-        var local = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, tz);
-        if (local.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday) return false;
-        var t = local.TimeOfDay;
-        return t >= open && t <= close;
     }
 }
