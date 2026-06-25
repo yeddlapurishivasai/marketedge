@@ -67,8 +67,6 @@ public class TriggerScannerRequest
     public string? ScannerName { get; set; }
     /// <summary>"stage2" (default) or "all".</summary>
     public string? Universe { get; set; }
-    /// <summary>Replay the last few days' breakouts into the paper-trade blotter (seed/backfill).</summary>
-    public bool Backfill { get; set; }
 }
 
 public class UpdateScannerScheduleRequest

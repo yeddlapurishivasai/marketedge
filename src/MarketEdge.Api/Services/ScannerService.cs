@@ -49,7 +49,7 @@ public class ScannerService : IScannerService
             WeekNumber = string.Empty,
             Status = "queued",
             Progress = 0,
-            Parameters = JsonSerializer.Serialize(new { scannerName, universe, backfill = request.Backfill }),
+            Parameters = JsonSerializer.Serialize(new { scannerName, universe }),
             CreatedAt = DateTime.UtcNow
         };
         _db.JobRuns.Add(job);
@@ -62,7 +62,6 @@ public class ScannerService : IScannerService
             runId = job.Id,
             scannerName,
             universe,
-            backfill = request.Backfill,
             triggeredBy = "manual",
             timestamp = DateTime.UtcNow
         });

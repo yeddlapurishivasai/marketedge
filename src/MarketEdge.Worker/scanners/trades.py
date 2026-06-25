@@ -14,8 +14,7 @@ Runs as part of every scanner job (the 15-minute scheduled run). On each run it:
    below the prior support (lowest low) for shorts. A scanner hit alone is just a
    setup. One swing (10-bar pivot, 6% stop) and one positional (20-bar base, 20-EMA
    stop) per qualifying breakout. F&O names flagged by a short scanner open shorts.
-   On a **cold start** (no trades yet) the last few days' breakouts are backfilled so
-   the blotter isn't empty.
+   The blotter starts from a clean slate and only fills with genuine forward breakouts.
 3. **Tags** every scanner that flagged an already-active trade onto that trade
    (``FlaggedScannersJson`` + ``ScannerHitCount``) without opening a duplicate entry.
 
@@ -58,10 +57,6 @@ _SWING_BREAKOUT_LOOKBACK = 10
 _POS_BREAKOUT_LOOKBACK = 20
 _VOL_AVG = 20             # average-volume lookback for breakout confirmation
 _VOL_MULT = 1.5           # breakout bar volume must be >= this x average volume
-
-# Cold start: when a market has no trades yet, replay breakouts from the last few
-# trading days so the blotter starts populated instead of empty.
-_BACKFILL_DAYS = 7
 
 # Scanners that express a bearish/short setup.
 _SHORT_SCANNERS = {"NSE_CSS"}
@@ -126,34 +121,6 @@ def _volume_confirmed(series, idx: int) -> bool:
     if math.isnan(avg) or avg <= 0 or math.isnan(vol):
         return True
     return vol >= avg * _VOL_MULT
-
-
-def _backfill_entry_idx(series, direction: str, lookback: int, window: int) -> int | None:
-    """Earliest bar within the last ``window`` bars that produced a breakout.
-
-    Used only on a cold start so the blotter isn't empty: we look back a few days and
-    enter at the first genuine break rather than waiting for a fresh one.
-    """
-    if series is None:
-        return None
-    last = series.last
-    start = max(lookback, last - window + 1)
-    for idx in range(start, last + 1):
-        if _is_breakout(series, direction, lookback, idx):
-            return idx
-    return None
-
-
-def _entry_dt(d: Any) -> datetime:
-    """Coerce a bar date into a datetime for the EntryAt column."""
-    if isinstance(d, datetime):
-        return d.replace(tzinfo=None)
-    if isinstance(d, date):
-        return datetime(d.year, d.month, d.day)
-    try:
-        return datetime.fromisoformat(str(d)[:19])
-    except ValueError:
-        return _now()
 
 
 def _series_metrics(series) -> dict[str, float | None]:
@@ -297,7 +264,7 @@ def _manage_trade(conn, market: str, t: dict, series, flagged_now: list[str]) ->
 
 def _open_trade(conn, market: str, ticker: str, company: str | None, trade_type: str,
                 direction: str, entry: float, series, scanners: list[str],
-                entry_at: datetime | None = None, weights: dict[str, Any] | None = None) -> dict:
+                weights: dict[str, Any] | None = None) -> dict:
     table = _t(market)
     m = _series_metrics(series)
 
@@ -341,7 +308,7 @@ def _open_trade(conn, market: str, ticker: str, company: str | None, trade_type:
             OUTPUT INSERTED.Id
             VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, 0, 0, 0, ?, ?, GETUTCDATE(), GETUTCDATE())""",
         ticker, company, trade_type, direction, entry_scanner, json.dumps(sorted(set(scanners))),
-        len(set(scanners)), entry_at or _now(), round(entry, 4), qty, round(initial, 4), round(initial, 4),
+        len(set(scanners)), _now(), round(entry, 4), qty, round(initial, 4), round(initial, 4),
         basis, round(risk, 4), round(entry, 4), confidence, rationale_json,
     ).fetchone()
     conn.commit()
@@ -357,13 +324,11 @@ def _open_trade(conn, market: str, ticker: str, company: str | None, trade_type:
 
 
 def run_trade_engine(conn, market: str, scan_date: date,
-                     flagged: dict[str, dict], series_cache: dict[str, Any],
-                     backfill: bool = False) -> dict[str, int]:
+                     flagged: dict[str, dict], series_cache: dict[str, Any]) -> dict[str, int]:
     """Manage open trades and open new ones for this run's breakouts.
 
     ``flagged`` maps symbol -> {"scanners": [names], "company": str, "is_fno": bool}.
-    When ``backfill`` is true (or the market has no trades yet) the last few days'
-    breakouts are replayed so the blotter isn't empty. Returns counts.
+    The blotter starts empty and only fills with genuine forward breakouts. Returns counts.
     """
     active = _get_active_trades(conn, market)
     # tickers that were active at the START of this run -> never re-enter same (ticker, type) this run
@@ -381,10 +346,6 @@ def run_trade_engine(conn, market: str, scan_date: date,
     except Exception:  # noqa: BLE001
         logger.exception("Weight load failed for %s", market)
         weights = None
-
-    # Cold start OR explicit backfill request -> replay the last few days' breakouts.
-    total = conn.cursor().execute(f"SELECT COUNT(*) AS c FROM dbo.{_t(market)}").fetchone()
-    do_backfill = backfill or (total.c if total else 0) == 0
 
     def _series_for(sym: str):
         s = series_cache.get(sym)
@@ -404,7 +365,7 @@ def run_trade_engine(conn, market: str, scan_date: date,
         f"SELECT COUNT(*) AS c FROM dbo.{_t(market)} WHERE Status='closed' AND CAST(UpdatedAt AS DATE)=CAST(GETUTCDATE() AS DATE)"
     ).fetchone()
 
-    opened = setups = backfilled = 0
+    opened = setups = 0
     for sym, info in flagged.items():
         scanners = info.get("scanners", [])
         if not scanners:
@@ -432,21 +393,6 @@ def run_trade_engine(conn, market: str, scan_date: date,
                 continue  # already active -> tagged during management, no new entry
             lookback = _SWING_BREAKOUT_LOOKBACK if trade_type == "swing" else _POS_BREAKOUT_LOOKBACK
 
-            if do_backfill:
-                bidx = _backfill_entry_idx(series, direction, lookback, _BACKFILL_DAYS)
-                if bidx is None:
-                    setups += 1
-                    continue
-                opened_trade = _open_trade(
-                    conn, market, sym, info.get("company"), trade_type, direction,
-                    float(series.close[bidx]), series, scanners,
-                    entry_at=_entry_dt(series.dates[bidx]), weights=weights)
-                # bring the backfilled trade up to the current bar (trail / close out)
-                _manage_trade(conn, market, opened_trade, series, [])
-                opened += 1
-                backfilled += 1
-                continue
-
             if not _is_breakout(series, direction, lookback):
                 setups += 1  # flagged but no confirmed break yet -> wait
                 continue
@@ -457,7 +403,6 @@ def run_trade_engine(conn, market: str, scan_date: date,
     return {
         "managed": managed,
         "opened": opened,
-        "backfilled": backfilled,
         "setupsWaiting": setups,
         "closedToday": int(closed_now.c) if closed_now else 0,
     }

@@ -252,7 +252,6 @@ def run_scanner_job(payload: dict) -> None:
     run_id = int(payload["runId"])
     scanner_name = payload.get("scannerName")  # None => all scanners (pre-close scan)
     universe = (payload.get("universe") or "stage2").lower()
-    backfill = bool(payload.get("backfill"))
     scan_date = date.today()
 
     conn = get_connection()
@@ -325,7 +324,7 @@ def run_scanner_job(payload: dict) -> None:
         try:
             from .trades import run_trade_engine
             from .scoring import score_universe
-            trade_metrics = run_trade_engine(conn, market, scan_date, flagged, series_cache, backfill=backfill)
+            trade_metrics = run_trade_engine(conn, market, scan_date, flagged, series_cache)
             # scanner_hits defaults to the day's persisted scanner-result counts (already persisted above)
             scored = score_universe(conn, market, symbols, scan_date, series_cache)
             logger.info("Scanner run %s: trades=%s scored=%s", run_id, trade_metrics, scored)

@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, Fragment } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { Market, StockScore, Trade, TradeStats, TradeProfile, ScannerPerformance, ScoringWeight } from '../api';
-import { fetchScores, fetchTrades, fetchTradeStats, triggerScanner, fetchScannerPerformance, fetchScoringWeights, updateScoringWeight } from '../api';
-import { ChevronLeft, ChevronDown, RefreshCw, TrendingUp, Loader2, Gauge, Activity, History, Target, Sliders } from 'lucide-react';
+import { fetchScores, fetchTrades, fetchTradeStats, fetchScannerPerformance, fetchScoringWeights, updateScoringWeight } from '../api';
+import { ChevronLeft, ChevronDown, RefreshCw, TrendingUp, Loader2, Gauge, Activity, Target, Sliders } from 'lucide-react';
 
 function fmtPct(v?: number | null): string {
   if (v == null) return '—';
@@ -343,7 +343,7 @@ function PatternsTab({ market }: { market: Market }) {
       ) : rows.length === 0 ? (
         <div className="empty-state">
           <div className="empty-state-icon"><Target size={48} /></div>
-          <p className="empty-state-text">No paper trades yet, so no pattern performance to show. Backfill trades from the Paper Trades tab.</p>
+          <p className="empty-state-text">No paper trades yet, so no pattern performance to show. Patterns build up as live breakouts open trades.</p>
         </div>
       ) : (
         <div className="table-container">
@@ -619,8 +619,6 @@ function TradesTab({ market, profile }: { market: Market; profile: TradeProfile 
   const [rows, setRows] = useState<Trade[]>([]);
   const [stats, setStats] = useState<TradeStats | null>(null);
   const [loading, setLoading] = useState(false);
-  const [backfilling, setBackfilling] = useState(false);
-  const [note, setNote] = useState<string>('');
   const [expanded, setExpanded] = useState<number | null>(null);
 
   const load = useCallback(() => {
@@ -635,17 +633,6 @@ function TradesTab({ market, profile }: { market: Market; profile: TradeProfile 
   }, [market, status, profile]);
 
   useEffect(() => { load(); }, [load]);
-
-  const backfill = useCallback(() => {
-    setBackfilling(true);
-    setNote('');
-    triggerScanner(market, { universe: 'stage2', backfill: true })
-      .then(() => {
-        setNote('Backfill started — replaying the last 7 days of breakouts. Refresh in a minute.');
-      })
-      .catch(() => setNote('Failed to start backfill.'))
-      .finally(() => setBackfilling(false));
-  }, [market]);
 
   const closed = status === 'closed';
 
@@ -676,16 +663,10 @@ function TradesTab({ market, profile }: { market: Market; profile: TradeProfile 
           <option value="closed">Closed</option>
           <option value="">All</option>
         </select>
-        <button className="btn btn-ghost btn-sm" onClick={backfill} disabled={backfilling} style={{ marginLeft: 'auto' }}
-          title="Replay the last 7 days of volume-confirmed breakouts into the blotter">
-          {backfilling ? <Loader2 size={14} className="spin" /> : <History size={14} />} Backfill 7 days
-        </button>
-        <button className="btn btn-ghost btn-sm" onClick={load}>
+        <button className="btn btn-ghost btn-sm" onClick={load} style={{ marginLeft: 'auto' }}>
           <RefreshCw size={14} /> Refresh
         </button>
       </div>
-
-      {note && <div className="hint" style={{ marginBottom: 8, color: 'var(--text-muted)' }}>{note}</div>}
 
       {loading ? (
         <div className="loading"><Loader2 size={18} className="spin" /> Loading trades...</div>
@@ -693,8 +674,8 @@ function TradesTab({ market, profile }: { market: Market; profile: TradeProfile 
         <div className="empty-state">
           <div className="empty-state-icon"><Activity size={48} /></div>
           <p className="empty-state-text">
-            No trades. A scanner hit is only a setup — a paper trade opens on a volume-confirmed
-            break of support/resistance. Use “Backfill 7 days” to seed from recent breakouts.
+            No trades yet. A scanner hit is only a setup — a paper trade opens on a volume-confirmed
+            break of support/resistance. The blotter fills as live breakouts trigger.
           </p>
         </div>
       ) : (

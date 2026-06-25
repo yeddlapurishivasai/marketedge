@@ -435,7 +435,7 @@ export async function fetchScanners(market: Market): Promise<ScannerInfo[]> {
   return res.json();
 }
 
-export async function triggerScanner(market: Market, body: { scannerName?: string | null; universe?: string; backfill?: boolean }): Promise<{ runId: number }> {
+export async function triggerScanner(market: Market, body: { scannerName?: string | null; universe?: string }): Promise<{ runId: number }> {
   const res = await fetch(`${BASE}/${market}/scanners/trigger`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
