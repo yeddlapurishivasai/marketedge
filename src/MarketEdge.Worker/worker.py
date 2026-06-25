@@ -200,6 +200,12 @@ def process_message(message_content: str) -> None:
         run_ingestion_job(payload)
         return
 
+    # Single-stock refresh: re-ingest one symbol's data then recompute its score.
+    if str(payload.get("jobType", "")).lower() == "stock_refresh":
+        from ingestion_runner import run_stock_refresh_job
+        run_stock_refresh_job(payload)
+        return
+
     market = str(payload["market"]).lower()
     run_id = int(payload["runId"])
     min_market_cap = _coerce_number(payload.get("minMarketCap"))

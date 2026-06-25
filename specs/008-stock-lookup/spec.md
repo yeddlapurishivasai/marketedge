@@ -44,9 +44,10 @@ symbol only. The page reflects the refreshed `As Of` date when it completes.
 - **FR-003** A bars endpoint returns OHLCV for the symbol. `timeframe=daily` returns raw `Bars1D`;
   `timeframe=weekly` aggregates daily bars into ISO-week candles (open=first, high=max, low=min,
   close=last, volume=sum) server-side. Bars are ordered ascending by date.
-- **FR-004** A refresh-analyst endpoint runs `ingest fundamentals --market <m> --symbols <symbol>`
-  out-of-process as an `analyst_refresh` JobRun, reusing the existing ingestion runner. Only one
-  refresh per (market, symbol) may be in flight; a duplicate request returns the in-flight run.
+- **FR-004** A refresh-stock endpoint re-ingests every pipeline step
+  (`ingest bars` → `ingest technical` → `ingest fundamentals`) scoped to the one symbol and then
+  recomputes that symbol's score, running out-of-process as a `stock_refresh` JobRun on the worker.
+  Only one refresh per (market, symbol) may be in flight; a duplicate request returns the in-flight run.
 - **FR-005** EMA values (10/20/50/200) are computed client-side from the returned bars and drawn as
   line overlays; the user may toggle each independently. Default overlay is EMA 20.
 - **FR-006** Currency/number formatting is market-aware (₹ vs $; Indian Cr/Lakh-Cr vs B/T market cap),
@@ -71,7 +72,7 @@ symbol only. The page reflects the refreshed `As Of` date when it completes.
 | GET | `/api/{market}/lookup/search?q=` | Symbol/company candidates (max 20) |
 | GET | `/api/{market}/lookup/{symbol}` | Full symbol detail |
 | GET | `/api/{market}/lookup/{symbol}/bars?timeframe=daily\|weekly` | OHLCV bars |
-| POST | `/api/{market}/lookup/{symbol}/refresh-analyst` | Re-ingest fundamentals for one symbol |
+| POST | `/api/{market}/lookup/{symbol}/refresh-stock` | Re-ingest all steps for one symbol, then rescore it |
 
 ## Out of scope
 - Editing any ticker/technical/analyst data from this page (read-only except the refresh action).

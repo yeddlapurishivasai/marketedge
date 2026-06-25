@@ -16,7 +16,7 @@ public record TriggerIngestionRequest(
 public interface IIngestionService
 {
     Task<int> TriggerAsync(string market, TriggerIngestionRequest request);
-    Task<int> RefreshAnalystAsync(string market, string symbol);
+    Task<int> RefreshStockAsync(string market, string symbol);
 }
 
 /// <summary>
@@ -33,7 +33,7 @@ public interface IIngestionService
 public class IngestionService : IIngestionService
 {
     public const string JobType = "data_ingestion";
-    public const string AnalystRefreshJobType = "analyst_refresh";
+    public const string StockRefreshJobType = "stock_refresh";
 
     // Pipeline stage names in execution order. The bars stage seeds the ticker universe
     // internally, so there is no separate seed step.
@@ -126,7 +126,7 @@ public class IngestionService : IIngestionService
         return job.Id;
     }
 
-    public async Task<int> RefreshAnalystAsync(string market, string symbol)
+    public async Task<int> RefreshStockAsync(string market, string symbol)
     {
         if (market != "india" && market != "us")
             throw new ArgumentException("Market must be 'india' or 'us'.");
@@ -137,7 +137,7 @@ public class IngestionService : IIngestionService
 
         // One in-flight refresh per (market, symbol): return the existing run if present.
         var existing = await _db.JobRuns
-            .Where(j => j.JobType == AnalystRefreshJobType && j.Market == market && ActiveStatuses.Contains(j.Status))
+            .Where(j => j.JobType == StockRefreshJobType && j.Market == market && ActiveStatuses.Contains(j.Status))
             .OrderByDescending(j => j.CreatedAt)
             .ToListAsync();
         var inflight = existing.FirstOrDefault(j =>
@@ -148,7 +148,7 @@ public class IngestionService : IIngestionService
         var now = DateTime.UtcNow;
         var job = new JobRun
         {
-            JobType = AnalystRefreshJobType,
+            JobType = StockRefreshJobType,
             Market = market,
             WeekNumber = GetIsoWeekNumber(now),
             Status = "queued",
@@ -157,22 +157,25 @@ public class IngestionService : IIngestionService
             {
                 ["market"] = market,
                 ["symbol"] = symbol,
+                ["steps"] = PipelineSteps,
             }),
             CreatedAt = now,
         };
         _db.JobRuns.Add(job);
         await _db.SaveChangesAsync();
 
+        // The worker re-ingests every pipeline step for this one symbol, then recomputes
+        // its score (jobType "stock_refresh").
         await EnqueueAsync(new
         {
-            jobType = "ingestion",
+            jobType = "stock_refresh",
             market,
             runId = job.Id,
-            steps = new[] { "fundamentals" },
+            steps = PipelineSteps,
             symbols = new[] { symbol },
             testSample = false,
             missingOnly = false,
-            triggeredBy = "analyst-refresh",
+            triggeredBy = "stock-refresh",
             timestamp = now,
         });
 

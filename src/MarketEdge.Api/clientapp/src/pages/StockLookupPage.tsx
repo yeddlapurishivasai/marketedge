@@ -9,7 +9,7 @@ import type {
   UpsideProjection, UpsideCase
 } from '../api';
 import {
-  searchLookup, fetchLookupDetail, fetchLookupBars, refreshAnalystData
+  searchLookup, fetchLookupDetail, fetchLookupBars, refreshStockData
 } from '../api';
 import { formatMarketCap, formatPrice, currencySymbol } from '../format';
 import { ChevronLeft, Search, RefreshCw, Loader2, ExternalLink, X } from 'lucide-react';
@@ -260,9 +260,10 @@ export function StockDetailView({ market, symbol }: { market: Market; symbol: st
     if (!detail) return;
     setRefreshing(true);
     try {
-      await refreshAnalystData(market, detail.symbol);
-      // Poll the symbol detail a few times for the updated As-Of date.
-      for (let i = 0; i < 8; i++) {
+      await refreshStockData(market, detail.symbol);
+      // Re-ingest (bars + technical + fundamentals) and rescore run on the worker; poll the
+      // symbol detail a few times so the view picks up the refreshed data.
+      for (let i = 0; i < 12; i++) {
         await new Promise(r => setTimeout(r, 2500));
         const d = await fetchLookupDetail(market, detail.symbol);
         setDetail(d);
@@ -311,11 +312,11 @@ export function StockDetailView({ market, symbol }: { market: Market; symbol: st
 
         <div className="analyst-refresh">
           <div>
-            <div className="section-title" style={{ margin: 0 }}>Analyst Data</div>
-            <p className="muted-note">Refresh analyst earnings estimates and rating summary for this symbol only.</p>
+            <div className="section-title" style={{ margin: 0 }}>Refresh &amp; Rescore</div>
+            <p className="muted-note">Re-ingest bars, technical and fundamentals for this symbol, then recompute its score. Runs as a worker job.</p>
           </div>
           <button className="btn btn-primary" onClick={refresh} disabled={refreshing}>
-            {refreshing ? <Loader2 size={16} className="spin-icon" /> : <RefreshCw size={16} />} Refresh Analyst Data
+            {refreshing ? <Loader2 size={16} className="spin-icon" /> : <RefreshCw size={16} />} {refreshing ? 'Refreshing…' : 'Refresh & Rescore'}
           </button>
         </div>
       </div>

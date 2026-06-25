@@ -44,7 +44,7 @@ const JOB_TYPES = [
   { value: 'data_ingestion', label: 'Data Ingestion' },
   { value: 'stage2_analysis', label: 'Stage 2 Analysis' },
   { value: 'scanner', label: 'Scanner' },
-  { value: 'analyst_refresh', label: 'Analyst Refresh' },
+  { value: 'stock_refresh', label: 'Stock Refresh' },
 ];
 
 export default function JobsPage() {

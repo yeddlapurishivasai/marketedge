@@ -40,15 +40,15 @@ public class LookupController : ControllerBase
         return Ok(bars);
     }
 
-    [HttpPost("{symbol}/refresh-analyst")]
-    public async Task<IActionResult> RefreshAnalyst(string market, string symbol)
+    [HttpPost("{symbol}/refresh-stock")]
+    public async Task<IActionResult> RefreshStock(string market, string symbol)
     {
         if (!IsValidMarket(market)) return BadRequest("Market must be 'india' or 'us'");
         var detail = await _lookup.GetDetailAsync(market, symbol);
         if (detail == null) return NotFound();
         try
         {
-            var runId = await _ingestion.RefreshAnalystAsync(market, symbol);
+            var runId = await _ingestion.RefreshStockAsync(market, symbol);
             return Ok(new { runId });
         }
         catch (ArgumentException ex)

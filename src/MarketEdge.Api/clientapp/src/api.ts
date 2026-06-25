@@ -407,9 +407,9 @@ export async function fetchLookupBars(market: Market, symbol: string, timeframe:
   return res.json();
 }
 
-export async function refreshAnalystData(market: Market, symbol: string): Promise<{ runId: number }> {
-  const res = await fetch(`${BASE}/${market}/lookup/${encodeURIComponent(symbol)}/refresh-analyst`, { method: 'POST' });
-  if (!res.ok) throw new Error((await res.text()) || 'Failed to refresh analyst data');
+export async function refreshStockData(market: Market, symbol: string): Promise<{ runId: number }> {
+  const res = await fetch(`${BASE}/${market}/lookup/${encodeURIComponent(symbol)}/refresh-stock`, { method: 'POST' });
+  if (!res.ok) throw new Error((await res.text()) || 'Failed to refresh stock');
   return res.json();
 }
 
