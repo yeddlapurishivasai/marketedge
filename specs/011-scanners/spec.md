@@ -56,6 +56,23 @@ A single **Pre-Close Scan** action runs the price-refresh **once** then executes
 scanners for the market against the chosen universe, writing each scanner's rows
 idempotently for today's `ScanDate`.
 
+The pre-close scan also refreshes the `{Market}TickerTechnical` snapshot (prices, 52-week
+levels, market cap) for the scanned symbols by reusing the ingestion `technical` step, so
+scoring and Stock Lookup reflect today's data. This is best-effort and never aborts the scan.
+
+### Nightly fundamentals refresh (stage2)
+
+- An admin toggle enables a per-market nightly fundamentals schedule.
+- A background service in the API checks every minute and **enqueues a fundamentals-only
+  refresh once per exchange-local calendar day**, after the configured `HourLocal` (default
+  20:00, i.e. after the close), weekdays only.
+- The worker resolves the **stage2 universe** itself and runs only the `fundamentals`
+  ingestion step (analyst snapshots, EPS forecasts, earnings fundamentals, market cap);
+  bars and the technical snapshot are left to the pre-close scan.
+- Idempotent: `LastEnqueuedAt` (persisted, compared in the exchange-local timezone) prevents
+  a second enqueue the same local day, and it never enqueues while a fundamentals run is
+  already queued/running for the market. Job type: `fundamentals`.
+
 ### Schedule (auto start/stop during market hours)
 
 - An admin toggle enables an automatic schedule per market.
@@ -117,4 +134,7 @@ IndianTechnicalScannerResults / USTechnicalScannerResults
 
 ScannerSchedules
   Market (PK), Enabled, IntervalMinutes, LastEnqueuedAt, UpdatedAt
+
+FundamentalsSchedules
+  Market (PK), Enabled, HourLocal, LastEnqueuedAt, UpdatedAt
 ```

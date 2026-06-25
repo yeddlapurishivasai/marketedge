@@ -27,4 +27,19 @@ public static class MarketHours
         var t = local.TimeOfDay;
         return t >= w.Open && t <= w.Close;
     }
+
+    /// <summary>Exchange-local time for the market, or null if the market/timezone is unknown.</summary>
+    public static DateTimeOffset? NowLocal(string market, DateTimeOffset? nowUtc = null)
+    {
+        if (!Windows.TryGetValue(market.ToLowerInvariant(), out var w)) return null;
+        try
+        {
+            var tz = TimeZoneInfo.FindSystemTimeZoneById(w.TzId);
+            return TimeZoneInfo.ConvertTime(nowUtc ?? DateTimeOffset.UtcNow, tz);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return null;
+        }
+    }
 }

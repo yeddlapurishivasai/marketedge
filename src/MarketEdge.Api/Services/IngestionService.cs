@@ -17,6 +17,7 @@ public interface IIngestionService
 {
     Task<int> TriggerAsync(string market, TriggerIngestionRequest request);
     Task<int> RefreshStockAsync(string market, string symbol);
+    Task<int> TriggerFundamentalsAsync(string market, string triggeredBy = "manual");
 }
 
 /// <summary>
@@ -34,6 +35,7 @@ public class IngestionService : IIngestionService
 {
     public const string JobType = "data_ingestion";
     public const string StockRefreshJobType = "stock_refresh";
+    public const string FundamentalsJobType = "fundamentals";
 
     // Pipeline stage names in execution order. The bars stage seeds the ticker universe
     // internally, so there is no separate seed step.
@@ -176,6 +178,53 @@ public class IngestionService : IIngestionService
             testSample = false,
             missingOnly = false,
             triggeredBy = "stock-refresh",
+            timestamp = now,
+        });
+
+        return job.Id;
+    }
+
+    public async Task<int> TriggerFundamentalsAsync(string market, string triggeredBy = "manual")
+    {
+        if (market != "india" && market != "us")
+            throw new ArgumentException("Market must be 'india' or 'us'.");
+
+        // One in-flight fundamentals run per market: return the existing run if present.
+        var existing = await _db.JobRuns
+            .Where(j => j.JobType == FundamentalsJobType && j.Market == market && ActiveStatuses.Contains(j.Status))
+            .OrderByDescending(j => j.CreatedAt)
+            .FirstOrDefaultAsync();
+        if (existing != null)
+            return existing.Id;
+
+        var now = DateTime.UtcNow;
+        var job = new JobRun
+        {
+            JobType = FundamentalsJobType,
+            Market = market,
+            WeekNumber = GetIsoWeekNumber(now),
+            Status = "queued",
+            Progress = 0,
+            Parameters = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["market"] = market,
+                ["universe"] = "stage2",
+                ["steps"] = new[] { "fundamentals" },
+                ["triggeredBy"] = triggeredBy,
+            }),
+            CreatedAt = now,
+        };
+        _db.JobRuns.Add(job);
+        await _db.SaveChangesAsync();
+
+        // The worker resolves the stage2 universe itself and runs only the fundamentals step.
+        await EnqueueAsync(new
+        {
+            jobType = "fundamentals",
+            market,
+            runId = job.Id,
+            universe = "stage2",
+            triggeredBy,
             timestamp = now,
         });
 

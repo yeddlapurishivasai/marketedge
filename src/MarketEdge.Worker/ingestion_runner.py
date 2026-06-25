@@ -272,3 +272,63 @@ def run_stock_refresh_job(payload: dict) -> None:
         raise
     finally:
         conn.close()
+
+
+def run_fundamentals_job(payload: dict) -> None:
+    """Nightly fundamentals-only refresh for the stage2 universe.
+
+    Resolves the same stage2 symbol set the pre-close scan uses, then runs only the
+    ``fundamentals`` ingestion step for those symbols (analyst snapshots, EPS forecasts,
+    earnings fundamentals, market cap). Bars and the technical snapshot are intentionally
+    left to the pre-close scan; this job just keeps fundamentals current overnight.
+    """
+    market = str(payload["market"]).lower()
+    run_id = int(payload["runId"])
+    universe = (payload.get("universe") or "stage2").lower()
+
+    cli = _resolve_cli()
+    cli_dir = os.path.dirname(cli)
+    output: list[str] = []
+
+    conn = get_connection()
+    try:
+        update_job_status(conn, run_id, "running", progress=0, started_at=_now())
+
+        from scanners.runner import load_universe
+        meta_rows = load_universe(conn, market, universe)
+        symbols = [m["symbol"] for m in meta_rows]
+        logger.info("Fundamentals run %s: market=%s universe=%s symbols=%s",
+                    run_id, market, universe, len(symbols))
+
+        if not symbols:
+            metrics = {"market": market, "universe": universe, "symbols": 0,
+                       "output": "no symbols in universe"}
+            update_job_status(conn, run_id, "completed", progress=100,
+                              metrics=metrics, completed_at=_now())
+            return
+
+        # Scope the fundamentals step to just the stage2 symbols.
+        step_payload = {**payload, "symbols": symbols}
+        failed = _run_steps(conn, run_id, market, ["fundamentals"], step_payload,
+                            cli, cli_dir, output)
+
+        full = "\n".join(output)
+        tail = full[-_OUTPUT_TAIL:] if len(full) > _OUTPUT_TAIL else full
+        if failed:
+            update_job_status(conn, run_id, "failed", error=tail, completed_at=_now())
+            logger.error("Fundamentals run %s failed", run_id)
+        else:
+            metrics = {"market": market, "universe": universe, "symbols": len(symbols),
+                       "steps": ["fundamentals"], "output": tail}
+            update_job_status(conn, run_id, "completed", progress=100,
+                              metrics=metrics, completed_at=_now())
+            logger.info("Fundamentals run %s completed (%s symbols)", run_id, len(symbols))
+    except Exception as exc:
+        logger.exception("Fundamentals run %s crashed", run_id)
+        try:
+            update_job_status(conn, run_id, "failed", error=str(exc), completed_at=_now())
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.close()

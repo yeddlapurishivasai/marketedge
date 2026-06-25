@@ -41,3 +41,14 @@ public class ScannerSchedule
     public DateTime? LastEnqueuedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }
+
+[Table("FundamentalsSchedules")]
+public class FundamentalsSchedule
+{
+    [Key]
+    public string Market { get; set; } = string.Empty;
+    public bool Enabled { get; set; } = true;
+    public int HourLocal { get; set; } = 20;
+    public DateTime? LastEnqueuedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}

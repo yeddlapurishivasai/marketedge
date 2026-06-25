@@ -33,7 +33,7 @@ public class MarketEdgeDbContext : DbContext
     public DbSet<IndianTechnicalScannerResult> IndianTechnicalScannerResults => Set<IndianTechnicalScannerResult>();
     public DbSet<USTechnicalScannerResult> USTechnicalScannerResults => Set<USTechnicalScannerResult>();
     public DbSet<ScannerSchedule> ScannerSchedules => Set<ScannerSchedule>();
-
+    public DbSet<FundamentalsSchedule> FundamentalsSchedules => Set<FundamentalsSchedule>();
     // Fundamental Scanners (earnings fundamentals + per-stock note)
     public DbSet<IndianEarningsFundamentals> IndianEarningsFundamentals => Set<IndianEarningsFundamentals>();
     public DbSet<USEarningsFundamentals> USEarningsFundamentals => Set<USEarningsFundamentals>();
@@ -161,6 +161,7 @@ public class MarketEdgeDbContext : DbContext
     private static void ConfigureScannerEntities(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<ScannerSchedule>().HasKey(s => s.Market);
+        modelBuilder.Entity<FundamentalsSchedule>().HasKey(s => s.Market);
         foreach (var t in new[] { typeof(IndianTechnicalScannerResult), typeof(USTechnicalScannerResult) })
         {
             var e = modelBuilder.Entity(t);

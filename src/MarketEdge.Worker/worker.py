@@ -206,6 +206,12 @@ def process_message(message_content: str) -> None:
         run_stock_refresh_job(payload)
         return
 
+    # Nightly fundamentals-only refresh for the stage2 universe.
+    if str(payload.get("jobType", "")).lower() == "fundamentals":
+        from ingestion_runner import run_fundamentals_job
+        run_fundamentals_job(payload)
+        return
+
     market = str(payload["market"]).lower()
     run_id = int(payload["runId"])
     min_market_cap = _coerce_number(payload.get("minMarketCap"))
