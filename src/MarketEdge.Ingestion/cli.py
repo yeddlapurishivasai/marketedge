@@ -393,7 +393,14 @@ def _try_analyst_snapshot(conn, market, symbol, ticker, as_of) -> bool:
         return False
     rating = info.get("recommendationKey")
     num = info.get("numberOfAnalystOpinions")
-    if rating is None and num is None:
+    # Trailing (TTM, actual) and forward (projected) annual EPS. The EPS-upside score is
+    # the implied price move if the current P/E is held constant: price scales with EPS,
+    # so upside% = (forwardEps / trailingEps - 1) * 100. We store trailing as the base
+    # (CurrentYearEps) and forward as the projection (NextYearEps); the scoring engine's
+    # _upside_eps computes (NextYearEps / CurrentYearEps - 1) * 100 from these.
+    trailing_eps = _safe_num(info.get("trailingEps"))
+    forward_eps = _safe_num(info.get("forwardEps"))
+    if rating is None and num is None and trailing_eps is None and forward_eps is None:
         return False
     try:
         db.upsert_analyst_snapshot(
@@ -405,8 +412,8 @@ def _try_analyst_snapshot(conn, market, symbol, ticker, as_of) -> bool:
                 "num_analysts": _safe_num(num),
                 "current_quarter_eps": None,
                 "next_quarter_eps": None,
-                "current_year_eps": _safe_num(info.get("forwardEps")),
-                "next_year_eps": None,
+                "current_year_eps": trailing_eps,
+                "next_year_eps": forward_eps,
             },
         )
         return True

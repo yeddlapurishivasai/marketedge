@@ -289,7 +289,7 @@ def _build_checks(sym: str, *, tech, earn, sig, analyst, stage, series, track,
         cy = _fin(analyst.CurrentYearEps)
         ny = _fin(analyst.NextYearEps)
         add("est", 1.0, cy is not None and ny is not None, bool(cy and ny and cy > 0 and ny > cy),
-            "Forward EPS growth expected")
+            "Forward EPS above trailing EPS")
 
     # --- TRACK RECORD ---
     if track and track.get("total", 0) >= 1:
@@ -444,16 +444,19 @@ def score_universe(conn, market: str, symbols: list[str], scan_date: date,
 
 
 def _upside_eps(analyst, earn) -> tuple[float | None, str | None]:
-    """Possible upside % from projected EPS.
+    """Implied price upside (%) if the current P/E is held constant.
 
-    Prefers analyst forward EPS (next FY vs current FY); falls back to the most recent
-    reported earnings growth (YoY) when forward analyst estimates are unavailable, which
-    is the common case for NSE names where yfinance does not return forward EPS.
+    With P/E fixed, price scales with EPS, so the fair-value move from today's trailing
+    EPS to the forward (projected) EPS is ``(forwardEps / trailingEps - 1) * 100``. The
+    analyst snapshot stores trailing EPS as ``CurrentYearEps`` and forward EPS as
+    ``NextYearEps``. Falls back to the most recent reported YoY earnings growth when
+    forward EPS is unavailable (common for NSE names) -- at constant P/E, price tracks
+    earnings, so realised earnings growth is a reasonable proxy.
     """
     if analyst is not None:
-        cy, ny = _fin(analyst.CurrentYearEps), _fin(analyst.NextYearEps)
-        if cy and ny and cy > 0:
-            return round((ny / cy - 1) * 100, 2), "forward_eps"
+        trailing, forward = _fin(analyst.CurrentYearEps), _fin(analyst.NextYearEps)
+        if trailing and forward and trailing > 0:
+            return round((forward / trailing - 1) * 100, 2), "eps_pe_constant"
     if earn is not None:
         eg = _fin(earn.EarningsGrowthYoyPct)
         if eg is not None:

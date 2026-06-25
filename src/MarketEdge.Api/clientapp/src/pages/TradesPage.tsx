@@ -153,8 +153,9 @@ const GROUP_LABELS: Record<string, string> = {
   tech: 'Technical', fund: 'Fundamental', catalyst: 'Catalyst', est: 'Estimates', track: 'Track record',
 };
 const UPSIDE_SRC_LABELS: Record<string, string> = {
-  forward_eps: 'Analyst forward EPS (next FY vs current FY)',
-  earnings_growth_yoy: 'Latest reported earnings growth YoY (forward analyst EPS unavailable)',
+  eps_pe_constant: 'Forward EPS vs trailing EPS — implied price move at constant P/E',
+  forward_eps: 'Forward EPS vs trailing EPS — implied price move at constant P/E',
+  earnings_growth_yoy: 'Latest reported earnings growth YoY (forward EPS unavailable)',
 };
 
 function ScoreBreakdown({ comp, profile }: { comp: ScoreComponents; profile: TradeProfile }) {

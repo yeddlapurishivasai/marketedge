@@ -152,10 +152,10 @@ def symbol_fundamentals(conn, market: str, symbol: str) -> tuple[float | None, f
 
     ``fund_score`` is the fraction of applicable fundamental checks that pass
     (earnings/revenue growth, margin trend, EPS surprise, earnings increasing).
-    ``eps_upside_pct`` reuses the scoring engine's projected-EPS upside (forward
-    analyst EPS, falling back to reported YoY earnings growth). Either may be
-    ``None`` when the data isn't available -- the caller then drops that
-    component from the blend.
+    ``eps_upside_pct`` reuses the scoring engine's P/E-constant price upside
+    (``(forwardEps / trailingEps - 1) * 100``, falling back to reported YoY earnings
+    growth). Either may be ``None`` when the data isn't available -- the caller then
+    drops that component from the blend.
     """
     cur = conn.cursor()
     earn = cur.execute(
