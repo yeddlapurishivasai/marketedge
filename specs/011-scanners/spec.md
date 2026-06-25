@@ -60,6 +60,12 @@ The pre-close scan also refreshes the `{Market}TickerTechnical` snapshot (prices
 levels, market cap) for the scanned symbols by reusing the ingestion `technical` step, so
 scoring and Stock Lookup reflect today's data. This is best-effort and never aborts the scan.
 
+After scanners run, the pre-close scan **scores** the universe and runs the **paper-trade
+engine** (open/manage/close positions). Scoring runs on every scan, but the paper-trade engine
+runs **only on the pre-close all-scanner run** (`scannerName = null`); single/named-scanner and
+local runs skip it. See **Feature 012 — Stock Scoring & Paper Trades** for the scoring model,
+trade lifecycle, pre-close gating, and PnL/day views.
+
 ### Nightly fundamentals refresh (stage2)
 
 - An admin toggle enables a per-market nightly fundamentals schedule.
