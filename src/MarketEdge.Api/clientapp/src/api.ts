@@ -435,7 +435,7 @@ export async function fetchScanners(market: Market): Promise<ScannerInfo[]> {
   return res.json();
 }
 
-export async function triggerScanner(market: Market, body: { scannerName?: string | null; universe?: string }): Promise<{ runId: number }> {
+export async function triggerScanner(market: Market, body: { scannerName?: string | null; universe?: string; backfill?: boolean }): Promise<{ runId: number }> {
   const res = await fetch(`${BASE}/${market}/scanners/trigger`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -598,6 +598,7 @@ export interface Trade {
   scannerHitCount: number;
   entryAt: string;
   entryPrice: number;
+  qty?: number | null;
   initialStop?: number | null;
   currentStop?: number | null;
   stopBasis?: string | null;
@@ -605,6 +606,7 @@ export interface Trade {
   movedToBe: boolean;
   lastPrice?: number | null;
   pnLPct?: number | null;
+  pnLAmount?: number | null;
   mfePct?: number | null;
   maePct?: number | null;
   exitAt?: string | null;
@@ -620,6 +622,8 @@ export interface TradeStats {
   losses: number;
   winRatePct?: number | null;
   avgPnLPct?: number | null;
+  realizedPnLAmount?: number | null;
+  openPnLAmount?: number | null;
 }
 
 export async function fetchScores(

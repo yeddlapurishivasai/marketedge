@@ -125,7 +125,7 @@ public class MarketEdgeDbContext : DbContext
             var e = modelBuilder.Entity(t);
             foreach (var p in new[] { nameof(TradeBase.EntryPrice), nameof(TradeBase.InitialStop),
                 nameof(TradeBase.CurrentStop), nameof(TradeBase.RiskPerShare), nameof(TradeBase.LastPrice),
-                nameof(TradeBase.ExitPrice) })
+                nameof(TradeBase.PnLAmount), nameof(TradeBase.ExitPrice) })
                 e.Property(p).HasColumnType("decimal(18,4)");
             foreach (var p in new[] { nameof(TradeBase.PnLPct), nameof(TradeBase.MfePct), nameof(TradeBase.MaePct) })
                 e.Property(p).HasColumnType("decimal(12,4)");

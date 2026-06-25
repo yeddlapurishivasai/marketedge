@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { Market, StockScore, Trade, TradeStats, TradeProfile } from '../api';
-import { fetchScores, fetchTrades, fetchTradeStats } from '../api';
-import { ChevronLeft, RefreshCw, TrendingUp, Loader2, Gauge, Activity } from 'lucide-react';
+import { fetchScores, fetchTrades, fetchTradeStats, triggerScanner } from '../api';
+import { ChevronLeft, RefreshCw, TrendingUp, Loader2, Gauge, Activity, History } from 'lucide-react';
 
 function fmtPct(v?: number | null): string {
   if (v == null) return '—';
@@ -21,6 +21,12 @@ function curSym(market: Market): string {
 function fmtPrice(v: number | null | undefined, market: Market): string {
   if (v == null) return '—';
   return `${curSym(market)}${v.toFixed(2)}`;
+}
+
+function fmtMoney(v: number | null | undefined, market: Market): string {
+  if (v == null) return '—';
+  const sign = v > 0 ? '+' : v < 0 ? '-' : '';
+  return `${sign}${curSym(market)}${Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 }
 
 function ScoreBadge({ score }: { score?: number | null }) {
@@ -44,6 +50,12 @@ function PnLCell({ v }: { v?: number | null }) {
   if (v == null) return <span className="cell-muted">—</span>;
   const color = v > 0 ? 'var(--success)' : v < 0 ? 'var(--danger)' : 'var(--text-muted)';
   return <span style={{ fontWeight: 600, color }}>{fmtPct(v)}</span>;
+}
+
+function MoneyCell({ v, market }: { v?: number | null; market: Market }) {
+  if (v == null) return <span className="cell-muted">—</span>;
+  const color = v > 0 ? 'var(--success)' : v < 0 ? 'var(--danger)' : 'var(--text-muted)';
+  return <span style={{ fontWeight: 600, color }}>{fmtMoney(v, market)}</span>;
 }
 
 export default function TradesPage() {
@@ -177,6 +189,8 @@ function TradesTab({ market }: { market: Market }) {
   const [rows, setRows] = useState<Trade[]>([]);
   const [stats, setStats] = useState<TradeStats | null>(null);
   const [loading, setLoading] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+  const [note, setNote] = useState<string>('');
 
   const load = useCallback(() => {
     setLoading(true);
@@ -191,6 +205,19 @@ function TradesTab({ market }: { market: Market }) {
 
   useEffect(() => { load(); }, [load]);
 
+  const backfill = useCallback(() => {
+    setBackfilling(true);
+    setNote('');
+    triggerScanner(market, { universe: 'stage2', backfill: true })
+      .then(() => {
+        setNote('Backfill started — replaying the last 3 days of breakouts. Refresh in a minute.');
+      })
+      .catch(() => setNote('Failed to start backfill.'))
+      .finally(() => setBackfilling(false));
+  }, [market]);
+
+  const closed = status === 'closed';
+
   return (
     <>
       {stats && (
@@ -200,7 +227,10 @@ function TradesTab({ market }: { market: Market }) {
           <Stat label="Wins" value={stats.wins} color="var(--success)" />
           <Stat label="Losses" value={stats.losses} color="var(--danger)" />
           <Stat label="Win rate" value={stats.winRatePct != null ? `${stats.winRatePct}%` : '—'} />
-          <Stat label="Avg PnL" value={stats.avgPnLPct != null ? fmtPct(stats.avgPnLPct) : '—'} />
+          <Stat label="Open P&L" value={fmtMoney(stats.openPnLAmount, market)}
+            color={(stats.openPnLAmount ?? 0) >= 0 ? 'var(--success)' : 'var(--danger)'} />
+          <Stat label="Realized P&L" value={fmtMoney(stats.realizedPnLAmount, market)}
+            color={(stats.realizedPnLAmount ?? 0) >= 0 ? 'var(--success)' : 'var(--danger)'} />
         </div>
       )}
 
@@ -215,17 +245,26 @@ function TradesTab({ market }: { market: Market }) {
           <option value="swing">Swing</option>
           <option value="positional">Positional</option>
         </select>
-        <button className="btn btn-ghost btn-sm" onClick={load} style={{ marginLeft: 'auto' }}>
+        <button className="btn btn-ghost btn-sm" onClick={backfill} disabled={backfilling} style={{ marginLeft: 'auto' }}
+          title="Replay the last 3 days of volume-confirmed breakouts into the blotter">
+          {backfilling ? <Loader2 size={14} className="spin" /> : <History size={14} />} Backfill 3 days
+        </button>
+        <button className="btn btn-ghost btn-sm" onClick={load}>
           <RefreshCw size={14} /> Refresh
         </button>
       </div>
+
+      {note && <div className="hint" style={{ marginBottom: 8, color: 'var(--text-muted)' }}>{note}</div>}
 
       {loading ? (
         <div className="loading"><Loader2 size={18} className="spin" /> Loading trades...</div>
       ) : rows.length === 0 ? (
         <div className="empty-state">
           <div className="empty-state-icon"><Activity size={48} /></div>
-          <p className="empty-state-text">No trades. Breakouts flagged by scanners open paper trades automatically.</p>
+          <p className="empty-state-text">
+            No trades. A scanner hit is only a setup — a paper trade opens on a volume-confirmed
+            break of support/resistance. Use “Backfill 3 days” to seed from recent breakouts.
+          </p>
         </div>
       ) : (
         <div className="table-container">
@@ -235,12 +274,14 @@ function TradesTab({ market }: { market: Market }) {
                 <th>Ticker</th>
                 <th>Type</th>
                 <th>Dir</th>
+                <th style={{ textAlign: 'right' }}>Qty</th>
                 <th style={{ textAlign: 'right' }}>Entry</th>
-                <th style={{ textAlign: 'right' }}>Stop</th>
-                <th style={{ textAlign: 'right' }}>Last</th>
-                <th style={{ textAlign: 'right' }}>PnL</th>
+                <th style={{ textAlign: 'right' }}>Trail</th>
+                <th style={{ textAlign: 'right' }}>{closed ? 'Last' : 'Current'}</th>
+                <th style={{ textAlign: 'right' }}>Exit</th>
+                <th style={{ textAlign: 'right' }}>P&amp;L %</th>
+                <th style={{ textAlign: 'right' }}>P&amp;L</th>
                 <th style={{ textAlign: 'right' }}>MFE / MAE</th>
-                <th>Entry scanner</th>
                 <th style={{ textAlign: 'center' }}>Scanners</th>
                 <th>Status</th>
               </tr>
@@ -251,16 +292,18 @@ function TradesTab({ market }: { market: Market }) {
                   <td style={{ fontWeight: 600 }}>{t.ticker}</td>
                   <td>{t.tradeType}</td>
                   <td><SideBadge side={t.direction} /></td>
+                  <td className="cell-right">{t.qty ?? '—'}</td>
                   <td className="cell-right">{fmtPrice(t.entryPrice, market)}</td>
                   <td className="cell-right" title={t.stopBasis || ''}>{fmtPrice(t.currentStop, market)}</td>
                   <td className="cell-right">{fmtPrice(t.lastPrice, market)}</td>
+                  <td className="cell-right">{t.status === 'closed' ? fmtPrice(t.exitPrice, market) : '—'}</td>
                   <td className="cell-right"><PnLCell v={t.pnLPct} /></td>
+                  <td className="cell-right"><MoneyCell v={t.pnLAmount} market={market} /></td>
                   <td className="cell-right" style={{ fontSize: '0.8rem' }}>
                     <span style={{ color: 'var(--success)' }}>{fmtNum(t.mfePct)}</span>
                     {' / '}
                     <span style={{ color: 'var(--danger)' }}>{fmtNum(t.maePct)}</span>
                   </td>
-                  <td style={{ fontSize: '0.8rem' }}>{t.entryScanner || '—'}</td>
                   <td className="cell-center" title={t.flaggedScanners.join(', ')}>
                     <span className="badge badge-count">{t.scannerHitCount}</span>
                   </td>

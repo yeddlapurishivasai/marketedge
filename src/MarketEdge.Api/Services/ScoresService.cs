@@ -79,7 +79,7 @@ public class ScoresService : IScoresService
     private async Task<TradeStatsDto> GetStats<T>() where T : TradeBase
     {
         var rows = await TradeSet<T>()
-            .Select(t => new { t.Status, t.PnLPct })
+            .Select(t => new { t.Status, t.PnLPct, t.PnLAmount })
             .ToListAsync();
         var active = rows.Count(r => r.Status == "active");
         var closed = rows.Where(r => r.Status == "closed").ToList();
@@ -88,7 +88,11 @@ public class ScoresService : IScoresService
         decimal? winRate = closed.Count > 0 ? Math.Round(100m * wins / closed.Count, 2) : null;
         var withPnl = rows.Where(r => r.PnLPct.HasValue).Select(r => r.PnLPct!.Value).ToList();
         decimal? avgPnl = withPnl.Count > 0 ? Math.Round(withPnl.Average(), 2) : null;
-        return new TradeStatsDto(active, closed.Count, wins, losses, winRate, avgPnl);
+        decimal? realized = closed.Where(r => r.PnLAmount.HasValue).Select(r => r.PnLAmount!.Value).DefaultIfEmpty(0).Sum();
+        decimal? openPnl = rows.Where(r => r.Status == "active" && r.PnLAmount.HasValue)
+            .Select(r => r.PnLAmount!.Value).DefaultIfEmpty(0).Sum();
+        return new TradeStatsDto(active, closed.Count, wins, losses, winRate, avgPnl,
+            Math.Round(realized ?? 0, 2), Math.Round(openPnl ?? 0, 2));
     }
 
     private static StockScoreDto ToDto(StockScoresBase s) => new(
@@ -111,8 +115,8 @@ public class ScoresService : IScoresService
 
         return new TradeDto(
             t.Id, t.Ticker, t.CompanyName, t.TradeType, t.Direction, t.Status,
-            t.EntryScanner, flagged, t.ScannerHitCount, t.EntryAt, t.EntryPrice,
+            t.EntryScanner, flagged, t.ScannerHitCount, t.EntryAt, t.EntryPrice, t.Qty,
             t.InitialStop, t.CurrentStop, t.StopBasis, t.RiskPerShare, t.MovedToBe,
-            t.LastPrice, t.PnLPct, t.MfePct, t.MaePct, t.ExitAt, t.ExitPrice, t.ExitReason, t.UpdatedAt);
+            t.LastPrice, t.PnLPct, t.PnLAmount, t.MfePct, t.MaePct, t.ExitAt, t.ExitPrice, t.ExitReason, t.UpdatedAt);
     }
 }

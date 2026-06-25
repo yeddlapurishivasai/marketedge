@@ -38,6 +38,7 @@ public record TradeDto(
     int ScannerHitCount,
     DateTime EntryAt,
     decimal EntryPrice,
+    int? Qty,
     decimal? InitialStop,
     decimal? CurrentStop,
     string? StopBasis,
@@ -45,6 +46,7 @@ public record TradeDto(
     bool MovedToBe,
     decimal? LastPrice,
     decimal? PnLPct,
+    decimal? PnLAmount,
     decimal? MfePct,
     decimal? MaePct,
     DateTime? ExitAt,
@@ -58,4 +60,6 @@ public record TradeStatsDto(
     int Wins,
     int Losses,
     decimal? WinRatePct,
-    decimal? AvgPnLPct);
+    decimal? AvgPnLPct,
+    decimal? RealizedPnLAmount,
+    decimal? OpenPnLAmount);

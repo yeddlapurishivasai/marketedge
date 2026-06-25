@@ -15,6 +15,7 @@ CREATE TABLE [dbo].[IndianTrades]
 
     [EntryAt]             DATETIME2     NOT NULL,
     [EntryPrice]          DECIMAL(18,4) NOT NULL,
+    [Qty]                 INT           NULL,        -- shares sized off a fixed notional per position
 
     -- Stop management
     [InitialStop]         DECIMAL(18,4) NULL,
@@ -26,6 +27,7 @@ CREATE TABLE [dbo].[IndianTrades]
     -- Live tracking
     [LastPrice]           DECIMAL(18,4) NULL,
     [PnLPct]              DECIMAL(12,4) NULL,
+    [PnLAmount]           DECIMAL(18,4) NULL,        -- pure profit = (price - entry) * dir * qty
     [MfePct]              DECIMAL(12,4) NULL,        -- max favourable excursion
     [MaePct]              DECIMAL(12,4) NULL,        -- max adverse excursion
 

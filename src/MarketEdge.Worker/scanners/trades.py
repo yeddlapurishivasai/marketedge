@@ -9,9 +9,13 @@ Runs as part of every scanner job (the 15-minute scheduled run). On each run it:
    * for **positional** trades: the stop rides the 20-EMA and the trade exits on a
      close below it,
    * closes a trade (capturing realised PnL%) when price violates the current stop.
-2. **Opens** new trades for symbols flagged by a scanner *this run* that do not already
-   have an active trade of that type -- one swing (6% stop) and one positional (20-EMA
-   stop) per qualifying breakout. F&O names flagged by a short scanner open short trades.
+2. **Opens** new trades for symbols flagged by a scanner *this run* **only once price
+   actually breaks the pivot** -- above the prior resistance (highest high) for longs,
+   below the prior support (lowest low) for shorts. A scanner hit alone is just a
+   setup. One swing (10-bar pivot, 6% stop) and one positional (20-bar base, 20-EMA
+   stop) per qualifying breakout. F&O names flagged by a short scanner open shorts.
+   On a **cold start** (no trades yet) the last few days' breakouts are backfilled so
+   the blotter isn't empty.
 3. **Tags** every scanner that flagged an already-active trade onto that trade
    (``FlaggedScannersJson`` + ``ScannerHitCount``) without opening a duplicate entry.
 
@@ -26,6 +30,8 @@ import math
 from datetime import date, datetime, timezone
 from typing import Any
 
+import numpy as np
+
 from .indicators import load_bars
 
 logger = logging.getLogger(__name__)
@@ -37,6 +43,24 @@ _POS_STOP_FALLBACK = 0.08   # if 20-EMA unavailable / above price
 _TRAIL_MA = 10             # swing trail SMA period
 _POS_EMA = 20              # positional stop / exit EMA
 _MAX_BARS = 260
+
+# Notional capital allocated per paper position -> drives Qty and the absolute
+# ("pure") profit. Round, market-appropriate sizes.
+_NOTIONAL = {"india": 100_000.0, "us": 10_000.0}
+
+# Breakout confirmation: a scanner hit is only a *setup*. A trade is opened
+# only once price actually breaks the pivot -- resistance (prior highest high)
+# for longs, support (prior lowest low) for shorts -- AND the breakout bar trades
+# on above-average volume (a break on thin volume is not a trade). Swing trades
+# break a shorter pivot; positional trades break a longer base.
+_SWING_BREAKOUT_LOOKBACK = 10
+_POS_BREAKOUT_LOOKBACK = 20
+_VOL_AVG = 20             # average-volume lookback for breakout confirmation
+_VOL_MULT = 1.5           # breakout bar volume must be >= this x average volume
+
+# Cold start: when a market has no trades yet, replay breakouts from the last few
+# trading days so the blotter starts populated instead of empty.
+_BACKFILL_DAYS = 3
 
 # Scanners that express a bearish/short setup.
 _SHORT_SCANNERS = {"NSE_CSS"}
@@ -57,6 +81,80 @@ def _is_short_scanner(name: str) -> bool:
     return name in _SHORT_SCANNERS or "SHORT" in name.upper() or name.upper().endswith("_CSS")
 
 
+def _is_breakout(series, direction: str, lookback: int, idx: int | None = None) -> bool:
+    """True only when the bar at ``idx`` (default latest) closes past the prior pivot.
+
+    Long  -> close breaks **above** the highest high of the prior ``lookback`` bars
+             (resistance breakout).
+    Short -> close breaks **below** the lowest low of the prior ``lookback`` bars
+             (support breakdown).
+
+    The pivot window excludes the tested bar so we register a genuine break, not the
+    bar making the extreme itself.
+    """
+    if series is None:
+        return False
+    if idx is None:
+        idx = series.last
+    if idx < lookback:
+        return False
+    close = float(series.close[idx])
+    if math.isnan(close):
+        return False
+    if direction == "long":
+        resistance = float(np.nanmax(series.high[idx - lookback:idx]))
+        broke = not math.isnan(resistance) and close > resistance
+    else:
+        support = float(np.nanmin(series.low[idx - lookback:idx]))
+        broke = not math.isnan(support) and close < support
+    return broke and _volume_confirmed(series, idx)
+
+
+def _volume_confirmed(series, idx: int) -> bool:
+    """Breakout bar must trade on >= ``_VOL_MULT`` x the average volume.
+
+    If volume history is missing/insufficient we don't block the entry.
+    """
+    if series is None or series.n < _VOL_AVG:
+        return True
+    try:
+        avg = float(series.avg_vol(_VOL_AVG)[idx])
+        vol = float(series.volume[idx])
+    except (IndexError, ValueError, TypeError):
+        return True
+    if math.isnan(avg) or avg <= 0 or math.isnan(vol):
+        return True
+    return vol >= avg * _VOL_MULT
+
+
+def _backfill_entry_idx(series, direction: str, lookback: int, window: int) -> int | None:
+    """Earliest bar within the last ``window`` bars that produced a breakout.
+
+    Used only on a cold start so the blotter isn't empty: we look back a few days and
+    enter at the first genuine break rather than waiting for a fresh one.
+    """
+    if series is None:
+        return None
+    last = series.last
+    start = max(lookback, last - window + 1)
+    for idx in range(start, last + 1):
+        if _is_breakout(series, direction, lookback, idx):
+            return idx
+    return None
+
+
+def _entry_dt(d: Any) -> datetime:
+    """Coerce a bar date into a datetime for the EntryAt column."""
+    if isinstance(d, datetime):
+        return d.replace(tzinfo=None)
+    if isinstance(d, date):
+        return datetime(d.year, d.month, d.day)
+    try:
+        return datetime.fromisoformat(str(d)[:19])
+    except ValueError:
+        return _now()
+
+
 def _series_metrics(series) -> dict[str, float | None]:
     """Last close plus SMA10 / EMA20 at the last bar."""
     if series is None or series.n < 1:
@@ -72,7 +170,7 @@ def _series_metrics(series) -> dict[str, float | None]:
 def _get_active_trades(conn, market: str) -> list[dict]:
     table = _t(market)
     rows = conn.cursor().execute(
-        f"""SELECT Id, Ticker, TradeType, Direction, EntryPrice, InitialStop, CurrentStop,
+        f"""SELECT Id, Ticker, TradeType, Direction, EntryPrice, Qty, InitialStop, CurrentStop,
                    StopBasis, RiskPerShare, MovedToBe, MfePct, MaePct, FlaggedScannersJson,
                    ScannerHitCount
             FROM dbo.{table} WHERE Status = 'active'"""
@@ -80,7 +178,8 @@ def _get_active_trades(conn, market: str) -> list[dict]:
     return [
         {
             "id": r.Id, "ticker": r.Ticker, "trade_type": r.TradeType, "direction": r.Direction,
-            "entry": float(r.EntryPrice), "initial_stop": float(r.InitialStop) if r.InitialStop is not None else None,
+            "entry": float(r.EntryPrice), "qty": int(r.Qty) if r.Qty is not None else 0,
+            "initial_stop": float(r.InitialStop) if r.InitialStop is not None else None,
             "current_stop": float(r.CurrentStop) if r.CurrentStop is not None else None,
             "stop_basis": r.StopBasis, "risk": float(r.RiskPerShare) if r.RiskPerShare is not None else None,
             "moved_to_be": bool(r.MovedToBe),
@@ -111,6 +210,8 @@ def _manage_trade(conn, market: str, t: dict, series, flagged_now: list[str]) ->
     sign = 1.0 if t["direction"] == "long" else -1.0
     entry = t["entry"]
     pnl = (last - entry) / entry * 100.0 * sign
+    qty = t.get("qty") or 0
+    pnl_amt = (last - entry) * sign * qty
 
     mfe = max(t["mfe"] if t["mfe"] is not None else pnl, pnl)
     mae = min(t["mae"] if t["mae"] is not None else pnl, pnl)
@@ -164,10 +265,10 @@ def _manage_trade(conn, market: str, t: dict, series, flagged_now: list[str]) ->
     if exit_reason is not None:
         cur.execute(
             f"""UPDATE dbo.{table} SET Status='closed', ExitAt=?, ExitPrice=?, ExitReason=?,
-                    LastPrice=?, PnLPct=?, CurrentStop=?, StopBasis=?, MovedToBe=?,
+                    LastPrice=?, PnLPct=?, PnLAmount=?, CurrentStop=?, StopBasis=?, MovedToBe=?,
                     MfePct=?, MaePct=?, FlaggedScannersJson=?, ScannerHitCount=?, UpdatedAt=GETUTCDATE()
                 WHERE Id=?""",
-            _now(), round(last, 4), exit_reason, round(last, 4), round(pnl, 4),
+            _now(), round(last, 4), exit_reason, round(last, 4), round(pnl, 4), round(pnl_amt, 4),
             round(stop, 4) if stop is not None else None, basis, int(moved),
             round(mfe, 4), round(mae, 4), json.dumps(new_flagged), hit_count, t["id"],
         )
@@ -175,17 +276,18 @@ def _manage_trade(conn, market: str, t: dict, series, flagged_now: list[str]) ->
                     market, t["trade_type"], t["ticker"], last, pnl, exit_reason)
     else:
         cur.execute(
-            f"""UPDATE dbo.{table} SET LastPrice=?, PnLPct=?, CurrentStop=?, StopBasis=?, MovedToBe=?,
+            f"""UPDATE dbo.{table} SET LastPrice=?, PnLPct=?, PnLAmount=?, CurrentStop=?, StopBasis=?, MovedToBe=?,
                     MfePct=?, MaePct=?, FlaggedScannersJson=?, ScannerHitCount=?, UpdatedAt=GETUTCDATE()
                 WHERE Id=?""",
-            round(last, 4), round(pnl, 4), round(stop, 4) if stop is not None else None, basis,
+            round(last, 4), round(pnl, 4), round(pnl_amt, 4), round(stop, 4) if stop is not None else None, basis,
             int(moved), round(mfe, 4), round(mae, 4), json.dumps(new_flagged), hit_count, t["id"],
         )
     conn.commit()
 
 
 def _open_trade(conn, market: str, ticker: str, company: str | None, trade_type: str,
-                direction: str, entry: float, series, scanners: list[str]) -> None:
+                direction: str, entry: float, series, scanners: list[str],
+                entry_at: datetime | None = None) -> dict:
     table = _t(market)
     m = _series_metrics(series)
 
@@ -204,32 +306,47 @@ def _open_trade(conn, market: str, ticker: str, company: str | None, trade_type:
         basis = "ema20"
 
     risk = abs(entry - initial)
+    qty = max(1, int(_NOTIONAL.get(market.lower(), 100_000.0) // entry)) if entry > 0 else 0
     entry_scanner = scanners[0] if scanners else None
-    conn.cursor().execute(
+    row = conn.cursor().execute(
         f"""INSERT INTO dbo.{table}
             (Ticker, CompanyName, TradeType, Direction, Status, EntryScanner, FlaggedScannersJson,
-             ScannerHitCount, EntryAt, EntryPrice, InitialStop, CurrentStop, StopBasis, RiskPerShare,
-             MovedToBe, LastPrice, PnLPct, MfePct, MaePct, CreatedAt, UpdatedAt)
-            VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, 0, 0, GETUTCDATE(), GETUTCDATE())""",
+             ScannerHitCount, EntryAt, EntryPrice, Qty, InitialStop, CurrentStop, StopBasis, RiskPerShare,
+             MovedToBe, LastPrice, PnLPct, PnLAmount, MfePct, MaePct, CreatedAt, UpdatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, 0, 0, 0, GETUTCDATE(), GETUTCDATE())""",
         ticker, company, trade_type, direction, entry_scanner, json.dumps(sorted(set(scanners))),
-        len(set(scanners)), _now(), round(entry, 4), round(initial, 4), round(initial, 4), basis,
-        round(risk, 4), round(entry, 4),
-    )
+        len(set(scanners)), entry_at or _now(), round(entry, 4), qty, round(initial, 4), round(initial, 4),
+        basis, round(risk, 4), round(entry, 4),
+    ).fetchone()
     conn.commit()
-    logger.info("Opened %s %s %s @ %.2f stop=%.2f (%s)",
-                market, trade_type, ticker, entry, initial, entry_scanner)
+    logger.info("Opened %s %s %s @ %.2f stop=%.2f qty=%d (%s)",
+                market, trade_type, ticker, entry, initial, qty, entry_scanner)
+    new_id = int(row.Id) if row else None
+    return {
+        "id": new_id, "ticker": ticker, "trade_type": trade_type, "direction": direction,
+        "entry": entry, "qty": qty, "initial_stop": initial, "current_stop": initial,
+        "stop_basis": basis, "risk": risk, "moved_to_be": False, "mfe": None, "mae": None,
+        "flagged": sorted(set(scanners)), "hit_count": len(set(scanners)),
+    }
 
 
 def run_trade_engine(conn, market: str, scan_date: date,
-                     flagged: dict[str, dict], series_cache: dict[str, Any]) -> dict[str, int]:
+                     flagged: dict[str, dict], series_cache: dict[str, Any],
+                     backfill: bool = False) -> dict[str, int]:
     """Manage open trades and open new ones for this run's breakouts.
 
     ``flagged`` maps symbol -> {"scanners": [names], "company": str, "is_fno": bool}.
-    Returns counts {managed, opened, closed, tagged}.
+    When ``backfill`` is true (or the market has no trades yet) the last few days'
+    breakouts are replayed so the blotter isn't empty. Returns counts.
     """
     active = _get_active_trades(conn, market)
     # tickers that were active at the START of this run -> never re-enter same (ticker, type) this run
     active_keys = {(t["ticker"], t["trade_type"]) for t in active}
+
+    # Cold start OR explicit backfill request -> replay the last few days' breakouts.
+    total = conn.cursor().execute(f"SELECT COUNT(*) AS c FROM dbo.{_t(market)}").fetchone()
+    do_backfill = backfill or (total.c if total else 0) == 0
 
     def _series_for(sym: str):
         s = series_cache.get(sym)
@@ -249,7 +366,7 @@ def run_trade_engine(conn, market: str, scan_date: date,
         f"SELECT COUNT(*) AS c FROM dbo.{_t(market)} WHERE Status='closed' AND CAST(UpdatedAt AS DATE)=CAST(GETUTCDATE() AS DATE)"
     ).fetchone()
 
-    opened = 0
+    opened = setups = backfilled = 0
     for sym, info in flagged.items():
         scanners = info.get("scanners", [])
         if not scanners:
@@ -264,7 +381,6 @@ def run_trade_engine(conn, market: str, scan_date: date,
         has_long = any(not _is_short_scanner(s) for s in scanners)
 
         # Direction: long setups -> long; short setups -> short only for F&O names.
-        plans: list[str] = []
         direction = "long"
         if has_long:
             direction = "long"
@@ -276,6 +392,26 @@ def run_trade_engine(conn, market: str, scan_date: date,
         for trade_type in ("swing", "positional"):
             if (sym, trade_type) in active_keys:
                 continue  # already active -> tagged during management, no new entry
+            lookback = _SWING_BREAKOUT_LOOKBACK if trade_type == "swing" else _POS_BREAKOUT_LOOKBACK
+
+            if do_backfill:
+                bidx = _backfill_entry_idx(series, direction, lookback, _BACKFILL_DAYS)
+                if bidx is None:
+                    setups += 1
+                    continue
+                opened_trade = _open_trade(
+                    conn, market, sym, info.get("company"), trade_type, direction,
+                    float(series.close[bidx]), series, scanners,
+                    entry_at=_entry_dt(series.dates[bidx]))
+                # bring the backfilled trade up to the current bar (trail / close out)
+                _manage_trade(conn, market, opened_trade, series, [])
+                opened += 1
+                backfilled += 1
+                continue
+
+            if not _is_breakout(series, direction, lookback):
+                setups += 1  # flagged but no confirmed break yet -> wait
+                continue
             _open_trade(conn, market, sym, info.get("company"), trade_type, direction,
                         entry, series, scanners)
             opened += 1
@@ -283,5 +419,7 @@ def run_trade_engine(conn, market: str, scan_date: date,
     return {
         "managed": managed,
         "opened": opened,
+        "backfilled": backfilled,
+        "setupsWaiting": setups,
         "closedToday": int(closed_now.c) if closed_now else 0,
     }

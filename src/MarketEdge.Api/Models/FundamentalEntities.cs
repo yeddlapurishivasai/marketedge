@@ -130,6 +130,7 @@ public abstract class TradeBase
 
     public DateTime EntryAt { get; set; }
     public decimal EntryPrice { get; set; }
+    public int? Qty { get; set; }
 
     public decimal? InitialStop { get; set; }
     public decimal? CurrentStop { get; set; }
@@ -139,6 +140,7 @@ public abstract class TradeBase
 
     public decimal? LastPrice { get; set; }
     public decimal? PnLPct { get; set; }
+    public decimal? PnLAmount { get; set; }
     public decimal? MfePct { get; set; }
     public decimal? MaePct { get; set; }
 
