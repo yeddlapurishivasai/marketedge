@@ -46,6 +46,12 @@ Every stock is evaluated under **two profiles**:
   move-to-break-even (`MovedToBe`), running `LastPrice`, `PnLPct`/`PnLAmount`, and
   `MfePct`/`MaePct`. A position closes with an `ExitReason` (e.g. stop hit), stamping
   `ExitAt`/`ExitPrice` and flipping `Status` to `closed`.
+- **Stop model differs by book.** *Swing*: a fixed 6%-below-entry stop that, once price
+  reaches +1R, jumps to break-even and thereafter trails the 10-period SMA. *Positional*:
+  the initial stop is the **further of the 20-EMA and a 10%-below-entry floor** (so every
+  positional trade starts with ≥10% of room); it only tightens to — and then trails — the
+  20-EMA once the EMA has risen **above the entry** (the trade is in profit), guaranteeing a
+  positional stop is never tighter than swing's when both break out hugging the EMA.
 
 ### Pre-close gating (trades generated on the pre-close scan only)
 
