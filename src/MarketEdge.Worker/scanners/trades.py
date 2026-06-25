@@ -6,14 +6,18 @@ Runs as part of every scanner job (the 15-minute scheduled run). On each run it:
    * updates ``LastPrice`` / ``PnLPct`` and the MFE/MAE excursions,
    * for **swing** trades: once price moves ``+1R`` the stop jumps to breakeven and
      thereafter trails the 10-period SMA,
-   * for **positional** trades: the stop rides the 20-EMA and the trade exits on a
-     close below it,
+   * for **positional** trades: the initial stop is the *further* of the 20-EMA
+     and a 10%-below-entry floor, so the trade always starts with >=10% of room;
+     the stop only tightens to (and trails) the 20-EMA once the EMA has risen
+     above the entry (the trade is in profit). It exits on a close below the
+     current stop,
    * closes a trade (capturing realised PnL%) when price violates the current stop.
 2. **Opens** new trades for symbols flagged by a scanner *this run* **only once price
    actually breaks the pivot** -- above the prior resistance (highest high) for longs,
    below the prior support (lowest low) for shorts. A scanner hit alone is just a
-   setup. One swing (10-bar pivot, 6% stop) and one positional (20-bar base, 20-EMA
-   stop) per qualifying breakout. F&O names flagged by a short scanner open shorts.
+   setup. One swing (10-bar pivot, 6% stop) and one positional (20-bar base,
+   10%-floor stop that later trails the 20-EMA) per qualifying breakout. F&O names
+   flagged by a short scanner open shorts.
    The blotter starts from a clean slate and only fills with genuine forward breakouts.
 3. **Tags** every scanner that flagged an already-active trade onto that trade
    (``FlaggedScannersJson`` + ``ScannerHitCount``) without opening a duplicate entry.
@@ -39,7 +43,7 @@ logger = logging.getLogger(__name__)
 _TRADES = {"india": "IndianTrades", "us": "USTrades"}
 
 _SWING_STOP_PCT = 0.06      # initial swing stop
-_POS_STOP_FALLBACK = 0.08   # if 20-EMA unavailable / above price
+_POS_STOP_FALLBACK = 0.10   # positional floor: trade always gets >= this much room
 _TRAIL_MA = 10             # swing trail SMA period
 _POS_EMA = 20              # positional stop / exit EMA
 _MAX_BARS = 260
@@ -209,22 +213,21 @@ def _manage_trade(conn, market: str, t: dict, series, flagged_now: list[str]) ->
             hit = last <= stop if t["direction"] == "long" else last >= stop
             if hit:
                 exit_reason = "sl_hit" if basis == "pct6" else "trail"
-    else:  # positional: stop rides the 20-EMA, exit on close beyond it
-        if m["ema20"] is not None:
+    else:  # positional: hold a >=10% floor, then trail the 20-EMA once in profit
+        ema20 = m["ema20"]
+        if ema20 is not None:
             if t["direction"] == "long":
-                if m["ema20"] > (stop or 0):
-                    stop, basis = m["ema20"], "ema20"
-                if last < m["ema20"]:
-                    exit_reason = "ema_close"
+                # Only tighten to the 20-EMA after the EMA has risen above entry
+                # (trade in profit); until then the >=10% floor stop stands.
+                if ema20 > entry and ema20 > (stop or 0):
+                    stop, basis = ema20, "ema20"
             else:
-                if stop is None or m["ema20"] < stop:
-                    stop, basis = m["ema20"], "ema20"
-                if last > m["ema20"]:
-                    exit_reason = "ema_close"
-        elif stop is not None:
+                if ema20 < entry and (stop is None or ema20 < stop):
+                    stop, basis = ema20, "ema20"
+        if stop is not None:
             hit = last <= stop if t["direction"] == "long" else last >= stop
             if hit:
-                exit_reason = "sl_hit"
+                exit_reason = "trail" if basis == "ema20" else "sl_hit"
 
     # Tag any scanners that flagged this active trade again (no new entry).
     new_flagged = sorted(set(t["flagged"]) | set(flagged_now))
@@ -275,12 +278,19 @@ def _open_trade(conn, market: str, ticker: str, company: str | None, trade_type:
             initial = entry * (1 + _SWING_STOP_PCT)
         basis = "pct6"
     else:  # positional
+        # Give the trade a true >=10% of room: the stop is the *further* of the
+        # 20-EMA and a 10%-below-entry floor. The stop only tightens to the 20-EMA
+        # later, once the EMA has risen above the entry (i.e. the trade is in
+        # profit) -- see _manage. This stops positional from being tighter than
+        # swing when price breaks out hugging its 20-EMA.
         ema20 = m["ema20"]
         if direction == "long":
-            initial = ema20 if (ema20 is not None and ema20 < entry) else entry * (1 - _POS_STOP_FALLBACK)
+            floor = entry * (1 - _POS_STOP_FALLBACK)
+            initial = min(ema20, floor) if ema20 is not None else floor
         else:
-            initial = ema20 if (ema20 is not None and ema20 > entry) else entry * (1 + _POS_STOP_FALLBACK)
-        basis = "ema20"
+            floor = entry * (1 + _POS_STOP_FALLBACK)
+            initial = max(ema20, floor) if ema20 is not None else floor
+        basis = "ema20" if (ema20 is not None and initial == ema20) else "pct10"
 
     risk = abs(entry - initial)
     qty = max(1, int(_NOTIONAL.get(market.lower(), 100_000.0) // entry)) if entry > 0 else 0
