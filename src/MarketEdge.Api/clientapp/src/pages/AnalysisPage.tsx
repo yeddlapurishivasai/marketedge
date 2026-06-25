@@ -266,7 +266,7 @@ export default function AnalysisPage() {
   const [chartSymbol, setChartSymbol] = useState<string | null>(null);
   const [lookupSymbol, setLookupSymbol] = useState<string | null>(null);
 
-  const top25Sort = useSortableData(summary?.top25 || [], { key: 'rsScore', dir: 'desc' });
+  const top25Sort = useSortableData(summary?.top25 || [], { key: 'rsRating', dir: 'desc' });
   const sectorSort = useSortableData(summary?.bySector || []);
   const rotationSort = useSortableData(rotation);
   const stocksSort = useSortableData(stocks);
@@ -684,8 +684,7 @@ export default function AnalysisPage() {
                     <SortableHeader label="Company" sortKey="companyName" sort={top25Sort.sort} onSort={top25Sort.toggle} />
                     <SortableHeader label="Sector" sortKey="sectorName" sort={top25Sort.sort} onSort={top25Sort.toggle} />
                     <SortableHeader label="Price" sortKey="closePrice" sort={top25Sort.sort} onSort={top25Sort.toggle} />
-                    <SortableHeader label="RS Score" sortKey="rsScore" sort={top25Sort.sort} onSort={top25Sort.toggle} />
-                    <SortableHeader label="RS Rank" sortKey="rsRank" sort={top25Sort.sort} onSort={top25Sort.toggle} />
+                    <SortableHeader label="RS" sortKey="rsRating" sort={top25Sort.sort} onSort={top25Sort.toggle} />
                     <SortableHeader label="Momentum" sortKey="momentumScore" sort={top25Sort.sort} onSort={top25Sort.toggle} />
                     <SortableHeader label="Quadrant" sortKey="quadrant" sort={top25Sort.sort} onSort={top25Sort.toggle} />
                     <SortableHeader label="A/D" sortKey="adClassification" sort={top25Sort.sort} onSort={top25Sort.toggle} />
@@ -703,10 +702,9 @@ export default function AnalysisPage() {
                       <td>{s.companyName.length > 30 ? s.companyName.slice(0, 27) + '...' : s.companyName}</td>
                       <td className="cell-muted">{s.sectorName}</td>
                       <td>{formatPrice(s.closePrice, m)}</td>
-                      <td style={{ color: (s.rsScore ?? 0) > 0 ? 'var(--success)' : 'var(--danger)' }}>
-                        {s.rsScore?.toFixed(2)}
+                      <td style={{ fontWeight: 600, color: s.rsRating != null && s.rsRating >= 70 ? 'var(--success)' : 'var(--text-primary)' }}>
+                        {s.rsRating ?? '-'}
                       </td>
-                      <td>{s.rsRank}</td>
                       <td style={{ color: (s.momentumScore ?? 0) > 0 ? 'var(--success)' : 'var(--danger)' }}>
                         {s.momentumScore?.toFixed(2)}
                       </td>
@@ -881,7 +879,6 @@ export default function AnalysisPage() {
                         <SortableHeader label="Price" sortKey="closePrice" sort={stocksSort.sort} onSort={stocksSort.toggle} />
                         <SortableHeader label="Mkt Cap" sortKey="marketCap" sort={stocksSort.sort} onSort={stocksSort.toggle} />
                         <SortableHeader label="RS" sortKey="rsRating" sort={stocksSort.sort} onSort={stocksSort.toggle} />
-                        <SortableHeader label="Rank" sortKey="rsRank" sort={stocksSort.sort} onSort={stocksSort.toggle} />
                         <SortableHeader label="Momentum" sortKey="momentumScore" sort={stocksSort.sort} onSort={stocksSort.toggle} />
                         <SortableHeader label="Quadrant" sortKey="quadrant" sort={stocksSort.sort} onSort={stocksSort.toggle} />
                         <SortableHeader label="A/D" sortKey="adClassification" sort={stocksSort.sort} onSort={stocksSort.toggle} />
@@ -902,7 +899,6 @@ export default function AnalysisPage() {
                           <td style={{ fontWeight: 600, color: s.rsRating != null && s.rsRating >= 70 ? 'var(--success)' : 'var(--text-primary)' }}>
                             {s.rsRating ?? '-'}
                           </td>
-                          <td>{s.rsRank}</td>
                           <td style={{ color: (s.momentumScore ?? 0) > 0 ? 'var(--success)' : 'var(--danger)' }}>
                             {s.momentumScore?.toFixed(2)}
                           </td>
