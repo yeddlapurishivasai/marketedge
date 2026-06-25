@@ -63,6 +63,7 @@ def get_universe(
     limit: int | None = None,
     test_sample_only: bool = False,
     sector_ids: list[int] | None = None,
+    symbols: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Return the symbol universe from the catalog (symbol + is_fno)."""
     t = tables_for(market)
@@ -76,6 +77,10 @@ def get_universe(
         placeholders = ",".join("?" * len(sector_ids))
         where.append(f"SectorId IN ({placeholders})")
         params.extend(sector_ids)
+    if symbols:
+        placeholders = ",".join("?" * len(symbols))
+        where.append(f"UPPER(Symbol) IN ({placeholders})")
+        params.extend(symbols)
 
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     query = f"""

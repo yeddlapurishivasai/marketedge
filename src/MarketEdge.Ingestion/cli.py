@@ -53,14 +53,23 @@ def _parse_sectors(value: str | None) -> list[int] | None:
     return out or None
 
 
+def _parse_symbols(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    out = [p.strip().upper() for p in value.split(",") if p.strip()]
+    return out or None
+
+
 def _resolve_universe(conn, args) -> list[dict]:
     sectors = _parse_sectors(getattr(args, "sectors", None))
+    symbols = _parse_symbols(getattr(args, "symbols", None))
     universe = db.get_universe(
         conn,
         args.market,
         limit=args.limit,
         test_sample_only=args.test_sample,
         sector_ids=sectors,
+        symbols=symbols,
     )
     logger.info("Resolved %s tickers for market=%s", len(universe), args.market)
     return universe
@@ -409,6 +418,10 @@ def _add_universe_args(parser: argparse.ArgumentParser) -> None:
         "--test-sample", action="store_true", help="Restrict to IsTestSample = 1 rows."
     )
     parser.add_argument("--sectors", default=None, help="Comma-separated SectorId list.")
+    parser.add_argument(
+        "--symbols", default=None,
+        help="Comma-separated symbol list to restrict the run (e.g. a single symbol refresh).",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

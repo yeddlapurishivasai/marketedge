@@ -12,6 +12,7 @@ public record TriggerIngestionRequest(bool TestSample = false, int? Limit = null
 public interface IIngestionService
 {
     Task<int> TriggerAsync(string market, TriggerIngestionRequest request);
+    Task<int> RefreshAnalystAsync(string market, string symbol);
 }
 
 /// <summary>
@@ -26,6 +27,7 @@ public interface IIngestionService
 public class IngestionService : IIngestionService
 {
     public const string JobType = "data_ingestion";
+    public const string AnalystRefreshJobType = "analyst_refresh";
 
     // Pipeline stage -> CLI argument list (market + shared flags appended at runtime).
     // The bars stage seeds the ticker universe internally, so there is no separate seed step.
@@ -103,6 +105,77 @@ public class IngestionService : IIngestionService
         return runId;
     }
 
+    public async Task<int> RefreshAnalystAsync(string market, string symbol)
+    {
+        if (market != "india" && market != "us")
+            throw new ArgumentException("Market must be 'india' or 'us'.");
+        if (string.IsNullOrWhiteSpace(symbol))
+            throw new ArgumentException("Symbol is required.");
+
+        symbol = symbol.Trim().ToUpperInvariant();
+
+        // One in-flight refresh per (market, symbol): return the existing run if present.
+        var existing = await _db.JobRuns
+            .Where(j => j.JobType == AnalystRefreshJobType && j.Market == market && j.Status == "running")
+            .OrderByDescending(j => j.CreatedAt)
+            .ToListAsync();
+        var inflight = existing.FirstOrDefault(j =>
+            (j.Parameters ?? string.Empty).Contains($"\"symbol\":\"{symbol}\""));
+        if (inflight != null)
+            return inflight.Id;
+
+        var now = DateTime.UtcNow;
+        var job = new JobRun
+        {
+            JobType = AnalystRefreshJobType,
+            Market = market,
+            WeekNumber = GetIsoWeekNumber(now),
+            Status = "running",
+            Progress = 0,
+            Parameters = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["market"] = market,
+                ["symbol"] = symbol,
+            }),
+            CreatedAt = now,
+            StartedAt = now,
+        };
+        _db.JobRuns.Add(job);
+        await _db.SaveChangesAsync();
+
+        var runId = job.Id;
+        _ = Task.Run(() => RunAnalystRefreshAsync(runId, market, symbol));
+        return runId;
+    }
+
+    private async Task RunAnalystRefreshAsync(int runId, string market, string symbol)
+    {
+        var output = new StringBuilder();
+        var startedAt = DateTime.UtcNow;
+        var failed = false;
+
+        output.AppendLine($"=== analyst refresh {symbol} ({market}) ===");
+        int exitCode;
+        try
+        {
+            exitCode = await RunProcessAsync(market, new[] { "ingest", "fundamentals" },
+                testSample: false, limit: null, output, extraArgs: new[] { "--symbols", symbol });
+        }
+        catch (Exception ex)
+        {
+            output.AppendLine($"[launch error] {ex.Message}");
+            exitCode = -1;
+        }
+
+        if (exitCode != 0)
+        {
+            failed = true;
+            output.AppendLine($"[analyst refresh exited {exitCode}]");
+        }
+
+        await FinalizeAsync(runId, failed, startedAt, output.ToString());
+    }
+
     private async Task RunPipelineAsync(int runId, string market, bool testSample, int? limit)
     {
         var output = new StringBuilder();
@@ -137,7 +210,7 @@ public class IngestionService : IIngestionService
         await FinalizeAsync(runId, failed, startedAt, output.ToString());
     }
 
-    private async Task<int> RunProcessAsync(string market, string[] stepArgs, bool testSample, int? limit, StringBuilder output)
+    private async Task<int> RunProcessAsync(string market, string[] stepArgs, bool testSample, int? limit, StringBuilder output, IEnumerable<string>? extraArgs = null)
     {
         var (python, workingDir) = ResolvePaths();
         var args = new List<string> { "cli.py" };
@@ -146,6 +219,7 @@ public class IngestionService : IIngestionService
         args.Add(market);
         if (testSample) args.Add("--test-sample");
         if (limit is int n) { args.Add("--limit"); args.Add(n.ToString()); }
+        if (extraArgs != null) args.AddRange(extraArgs);
 
         var psi = new ProcessStartInfo
         {

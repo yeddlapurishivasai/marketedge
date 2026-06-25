@@ -17,6 +17,18 @@ public class MarketEdgeDbContext : DbContext
     public DbSet<IndianStageAnalysisResult> IndianStageAnalysisResults => Set<IndianStageAnalysisResult>();
     public DbSet<USStageAnalysisResult> USStageAnalysisResults => Set<USStageAnalysisResult>();
 
+    // Stock Lookup (query-only) sets
+    public DbSet<IndianTicker> IndianTickers => Set<IndianTicker>();
+    public DbSet<USTicker> USTickers => Set<USTicker>();
+    public DbSet<IndianTickerTechnical> IndianTickerTechnical => Set<IndianTickerTechnical>();
+    public DbSet<USTickerTechnical> USTickerTechnical => Set<USTickerTechnical>();
+    public DbSet<IndianAnalystSnapshot> IndianAnalystSnapshots => Set<IndianAnalystSnapshot>();
+    public DbSet<USAnalystSnapshot> USAnalystSnapshots => Set<USAnalystSnapshot>();
+    public DbSet<IndianEpsForecast> IndianEpsForecasts => Set<IndianEpsForecast>();
+    public DbSet<USEpsForecast> USEpsForecasts => Set<USEpsForecast>();
+    public DbSet<IndianBar1D> IndianBars1D => Set<IndianBar1D>();
+    public DbSet<USBar1D> USBars1D => Set<USBar1D>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<IndianSector>()
@@ -54,6 +66,26 @@ public class MarketEdgeDbContext : DbContext
 
         ConfigureDecimalProperties<IndianStageAnalysisResult>(modelBuilder);
         ConfigureDecimalProperties<USStageAnalysisResult>(modelBuilder);
+
+        ConfigureLookupEntities(modelBuilder);
+    }
+
+    private static void ConfigureLookupEntities(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<IndianTicker>().HasKey(t => t.Ticker);
+        modelBuilder.Entity<USTicker>().HasKey(t => t.Ticker);
+
+        modelBuilder.Entity<IndianTickerTechnical>().HasKey(t => new { t.Ticker, t.AsOfDate });
+        modelBuilder.Entity<USTickerTechnical>().HasKey(t => new { t.Ticker, t.AsOfDate });
+
+        modelBuilder.Entity<IndianAnalystSnapshot>().HasKey(a => new { a.Ticker, a.AsOfDate });
+        modelBuilder.Entity<USAnalystSnapshot>().HasKey(a => new { a.Ticker, a.AsOfDate });
+
+        modelBuilder.Entity<IndianEpsForecast>().HasKey(e => new { e.Ticker, e.AsOfDate, e.PeriodType, e.PeriodEndDate });
+        modelBuilder.Entity<USEpsForecast>().HasKey(e => new { e.Ticker, e.AsOfDate, e.PeriodType, e.PeriodEndDate });
+
+        modelBuilder.Entity<IndianBar1D>().HasKey(b => new { b.Ticker, b.BarDate });
+        modelBuilder.Entity<USBar1D>().HasKey(b => new { b.Ticker, b.BarDate });
     }
 
     private static void ConfigureDecimalProperties<T>(ModelBuilder modelBuilder) where T : StageAnalysisResultBase

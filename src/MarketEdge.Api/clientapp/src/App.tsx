@@ -1,21 +1,21 @@
-import { useState, useEffect, useCallback, createContext, useContext } from 'react';
+import { useState, useEffect, useCallback, useContext } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, useParams, useNavigate } from 'react-router-dom';
 import type { Market, Sector, Stock } from './api';
 import { fetchSectors, fetchStocks, createSector, renameSector, deleteSector, deleteStock, moveStocks } from './api';
 import { formatMarketCap } from './format';
+import { ThemeContext } from './theme';
 import {
   Sun, Moon, ChevronLeft, Search, Plus, Pencil, Trash2,
   ArrowRightLeft, X, TrendingUp, LayoutGrid, BarChart3,
-  IndianRupee, DollarSign, ChevronRight, Activity, Target, Database
+  IndianRupee, DollarSign, ChevronRight, Activity, Target, Database, LineChart
 } from 'lucide-react';
 import JobsPage from './pages/JobsPage';
 import AnalysisPage from './pages/AnalysisPage';
 import AdminPage from './pages/AdminPage';
+import StockLookupPage from './pages/StockLookupPage';
 import './styles.css';
 
 // Theme context
-const ThemeContext = createContext<{ theme: string; toggle: () => void }>({ theme: 'light', toggle: () => {} });
-
 function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState(() => localStorage.getItem('me-theme') || 'light');
   useEffect(() => {
@@ -89,6 +89,7 @@ function App() {
             <Route path="/:market/sectors" element={<SectorsPage />} />
             <Route path="/:market/sectors/:sectorId" element={<SectorDetail />} />
             <Route path="/:market/stocks" element={<StocksPage />} />
+            <Route path="/:market/lookup" element={<StockLookupPage />} />
             <Route path="/:market/analysis" element={<AnalysisPage />} />
             <Route path="/:market/jobs" element={<JobsPage />} />
             <Route path="/:market/admin" element={<AdminPage />} />
@@ -150,6 +151,14 @@ function MarketMenu() {
           <div className="menu-card-text">
             <h3>Stocks</h3>
             <p>Search, move, and manage stocks</p>
+          </div>
+          <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
+        </div>
+        <div className="menu-card" onClick={() => navigate(`/${m}/lookup`)}>
+          <div className="menu-card-icon analysis"><LineChart size={22} /></div>
+          <div className="menu-card-text">
+            <h3>Stock Lookup</h3>
+            <p>Chart, metrics &amp; analyst data for one symbol</p>
           </div>
           <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
         </div>

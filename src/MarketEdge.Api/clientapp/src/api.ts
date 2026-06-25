@@ -289,3 +289,105 @@ export async function fetchRotationHistory(market: Market, maxRuns = 12): Promis
   if (!res.ok) throw new Error('Failed to fetch rotation history');
   return res.json();
 }
+
+// ── Stock Lookup ──
+
+export interface LookupCandidate {
+  symbol: string;
+  companyName: string;
+  industry?: string | null;
+  broadSector?: string | null;
+}
+
+export interface LookupTechnical {
+  asOfDate?: string | null;
+  close?: number | null;
+  dayPct?: number | null;
+  open?: number | null;
+  high?: number | null;
+  low?: number | null;
+  high52w?: number | null;
+  from52wHigh?: number | null;
+  marketCap?: number | null;
+  rs?: number | null;
+  rs1d?: number | null;
+  rs1w?: number | null;
+  rs1m?: number | null;
+  rs3m?: number | null;
+  rs6m?: number | null;
+  rsType?: string | null;
+  rsDate?: string | null;
+  scannerHits?: number | null;
+  lastScannerHit?: string | null;
+}
+
+export interface LookupAnalyst {
+  asOfDate?: string | null;
+  consensusRating?: string | null;
+  numAnalysts?: number | null;
+  currentQuarterEps?: number | null;
+  nextQuarterEps?: number | null;
+  currentYearEps?: number | null;
+  nextYearEps?: number | null;
+}
+
+export interface LookupEpsForecast {
+  periodType: string;
+  periodEndDate: string;
+  consensusEps?: number | null;
+  highEps?: number | null;
+  lowEps?: number | null;
+  numEstimates?: number | null;
+  revisionsUp: number;
+  revisionsDown: number;
+}
+
+export interface StockLookupDetail {
+  symbol: string;
+  companyName: string;
+  broadSector?: string | null;
+  industry?: string | null;
+  market: string;
+  exchange?: string | null;
+  active: boolean;
+  isFno: boolean;
+  barsAvailable?: number | null;
+  technical?: LookupTechnical | null;
+  analyst?: LookupAnalyst | null;
+  quarterlyEps: LookupEpsForecast[];
+  yearlyEps: LookupEpsForecast[];
+}
+
+export interface LookupBar {
+  date: string;
+  open?: number | null;
+  high?: number | null;
+  low?: number | null;
+  close?: number | null;
+  volume?: number | null;
+}
+
+export async function searchLookup(market: Market, q: string): Promise<LookupCandidate[]> {
+  const res = await fetch(`${BASE}/${market}/lookup/search?q=${encodeURIComponent(q)}`);
+  if (!res.ok) throw new Error('Failed to search symbols');
+  return res.json();
+}
+
+export async function fetchLookupDetail(market: Market, symbol: string): Promise<StockLookupDetail> {
+  const res = await fetch(`${BASE}/${market}/lookup/${encodeURIComponent(symbol)}`);
+  if (res.status === 404) throw new Error(`No data found for '${symbol}' in ${market.toUpperCase()}`);
+  if (!res.ok) throw new Error('Failed to load symbol detail');
+  return res.json();
+}
+
+export async function fetchLookupBars(market: Market, symbol: string, timeframe: 'daily' | 'weekly'): Promise<LookupBar[]> {
+  const res = await fetch(`${BASE}/${market}/lookup/${encodeURIComponent(symbol)}/bars?timeframe=${timeframe}`);
+  if (!res.ok) throw new Error('Failed to load price bars');
+  return res.json();
+}
+
+export async function refreshAnalystData(market: Market, symbol: string): Promise<{ runId: number }> {
+  const res = await fetch(`${BASE}/${market}/lookup/${encodeURIComponent(symbol)}/refresh-analyst`, { method: 'POST' });
+  if (!res.ok) throw new Error((await res.text()) || 'Failed to refresh analyst data');
+  return res.json();
+}
