@@ -97,6 +97,28 @@ def get_universe(
     return [{"symbol": r.Symbol, "is_fno": bool(r.IsFno)} for r in rows]
 
 
+def get_present_tickers(conn: pyodbc.Connection, market: str, kind: str) -> set[str]:
+    """Return the set of tickers (upper-cased) that already have output for ``kind``.
+
+    kind:
+        "bars"       -> tickers whose master row reports BarsAvailable > 0
+        "technical"  -> tickers with at least one technical snapshot
+        "earnings"   -> tickers with an earnings-fundamentals snapshot
+    Used to drive ``--missing`` gap-fill runs.
+    """
+    t = tables_for(market)
+    if kind == "bars":
+        query = f"SELECT Ticker FROM dbo.{t['tickers']} WHERE BarsAvailable IS NOT NULL AND BarsAvailable > 0"
+    elif kind == "technical":
+        query = f"SELECT DISTINCT Ticker FROM dbo.{t['technical']}"
+    elif kind == "earnings":
+        query = f"SELECT Ticker FROM dbo.{t['earnings']}"
+    else:
+        raise ValueError(f"Unsupported kind: {kind}")
+    rows = conn.cursor().execute(query).fetchall()
+    return {r[0].upper() for r in rows if r[0]}
+
+
 def seed_tickers(conn: pyodbc.Connection, market: str, rows: list[dict[str, Any]]) -> int:
     """Upsert ticker-master rows keyed by Ticker. Returns the number processed."""
     t = tables_for(market)
@@ -350,6 +372,9 @@ def upsert_stock_note(conn: pyodbc.Connection, market: str, ticker: str, note_te
     cursor = conn.cursor()
     cursor.execute(merge, [ticker, note_text, ticker, note_text])
     conn.commit()
+
+
+def prune_old_bars(conn: pyodbc.Connection, market: str, cutoff: date) -> int:
     """Delete bars older than ``cutoff`` so storage holds a rolling window only.
 
     Returns the number of rows deleted. Makes repeated ingests idempotent: the stored

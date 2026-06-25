@@ -7,7 +7,11 @@ using Microsoft.EntityFrameworkCore;
 
 namespace MarketEdge.Api.Services;
 
-public record TriggerIngestionRequest(bool TestSample = false, int? Limit = null);
+public record TriggerIngestionRequest(
+    bool TestSample = false,
+    int? Limit = null,
+    string[]? Steps = null,
+    bool MissingOnly = false);
 
 public interface IIngestionService
 {
@@ -66,6 +70,21 @@ public class IngestionService : IIngestionService
         if (request.Limit is < 1)
             throw new ArgumentException("Limit must be a positive integer.");
 
+        // Resolve the requested steps (default: the whole pipeline), preserving pipeline order.
+        var validSteps = Pipeline.Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        string[] steps;
+        if (request.Steps == null || request.Steps.Length == 0)
+        {
+            steps = Pipeline.Select(p => p.Name).ToArray();
+        }
+        else
+        {
+            var invalid = request.Steps.Where(s => !validSteps.Contains(s)).ToArray();
+            if (invalid.Length > 0)
+                throw new ArgumentException($"Unknown step(s): {string.Join(", ", invalid)}. Valid: {string.Join(", ", validSteps)}.");
+            steps = Pipeline.Select(p => p.Name).Where(n => request.Steps.Contains(n, StringComparer.OrdinalIgnoreCase)).ToArray();
+        }
+
         // One in-flight run per market: return the existing run if present.
         var existing = await _db.JobRuns
             .Where(j => j.JobType == JobType && j.Market == market && j.Status == "running")
@@ -78,6 +97,8 @@ public class IngestionService : IIngestionService
         {
             ["market"] = market,
             ["testSample"] = request.TestSample,
+            ["steps"] = steps,
+            ["missingOnly"] = request.MissingOnly,
         };
         if (request.Limit is int lim) parameters["limit"] = lim;
 
@@ -100,7 +121,9 @@ public class IngestionService : IIngestionService
         var runId = job.Id;
         var testSample = request.TestSample;
         var limit = request.Limit;
-        _ = Task.Run(() => RunPipelineAsync(runId, market, testSample, limit));
+        var selectedSteps = steps;
+        var missingOnly = request.MissingOnly;
+        _ = Task.Run(() => RunPipelineAsync(runId, market, testSample, limit, selectedSteps, missingOnly));
 
         return runId;
     }
@@ -176,20 +199,22 @@ public class IngestionService : IIngestionService
         await FinalizeAsync(runId, failed, startedAt, output.ToString());
     }
 
-    private async Task RunPipelineAsync(int runId, string market, bool testSample, int? limit)
+    private async Task RunPipelineAsync(int runId, string market, bool testSample, int? limit, string[] steps, bool missingOnly)
     {
         var output = new StringBuilder();
         var startedAt = DateTime.UtcNow;
         var failed = false;
 
-        for (var i = 0; i < Pipeline.Length; i++)
+        var selected = Pipeline.Where(p => steps.Contains(p.Name, StringComparer.OrdinalIgnoreCase)).ToArray();
+        for (var i = 0; i < selected.Length; i++)
         {
-            var (name, args) = Pipeline[i];
-            output.AppendLine($"=== {name} ({market}) ===");
+            var (name, args) = selected[i];
+            output.AppendLine($"=== {name} ({market}){(missingOnly ? " [missing-only]" : "")} ===");
             int exitCode;
             try
             {
-                exitCode = await RunProcessAsync(market, args, testSample, limit, output);
+                var extraArgs = missingOnly ? new[] { "--missing" } : null;
+                exitCode = await RunProcessAsync(market, args, testSample, limit, output, extraArgs);
             }
             catch (Exception ex)
             {
@@ -197,7 +222,7 @@ public class IngestionService : IIngestionService
                 exitCode = -1;
             }
 
-            await UpdateProgressAsync(runId, (int)Math.Round((i + 1) * 100.0 / Pipeline.Length));
+            await UpdateProgressAsync(runId, (int)Math.Round((i + 1) * 100.0 / selected.Length));
 
             if (exitCode != 0)
             {

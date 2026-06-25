@@ -75,6 +75,19 @@ def _resolve_universe(conn, args) -> list[dict]:
     return universe
 
 
+def _apply_missing_filter(conn, args, universe: list[dict], kind: str) -> list[dict]:
+    """Drop tickers that already have ``kind`` output when --missing is set."""
+    if not getattr(args, "missing", False):
+        return universe
+    present = db.get_present_tickers(conn, args.market, kind)
+    filtered = [u for u in universe if u["symbol"].upper() not in present]
+    logger.info(
+        "Missing-only (%s): %s of %s tickers lack data and will be processed.",
+        kind, len(filtered), len(universe),
+    )
+    return filtered
+
+
 def _seed(conn, market: str, universe: list[dict]) -> None:
     """Seed the universe plus the market benchmark into the ticker master."""
     rows = list(universe)
@@ -141,6 +154,11 @@ def cmd_ingest_bars(args) -> int:
             return 0
 
         _seed(conn, args.market, universe)
+
+        universe = _apply_missing_filter(conn, args, universe, "bars")
+        if not universe:
+            logger.info("Missing-only bars: nothing missing; skipping fetch.")
+            return 0
 
         symbols = [u["symbol"] for u in universe]
         benchmark = fetch.benchmark_symbol(args.market)
@@ -217,6 +235,7 @@ def cmd_ingest_technical(args) -> int:
     conn = db.get_connection()
     try:
         universe = _resolve_universe(conn, args)
+        universe = _apply_missing_filter(conn, args, universe, "technical")
         symbols = [u["symbol"] for u in universe]
         if not symbols:
             logger.warning("No tickers resolved; nothing to ingest.")
@@ -269,6 +288,7 @@ def cmd_ingest_fundamentals(args) -> int:
     conn = db.get_connection()
     try:
         universe = _resolve_universe(conn, args)
+        universe = _apply_missing_filter(conn, args, universe, "earnings")
         symbols = [u["symbol"] for u in universe]
         counts["tickers"] = len(symbols)
         today = date.today()
@@ -558,7 +578,7 @@ def _try_earnings_fundamentals(conn, market, symbol, ticker, as_of) -> bool:
         logger.warning("Failed earnings fundamentals upsert for %s: %s", symbol, exc)
         return False
 # --------------------------------------------------------------------------- #
-def _add_universe_args(parser: argparse.ArgumentParser) -> None:
+def _add_universe_args(parser: argparse.ArgumentParser, allow_missing: bool = False) -> None:
     parser.add_argument("--market", required=True, choices=["india", "us"])
     parser.add_argument("--limit", type=int, default=None, help="Cap the number of tickers.")
     parser.add_argument(
@@ -569,6 +589,11 @@ def _add_universe_args(parser: argparse.ArgumentParser) -> None:
         "--symbols", default=None,
         help="Comma-separated symbol list to restrict the run (e.g. a single symbol refresh).",
     )
+    if allow_missing:
+        parser.add_argument(
+            "--missing", action="store_true",
+            help="Only process tickers that are missing this step's output (gap-fill).",
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -585,17 +610,17 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_sub = ingest.add_subparsers(dest="resource", required=True)
 
     bars = ingest_sub.add_parser("bars", help="Ingest daily OHLCV bars.")
-    _add_universe_args(bars)
+    _add_universe_args(bars, allow_missing=True)
     bars.set_defaults(func=cmd_ingest_bars)
 
     technical = ingest_sub.add_parser("technical", help="Ingest daily technical snapshots.")
-    _add_universe_args(technical)
+    _add_universe_args(technical, allow_missing=True)
     technical.set_defaults(func=cmd_ingest_technical)
 
     fundamentals = ingest_sub.add_parser(
         "fundamentals", help="Ingest analyst/EPS data (best-effort)."
     )
-    _add_universe_args(fundamentals)
+    _add_universe_args(fundamentals, allow_missing=True)
     fundamentals.set_defaults(func=cmd_ingest_fundamentals)
 
     return parser

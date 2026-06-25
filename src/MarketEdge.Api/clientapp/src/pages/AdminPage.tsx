@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { Market, ScannerSchedule } from '../api';
+import type { Market, ScannerSchedule, TriggerIngestionRequest } from '../api';
 import { triggerIngestion, fetchScannerSchedule, updateScannerSchedule } from '../api';
 import {
-  ChevronLeft, Database, PlayCircle, Loader2, Clock
+  ChevronLeft, Database, PlayCircle, Loader2, Clock, LineChart, RefreshCw
 } from 'lucide-react';
 
 const MARKETS: { market: Market; label: string }[] = [
@@ -18,20 +18,35 @@ function formatDateTime(value?: string | null): string {
 function IngestPanel({ market, label }: { market: Market; label: string }) {
   const navigate = useNavigate();
   const [testSample, setTestSample] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<null | 'full' | 'fundamentals' | 'missing'>(null);
   const [message, setMessage] = useState<string | null>(null);
 
-  const ingest = async () => {
-    setBusy(true);
+  const run = async (
+    kind: 'full' | 'fundamentals' | 'missing',
+    request: TriggerIngestionRequest,
+    describe: string,
+  ) => {
+    setBusy(kind);
     setMessage(null);
     try {
-      const { runId } = await triggerIngestion(market, { testSample });
-      setMessage(`Started ingestion run #${runId} (${testSample ? 'Sample 200' : 'Full universe'}).`);
+      const { runId } = await triggerIngestion(market, request);
+      setMessage(`Started run #${runId} — ${describe}.`);
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Failed to trigger ingestion.');
     }
-    setBusy(false);
+    setBusy(null);
   };
+
+  const ingest = () =>
+    run('full', { testSample }, `${testSample ? 'Sample 200' : 'Full universe'} · full pipeline`);
+
+  const refreshFundamentals = () =>
+    run('fundamentals', { testSample, steps: ['fundamentals'] },
+      `${testSample ? 'Sample 200' : 'Full universe'} · fundamentals only`);
+
+  const refreshMissing = () =>
+    run('missing', { testSample, missingOnly: true },
+      `${testSample ? 'Sample 200' : 'Full universe'} · fill missing technical + fundamental data`);
 
   return (
     <div className="card" style={{ padding: 20, flex: 1, minWidth: 320 }}>
@@ -63,13 +78,24 @@ function IngestPanel({ market, label }: { market: Market; label: string }) {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginTop: 16, alignItems: 'center' }}>
-        <button className="btn btn-primary" disabled={busy} onClick={ingest}>
-          {busy ? <Loader2 size={16} className="spin-icon" /> : <PlayCircle size={16} />}
+      <div style={{ display: 'flex', gap: 8, marginTop: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button className="btn btn-primary" disabled={busy !== null} onClick={ingest}>
+          {busy === 'full' ? <Loader2 size={16} className="spin-icon" /> : <PlayCircle size={16} />}
           &nbsp;Ingest Data
         </button>
         <button className="btn btn-outline btn-sm" onClick={() => navigate(`/${market}/jobs`)}>
           View job runs →
+        </button>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button className="btn btn-outline btn-sm" disabled={busy !== null} onClick={refreshFundamentals} title="Re-run only the fundamentals step (earnings, margins, growth)">
+          {busy === 'fundamentals' ? <Loader2 size={14} className="spin-icon" /> : <LineChart size={14} />}
+          &nbsp;Refresh Fundamentals
+        </button>
+        <button className="btn btn-outline btn-sm" disabled={busy !== null} onClick={refreshMissing} title="Run the whole pipeline but only for tickers missing technical or fundamental data">
+          {busy === 'missing' ? <Loader2 size={14} className="spin-icon" /> : <RefreshCw size={14} />}
+          &nbsp;Refresh Data (fill missing)
         </button>
       </div>
 

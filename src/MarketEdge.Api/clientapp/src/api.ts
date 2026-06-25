@@ -150,6 +150,8 @@ export async function cancelJobRun(id: number): Promise<void> {
 export interface TriggerIngestionRequest {
   testSample?: boolean;
   limit?: number;
+  steps?: string[];
+  missingOnly?: boolean;
 }
 
 export async function triggerIngestion(market: Market, request: TriggerIngestionRequest): Promise<{ runId: number }> {
