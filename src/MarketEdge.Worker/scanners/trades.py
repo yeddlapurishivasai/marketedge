@@ -46,7 +46,7 @@ _MAX_BARS = 260
 
 # Notional capital allocated per paper position -> drives Qty and the absolute
 # ("pure") profit. Round, market-appropriate sizes.
-_NOTIONAL = {"india": 100_000.0, "us": 10_000.0}
+_NOTIONAL = {"india": 100_000.0, "us": 1_000.0}
 
 # Breakout confirmation: a scanner hit is only a *setup*. A trade is opened
 # only once price actually breaks the pivot -- resistance (prior highest high)

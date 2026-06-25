@@ -30,7 +30,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_Z = 1.64  # ~90% one-sided
+_Z = 1.28  # ~90% one-sided lower bound (less punitive than 1.64 so strong, well-evidenced setups score higher)
 
 # Table maps -------------------------------------------------------------------
 _EARN = {"india": "IndianEarningsFundamentals", "us": "USEarningsFundamentals"}
@@ -41,6 +41,7 @@ _STAGE = {"india": "IndianStageAnalysisResults", "us": "USStageAnalysisResults"}
 _SCORES = {"india": "IndianStockScores", "us": "USStockScores"}
 _TRADES = {"india": "IndianTrades", "us": "USTrades"}
 _TICKERS = {"india": "IndianTickers", "us": "USTickers"}
+_RESULTS = {"india": "IndianTechnicalScannerResults", "us": "USTechnicalScannerResults"}
 
 # Weight profiles: group -> weight (sum ~ 1.0). Within a group all checks share weight.
 _PROFILES = {
@@ -146,12 +147,14 @@ def _bool(v: Any) -> bool:
     return bool(v) if v is not None else False
 
 
-def _build_checks(sym: str, *, tech, earn, sig, analyst, stage, series, track) -> list[dict]:
-    """Return a list of checks: {group, weight(intra), applicable, bull}."""
+def _build_checks(sym: str, *, tech, earn, sig, analyst, stage, series, track,
+                  scanner_hits: int | None = None) -> list[dict]:
+    """Return a list of checks: {group, weight(intra), applicable, bull, label}."""
     checks: list[dict] = []
 
-    def add(group: str, weight: float, applicable: bool, bull: bool) -> None:
-        checks.append({"group": group, "weight": weight, "applicable": bool(applicable), "bull": bool(bull)})
+    def add(group: str, weight: float, applicable: bool, bull: bool, label: str) -> None:
+        checks.append({"group": group, "weight": weight, "applicable": bool(applicable),
+                       "bull": bool(bull), "label": label})
 
     close = _fin(getattr(tech, "Close", None)) if tech else None
     ema50 = ema200 = sma10 = ema20 = None
@@ -164,38 +167,46 @@ def _build_checks(sym: str, *, tech, earn, sig, analyst, stage, series, track) -
             ema200 = float(series.ema(200)[last])
 
     # --- TECHNICAL ---
-    add("tech", 1.0, stage is not None, _bool(getattr(stage, "IsStage2", None)) if stage else False)
-    add("tech", 1.0, close is not None and ema50 is not None, bool(close and ema50 and close > ema50))
-    add("tech", 1.0, close is not None and ema200 is not None, bool(close and ema200 and close > ema200))
+    add("tech", 1.0, stage is not None, _bool(getattr(stage, "IsStage2", None)) if stage else False,
+        "In Stage-2 uptrend")
+    add("tech", 1.0, close is not None and ema50 is not None, bool(close and ema50 and close > ema50),
+        "Price above 50 EMA")
+    add("tech", 1.0, close is not None and ema200 is not None, bool(close and ema200 and close > ema200),
+        "Price above 200 EMA")
     rs = _fin(getattr(tech, "Rs", None)) if tech else None
-    add("tech", 1.0, rs is not None, bool(rs is not None and rs >= 70))
+    add("tech", 1.0, rs is not None, bool(rs is not None and rs >= 70), "RS rating >= 70")
     mom = _fin(getattr(stage, "MomentumScore", None)) if stage else None
-    add("tech", 1.0, mom is not None, bool(mom is not None and mom > 0))
+    add("tech", 1.0, mom is not None, bool(mom is not None and mom > 0), "Positive momentum score")
     f52 = _fin(getattr(tech, "From52wHigh", None)) if tech else None
-    add("tech", 1.0, f52 is not None, bool(f52 is not None and f52 >= -15))
-    hits = _fin(getattr(tech, "ScannerHits", None)) if tech else None
-    add("tech", 1.5, hits is not None, bool(hits is not None and hits >= 2))  # scanner-hit-count evidence
+    add("tech", 1.0, f52 is not None, bool(f52 is not None and f52 >= -15), "Within 15% of 52w high")
+    hits = scanner_hits if scanner_hits is not None else (
+        _fin(getattr(tech, "ScannerHits", None)) if tech else None)
+    add("tech", 1.5, hits is not None, bool(hits is not None and hits >= 2),
+        "Flagged by 2+ scanners")  # scanner-hit-count evidence
     quad = (getattr(stage, "Quadrant", None) or "") if stage else ""
-    add("tech", 0.5, stage is not None, quad in ("leading", "improving"))
+    add("tech", 0.5, stage is not None, quad in ("leading", "improving"), "RRG leading/improving")
     adc = (getattr(stage, "ADClassification", None) or "") if stage else ""
-    add("tech", 0.5, stage is not None, adc == "accumulating")
+    add("tech", 0.5, stage is not None, adc == "accumulating", "Under accumulation")
 
     # --- FUNDAMENTAL ---
     if earn is not None:
         eg = _fin(earn.EarningsGrowthYoyPct)
-        add("fund", 1.0, eg is not None, bool(eg is not None and eg > 0))
+        add("fund", 1.0, eg is not None, bool(eg is not None and eg > 0), "Earnings growth YoY > 0")
         eq = _fin(earn.EarningsGrowthQoqPct)
-        add("fund", 1.0, eq is not None, bool(eq is not None and eq > 0))
+        add("fund", 1.0, eq is not None, bool(eq is not None and eq > 0), "Earnings growth QoQ > 0")
         rg = _fin(earn.RevenueGrowthYoyPct)
-        add("fund", 1.0, rg is not None, bool(rg is not None and rg > 0))
-        add("fund", 0.8, earn.OpmTrend is not None, (earn.OpmTrend or "") == "expanding")
+        add("fund", 1.0, rg is not None, bool(rg is not None and rg > 0), "Revenue growth YoY > 0")
+        add("fund", 0.8, earn.OpmTrend is not None, (earn.OpmTrend or "") == "expanding",
+            "Operating margin expanding")
         sp = _fin(earn.LastEpsSurprisePct)
-        add("fund", 0.8, sp is not None, bool(sp is not None and sp > 0))
-        add("fund", 1.0, earn.EarningsIncreasing is not None, _bool(earn.EarningsIncreasing))
+        add("fund", 0.8, sp is not None, bool(sp is not None and sp > 0), "Positive EPS surprise")
+        add("fund", 1.0, earn.EarningsIncreasing is not None, _bool(earn.EarningsIncreasing),
+            "Earnings increasing")
 
     # --- CATALYST ---
     if sig is not None:
-        add("catalyst", 1.0, sig.CapexTrend is not None, (sig.CapexTrend or "") == "rising")
+        add("catalyst", 1.0, sig.CapexTrend is not None, (sig.CapexTrend or "") == "rising",
+            "Capex trend rising")
         tags: set[str] = set()
         try:
             for item in json.loads(sig.NewsJson or "[]"):
@@ -203,30 +214,35 @@ def _build_checks(sym: str, *, tech, earn, sig, analyst, stage, series, track) -
                     tags.add(str(tg).upper())
         except (ValueError, TypeError, AttributeError):
             pass
-        add("catalyst", 1.0, sig.NewsJson is not None, bool(tags & _POSITIVE_TAGS))
+        add("catalyst", 1.0, sig.NewsJson is not None, bool(tags & _POSITIVE_TAGS),
+            "Positive news catalyst")
 
     # --- ESTIMATE ---
     if analyst is not None:
         rating = (analyst.ConsensusRating or "").lower()
-        add("est", 1.0, analyst.ConsensusRating is not None, rating in _BUY_RATINGS)
+        add("est", 1.0, analyst.ConsensusRating is not None, rating in _BUY_RATINGS,
+            "Analyst consensus = Buy")
         cy = _fin(analyst.CurrentYearEps)
         ny = _fin(analyst.NextYearEps)
-        add("est", 1.0, cy is not None and ny is not None, bool(cy and ny and cy > 0 and ny > cy))
+        add("est", 1.0, cy is not None and ny is not None, bool(cy and ny and cy > 0 and ny > cy),
+            "Forward EPS growth expected")
 
     # --- TRACK RECORD ---
     if track and track.get("total", 0) >= 1:
         wins, total = track["wins"], track["total"]
         # represent as a graded check: passes if win-rate > 0.5
-        add("track", float(min(total, 5)), True, (wins / total) > 0.5)
+        add("track", float(min(total, 5)), True, (wins / total) > 0.5,
+            f"Paper-trade win rate ({wins}/{total})")
 
     return checks
 
 
-def _score_profile(checks: list[dict], profile: str, freshness: float) -> dict[str, int]:
-    """Compute bull/bear Wilson scores for one weight profile."""
+def _score_profile(checks: list[dict], profile: str, freshness: float) -> dict[str, Any]:
+    """Compute bull/bear Wilson scores for one weight profile, with explainability detail."""
     weights = _PROFILES[profile]
     bull_passes = bull_n = 0.0
     bear_passes = bear_n = 0.0
+    contribs: list[dict] = []
     for c in checks:
         if not c["applicable"]:
             continue
@@ -243,9 +259,23 @@ def _score_profile(checks: list[dict], profile: str, freshness: float) -> dict[s
             bull_passes += w
         else:
             bear_passes += w
+        contribs.append({
+            "label": c["label"],
+            "group": c["group"],
+            "pass": bool(c["bull"]),
+            "weight": round(w, 4),
+        })
+    bull_phat = (bull_passes / bull_n) if bull_n > 0 else 0.0
     bull = round(100 * _wilson_lb(bull_passes, bull_n))
     bear = round(100 * _wilson_lb(bear_passes, bear_n))
-    return {"bull": bull, "bear": bear}
+    return {
+        "bull": bull,
+        "bear": bear,
+        "phat": round(bull_phat, 4),
+        "n": round(bull_n, 4),
+        "z": _Z,
+        "contribs": contribs,
+    }
 
 
 def _side(bull: int, bear: int, is_fno: bool) -> str:
@@ -257,11 +287,14 @@ def _side(bull: int, bear: int, is_fno: bool) -> str:
 
 
 def score_universe(conn, market: str, symbols: list[str], scan_date: date,
-                   series_cache: dict[str, Any] | None = None) -> int:
+                   series_cache: dict[str, Any] | None = None,
+                   scanner_hits: dict[str, int] | None = None) -> int:
     """Score every symbol and upsert into the {Market}StockScores table. Returns count."""
     if not symbols:
         return 0
     series_cache = series_cache or {}
+    if scanner_hits is None:
+        scanner_hits = _scanner_hit_counts(conn, market, symbols, scan_date)
 
     tech = _latest_tech(conn, market, symbols)
     earn = _rows_by_symbol(conn, _t(_EARN, market), symbols,
@@ -283,6 +316,7 @@ def score_universe(conn, market: str, symbols: list[str], scan_date: date,
         series = series_cache.get(sym)
         tr = track.get(sym)
         is_fno = sym in fno
+        hits = scanner_hits.get(sym)
 
         days_since = None
         freshness = 1.0
@@ -291,27 +325,33 @@ def score_universe(conn, market: str, symbols: list[str], scan_date: date,
             if days_since >= 0:
                 freshness = 0.5 ** (days_since / 30.0)
 
-        checks = _build_checks(sym, tech=t, earn=e, sig=s, analyst=a, stage=st, series=series, track=tr)
+        checks = _build_checks(sym, tech=t, earn=e, sig=s, analyst=a, stage=st, series=series,
+                               track=tr, scanner_hits=hits)
         if not any(c["applicable"] for c in checks):
             continue
 
         swing = _score_profile(checks, "swing", freshness)
         pos = _score_profile(checks, "positional", freshness)
 
-        # deterministic upside from projected EPS (yearly)
-        upside_eps = None
-        if a is not None:
-            cy, ny = _fin(a.CurrentYearEps), _fin(a.NextYearEps)
-            if cy and ny and cy > 0:
-                upside_eps = round((ny / cy - 1) * 100, 2)
-
-        hits = None
-        if t is not None:
-            hits = int(t.ScannerHits) if t.ScannerHits is not None else None
+        # deterministic upside from projected EPS (yearly), with earnings-growth fallback
+        upside_eps, upside_src = _upside_eps(a, e)
 
         comp = {
             "groups": _group_summary(checks),
             "freshness": round(freshness, 3),
+            "daysSinceEarnings": days_since,
+            "scannerHits": hits,
+            "upsideSource": upside_src,
+            "swing": {
+                "bull": swing["bull"], "bear": swing["bear"],
+                "phat": swing["phat"], "n": swing["n"], "z": swing["z"],
+                "contribs": swing["contribs"],
+            },
+            "positional": {
+                "bull": pos["bull"], "bear": pos["bear"],
+                "phat": pos["phat"], "n": pos["n"], "z": pos["z"],
+                "contribs": pos["contribs"],
+            },
         }
 
         rows.append((
@@ -324,6 +364,48 @@ def score_universe(conn, market: str, symbols: list[str], scan_date: date,
 
     _upsert_scores(conn, market, rows)
     return len(rows)
+
+
+def _upside_eps(analyst, earn) -> tuple[float | None, str | None]:
+    """Possible upside % from projected EPS.
+
+    Prefers analyst forward EPS (next FY vs current FY); falls back to the most recent
+    reported earnings growth (YoY) when forward analyst estimates are unavailable, which
+    is the common case for NSE names where yfinance does not return forward EPS.
+    """
+    if analyst is not None:
+        cy, ny = _fin(analyst.CurrentYearEps), _fin(analyst.NextYearEps)
+        if cy and ny and cy > 0:
+            return round((ny / cy - 1) * 100, 2), "forward_eps"
+    if earn is not None:
+        eg = _fin(earn.EarningsGrowthYoyPct)
+        if eg is not None:
+            return round(eg, 2), "earnings_growth_yoy"
+    return None, None
+
+
+def _scanner_hit_counts(conn, market: str, symbols: list[str], scan_date: date) -> dict[str, int]:
+    """Distinct scanners that flagged each symbol on ``scan_date`` (the day's hit count)."""
+    table = _t(_RESULTS, market)
+    out: dict[str, int] = {}
+    if not symbols:
+        return out
+    cur = conn.cursor()
+    for i in range(0, len(symbols), 1000):
+        batch = symbols[i:i + 1000]
+        ph = ",".join("?" * len(batch))
+        rows = cur.execute(
+            f"""
+            SELECT Symbol, COUNT(DISTINCT ScannerName) AS Hits
+            FROM dbo.{table}
+            WHERE ScanDate = ? AND Symbol IN ({ph})
+            GROUP BY Symbol
+            """,
+            [scan_date, *batch],
+        ).fetchall()
+        for r in rows:
+            out[r.Symbol] = int(r.Hits or 0)
+    return out
 
 
 def _latest_tech(conn, market: str, symbols: list[str]) -> dict[str, Any]:

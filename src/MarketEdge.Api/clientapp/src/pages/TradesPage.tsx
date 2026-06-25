@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Fragment } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { Market, StockScore, Trade, TradeStats, TradeProfile } from '../api';
 import { fetchScores, fetchTrades, fetchTradeStats, triggerScanner } from '../api';
-import { ChevronLeft, RefreshCw, TrendingUp, Loader2, Gauge, Activity, History } from 'lucide-react';
+import { ChevronLeft, ChevronDown, RefreshCw, TrendingUp, Loader2, Gauge, Activity, History } from 'lucide-react';
 
 function fmtPct(v?: number | null): string {
   if (v == null) return '—';
@@ -65,6 +65,94 @@ function MoneyCell({ v, market }: { v?: number | null; market: Market }) {
   return <span style={{ fontWeight: 600, color }}>{fmtMoney(v, market)}</span>;
 }
 
+interface CheckContrib { label: string; group: string; pass: boolean; weight: number; }
+interface ProfileComp { bull: number; bear: number; phat: number; n: number; z: number; contribs: CheckContrib[]; }
+interface ScoreComponents {
+  groups?: Record<string, string>;
+  freshness?: number;
+  daysSinceEarnings?: number | null;
+  scannerHits?: number | null;
+  upsideSource?: string | null;
+  swing?: ProfileComp;
+  positional?: ProfileComp;
+}
+
+const GROUP_LABELS: Record<string, string> = {
+  tech: 'Technical', fund: 'Fundamental', catalyst: 'Catalyst', est: 'Estimates', track: 'Track record',
+};
+const UPSIDE_SRC_LABELS: Record<string, string> = {
+  forward_eps: 'Analyst forward EPS (next FY vs current FY)',
+  earnings_growth_yoy: 'Latest reported earnings growth YoY (forward analyst EPS unavailable)',
+};
+
+function ScoreBreakdown({ comp, profile }: { comp: ScoreComponents; profile: TradeProfile }) {
+  const p = profile === 'swing' ? comp.swing : comp.positional;
+  if (!p) return <div style={{ padding: 12, color: 'var(--text-muted)' }}>No breakdown available.</div>;
+  const contribs = p.contribs ?? [];
+  const passW = contribs.filter(c => c.pass).reduce((s, c) => s + c.weight, 0);
+  const totalW = contribs.reduce((s, c) => s + c.weight, 0);
+  return (
+    <div style={{ padding: '12px 16px', background: 'var(--bg-subtle, rgba(127,127,127,0.06))', fontSize: '0.85rem' }}>
+      <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 12 }}>
+        <div>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>How this score was computed</div>
+          <div style={{ color: 'var(--text-muted)' }}>
+            Wilson lower bound of the weighted pass-fraction. A small evidence base (n)
+            widens the confidence interval and pulls the score down — that is why even a
+            strong setup with few applicable checks does not reach 100.
+          </div>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
+        <Stat label="Bull score" value={`${p.bull}`} color="var(--success)" />
+        <Stat label="Bear score" value={`${p.bear}`} color="var(--danger)" />
+        <Stat label="Pass fraction (p̂)" value={`${Math.round((p.phat ?? 0) * 100)}%`} />
+        <Stat label="Evidence weight (n)" value={(p.n ?? 0).toFixed(2)} />
+        <Stat label="Passed weight" value={`${passW.toFixed(2)} / ${totalW.toFixed(2)}`} />
+        <Stat label="z (conservatism)" value={(p.z ?? 0).toFixed(2)} />
+        {comp.freshness != null && <Stat label="Fund. freshness" value={comp.freshness.toFixed(2)} />}
+      </div>
+      <div style={{ color: 'var(--text-muted)', marginBottom: 8 }}>
+        <strong>Bull</strong> = confidence that the positive (passing) evidence is real;{' '}
+        <strong>Bear</strong> = same math applied to the failing checks (short evidence).
+        {comp.upsideSource && (
+          <> EPS upside source: {UPSIDE_SRC_LABELS[comp.upsideSource] ?? comp.upsideSource}.</>
+        )}
+      </div>
+      <table className="table" style={{ fontSize: '0.82rem' }}>
+        <thead>
+          <tr>
+            <th>Parameter</th>
+            <th style={{ textAlign: 'center' }}>Group</th>
+            <th style={{ textAlign: 'center' }}>Result</th>
+            <th style={{ textAlign: 'right' }}>Weight</th>
+          </tr>
+        </thead>
+        <tbody>
+          {contribs.map((c, i) => (
+            <tr key={i}>
+              <td>{c.label}</td>
+              <td style={{ textAlign: 'center', color: 'var(--text-muted)' }}>{GROUP_LABELS[c.group] ?? c.group}</td>
+              <td style={{ textAlign: 'center', color: c.pass ? 'var(--success)' : 'var(--danger)', fontWeight: 600 }}>
+                {c.pass ? '✓ pass' : '✗ fail'}
+              </td>
+              <td style={{ textAlign: 'right' }}>{c.weight.toFixed(2)}</td>
+            </tr>
+          ))}
+          {contribs.length === 0 && (
+            <tr><td colSpan={4} style={{ color: 'var(--text-muted)' }}>No applicable checks for this profile.</td></tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function parseComponents(json?: string | null): ScoreComponents | null {
+  if (!json) return null;
+  try { return JSON.parse(json) as ScoreComponents; } catch { return null; }
+}
+
 export default function TradesPage() {
   const { market } = useParams<{ market: string }>();
   const m = market as Market;
@@ -104,6 +192,7 @@ function ScoresTab({ market }: { market: Market }) {
   const [side, setSide] = useState<string>('');
   const [rows, setRows] = useState<StockScore[]>([]);
   const [loading, setLoading] = useState(false);
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -165,23 +254,47 @@ function ScoresTab({ market }: { market: Market }) {
               </tr>
             </thead>
             <tbody>
-              {rows.map(r => (
-                <tr key={r.ticker}>
-                  <td style={{ fontWeight: 600 }}>{r.ticker}</td>
-                  <td className="cell-center"><ScoreBadge score={scoreOf(r)} /></td>
-                  <td className="cell-center"><SideBadge side={sideOf(r)} /></td>
-                  <td className="cell-center" style={{ fontSize: '0.85rem' }}>
-                    <span style={{ color: 'var(--success)' }}>{bullOf(r) ?? '—'}</span>
-                    {' / '}
-                    <span style={{ color: 'var(--danger)' }}>{bearOf(r) ?? '—'}</span>
-                  </td>
-                  <td className="cell-right">{fmtPct(r.upsideEpsPct)}</td>
-                  <td className="cell-center">{r.scannerHits ?? '—'}</td>
-                  <td className="cell-center">{r.daysSinceEarnings ?? '—'}</td>
-                  <td className="cell-center">{r.fundFreshnessDecay != null ? r.fundFreshnessDecay.toFixed(2) : '—'}</td>
-                  <td className="cell-center">{r.isFno ? '✓' : ''}</td>
-                </tr>
-              ))}
+              {rows.map(r => {
+                const isOpen = expanded === r.ticker;
+                const comp = isOpen ? parseComponents(r.componentsJson) : null;
+                return (
+                  <Fragment key={r.ticker}>
+                    <tr>
+                      <td style={{ fontWeight: 600 }}>{r.ticker}</td>
+                      <td className="cell-center">
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          style={{ padding: '2px 8px' }}
+                          title="Show how this score was computed"
+                          onClick={() => setExpanded(isOpen ? null : r.ticker)}
+                        >
+                          <ScoreBadge score={scoreOf(r)} />
+                          <ChevronDown size={12} style={{ marginLeft: 4, transform: isOpen ? 'rotate(180deg)' : undefined, transition: 'transform 0.15s' }} />
+                        </button>
+                      </td>
+                      <td className="cell-center"><SideBadge side={sideOf(r)} /></td>
+                      <td className="cell-center" style={{ fontSize: '0.85rem' }}>
+                        <span style={{ color: 'var(--success)' }}>{bullOf(r) ?? '—'}</span>
+                        {' / '}
+                        <span style={{ color: 'var(--danger)' }}>{bearOf(r) ?? '—'}</span>
+                      </td>
+                      <td className="cell-right">{fmtPct(r.upsideEpsPct)}</td>
+                      <td className="cell-center">{r.scannerHits ?? '—'}</td>
+                      <td className="cell-center">{r.daysSinceEarnings ?? '—'}</td>
+                      <td className="cell-center">{r.fundFreshnessDecay != null ? r.fundFreshnessDecay.toFixed(2) : '—'}</td>
+                      <td className="cell-center">{r.isFno ? '✓' : ''}</td>
+                    </tr>
+                    {isOpen && (
+                      <tr>
+                        <td colSpan={9} style={{ padding: 0 }}>
+                          {comp ? <ScoreBreakdown comp={comp} profile={profile} />
+                            : <div style={{ padding: 12, color: 'var(--text-muted)' }}>No breakdown stored for this score.</div>}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
