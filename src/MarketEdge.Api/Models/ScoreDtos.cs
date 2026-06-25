@@ -62,4 +62,8 @@ public record TradeStatsDto(
     decimal? WinRatePct,
     decimal? AvgPnLPct,
     decimal? RealizedPnLAmount,
-    decimal? OpenPnLAmount);
+    decimal? OpenPnLAmount,
+    decimal? SwingOpenPnLAmount,
+    decimal? SwingRealizedPnLAmount,
+    decimal? PositionalOpenPnLAmount,
+    decimal? PositionalRealizedPnLAmount);

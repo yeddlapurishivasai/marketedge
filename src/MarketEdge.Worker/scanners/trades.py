@@ -60,7 +60,7 @@ _VOL_MULT = 1.5           # breakout bar volume must be >= this x average volume
 
 # Cold start: when a market has no trades yet, replay breakouts from the last few
 # trading days so the blotter starts populated instead of empty.
-_BACKFILL_DAYS = 3
+_BACKFILL_DAYS = 7
 
 # Scanners that express a bearish/short setup.
 _SHORT_SCANNERS = {"NSE_CSS"}

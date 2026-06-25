@@ -29,6 +29,13 @@ function fmtMoney(v: number | null | undefined, market: Market): string {
   return `${sign}${curSym(market)}${Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 }
 
+function fmtDateTime(v?: string | null): string {
+  if (!v) return '—';
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return '—';
+  return d.toLocaleString(undefined, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
 function ScoreBadge({ score }: { score?: number | null }) {
   if (score == null) return <span className="cell-muted">—</span>;
   const color = score >= 70 ? 'var(--success)' : score >= 50 ? 'var(--warning, #d08700)' : 'var(--text-muted)';
@@ -210,7 +217,7 @@ function TradesTab({ market }: { market: Market }) {
     setNote('');
     triggerScanner(market, { universe: 'stage2', backfill: true })
       .then(() => {
-        setNote('Backfill started — replaying the last 3 days of breakouts. Refresh in a minute.');
+        setNote('Backfill started — replaying the last 7 days of breakouts. Refresh in a minute.');
       })
       .catch(() => setNote('Failed to start backfill.'))
       .finally(() => setBackfilling(false));
@@ -227,10 +234,15 @@ function TradesTab({ market }: { market: Market }) {
           <Stat label="Wins" value={stats.wins} color="var(--success)" />
           <Stat label="Losses" value={stats.losses} color="var(--danger)" />
           <Stat label="Win rate" value={stats.winRatePct != null ? `${stats.winRatePct}%` : '—'} />
-          <Stat label="Open P&L" value={fmtMoney(stats.openPnLAmount, market)}
+          <Stat label="Swing P&L (open/real)"
+            value={`${fmtMoney(stats.swingOpenPnLAmount, market)} / ${fmtMoney(stats.swingRealizedPnLAmount, market)}`}
+            color={(stats.swingOpenPnLAmount ?? 0) >= 0 ? 'var(--success)' : 'var(--danger)'} />
+          <Stat label="Positional P&L (open/real)"
+            value={`${fmtMoney(stats.positionalOpenPnLAmount, market)} / ${fmtMoney(stats.positionalRealizedPnLAmount, market)}`}
+            color={(stats.positionalOpenPnLAmount ?? 0) >= 0 ? 'var(--success)' : 'var(--danger)'} />
+          <Stat label="Total P&L (open/real)"
+            value={`${fmtMoney(stats.openPnLAmount, market)} / ${fmtMoney(stats.realizedPnLAmount, market)}`}
             color={(stats.openPnLAmount ?? 0) >= 0 ? 'var(--success)' : 'var(--danger)'} />
-          <Stat label="Realized P&L" value={fmtMoney(stats.realizedPnLAmount, market)}
-            color={(stats.realizedPnLAmount ?? 0) >= 0 ? 'var(--success)' : 'var(--danger)'} />
         </div>
       )}
 
@@ -246,8 +258,8 @@ function TradesTab({ market }: { market: Market }) {
           <option value="positional">Positional</option>
         </select>
         <button className="btn btn-ghost btn-sm" onClick={backfill} disabled={backfilling} style={{ marginLeft: 'auto' }}
-          title="Replay the last 3 days of volume-confirmed breakouts into the blotter">
-          {backfilling ? <Loader2 size={14} className="spin" /> : <History size={14} />} Backfill 3 days
+          title="Replay the last 7 days of volume-confirmed breakouts into the blotter">
+          {backfilling ? <Loader2 size={14} className="spin" /> : <History size={14} />} Backfill 7 days
         </button>
         <button className="btn btn-ghost btn-sm" onClick={load}>
           <RefreshCw size={14} /> Refresh
@@ -263,7 +275,7 @@ function TradesTab({ market }: { market: Market }) {
           <div className="empty-state-icon"><Activity size={48} /></div>
           <p className="empty-state-text">
             No trades. A scanner hit is only a setup — a paper trade opens on a volume-confirmed
-            break of support/resistance. Use “Backfill 3 days” to seed from recent breakouts.
+            break of support/resistance. Use “Backfill 7 days” to seed from recent breakouts.
           </p>
         </div>
       ) : (
@@ -274,6 +286,7 @@ function TradesTab({ market }: { market: Market }) {
                 <th>Ticker</th>
                 <th>Type</th>
                 <th>Dir</th>
+                <th>Entry time</th>
                 <th style={{ textAlign: 'right' }}>Qty</th>
                 <th style={{ textAlign: 'right' }}>Entry</th>
                 <th style={{ textAlign: 'right' }}>Trail</th>
@@ -292,6 +305,7 @@ function TradesTab({ market }: { market: Market }) {
                   <td style={{ fontWeight: 600 }}>{t.ticker}</td>
                   <td>{t.tradeType}</td>
                   <td><SideBadge side={t.direction} /></td>
+                  <td style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{fmtDateTime(t.entryAt)}</td>
                   <td className="cell-right">{t.qty ?? '—'}</td>
                   <td className="cell-right">{fmtPrice(t.entryPrice, market)}</td>
                   <td className="cell-right" title={t.stopBasis || ''}>{fmtPrice(t.currentStop, market)}</td>

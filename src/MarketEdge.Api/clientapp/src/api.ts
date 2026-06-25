@@ -624,6 +624,10 @@ export interface TradeStats {
   avgPnLPct?: number | null;
   realizedPnLAmount?: number | null;
   openPnLAmount?: number | null;
+  swingOpenPnLAmount?: number | null;
+  swingRealizedPnLAmount?: number | null;
+  positionalOpenPnLAmount?: number | null;
+  positionalRealizedPnLAmount?: number | null;
 }
 
 export async function fetchScores(

@@ -79,7 +79,7 @@ public class ScoresService : IScoresService
     private async Task<TradeStatsDto> GetStats<T>() where T : TradeBase
     {
         var rows = await TradeSet<T>()
-            .Select(t => new { t.Status, t.PnLPct, t.PnLAmount })
+            .Select(t => new { t.Status, t.TradeType, t.PnLPct, t.PnLAmount })
             .ToListAsync();
         var active = rows.Count(r => r.Status == "active");
         var closed = rows.Where(r => r.Status == "closed").ToList();
@@ -88,11 +88,15 @@ public class ScoresService : IScoresService
         decimal? winRate = closed.Count > 0 ? Math.Round(100m * wins / closed.Count, 2) : null;
         var withPnl = rows.Where(r => r.PnLPct.HasValue).Select(r => r.PnLPct!.Value).ToList();
         decimal? avgPnl = withPnl.Count > 0 ? Math.Round(withPnl.Average(), 2) : null;
-        decimal? realized = closed.Where(r => r.PnLAmount.HasValue).Select(r => r.PnLAmount!.Value).DefaultIfEmpty(0).Sum();
-        decimal? openPnl = rows.Where(r => r.Status == "active" && r.PnLAmount.HasValue)
-            .Select(r => r.PnLAmount!.Value).DefaultIfEmpty(0).Sum();
+
+        decimal Sum(string status, string? type) => Math.Round(
+            rows.Where(r => r.Status == status && (type == null || r.TradeType == type) && r.PnLAmount.HasValue)
+                .Select(r => r.PnLAmount!.Value).DefaultIfEmpty(0).Sum(), 2);
+
         return new TradeStatsDto(active, closed.Count, wins, losses, winRate, avgPnl,
-            Math.Round(realized ?? 0, 2), Math.Round(openPnl ?? 0, 2));
+            Sum("closed", null), Sum("active", null),
+            Sum("active", "swing"), Sum("closed", "swing"),
+            Sum("active", "positional"), Sum("closed", "positional"));
     }
 
     private static StockScoreDto ToDto(StockScoresBase s) => new(
