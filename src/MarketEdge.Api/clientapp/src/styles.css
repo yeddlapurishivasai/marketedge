@@ -1263,3 +1263,6 @@ body {
 
 .stock-link { color: var(--accent); font-weight: 600; text-decoration: none; }
 .stock-link:hover { text-decoration: underline; }
+
+.row-clickable { cursor: pointer; }
+.row-clickable:hover { background: var(--bg-hover, rgba(127,127,127,0.06)); }

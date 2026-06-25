@@ -323,6 +323,7 @@ function SectorDetail() {
   const { market, sectorId } = useParams<{ market: string; sectorId: string }>();
   const m = market as Market;
   const sid = Number(sectorId);
+  const navigate = useNavigate();
 
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -433,15 +434,15 @@ function SectorDetail() {
             </thead>
             <tbody>
               {stocks.map(st => (
-                <tr key={st.id}>
-                  <td><input type="checkbox" className="checkbox" checked={selected.has(st.id)} onChange={() => toggleSelect(st.id)} /></td>
+                <tr key={st.id} className="row-clickable" onClick={() => navigate(`/${m}/lookup/${encodeURIComponent(st.symbol)}`)}>
+                  <td onClick={e => e.stopPropagation()}><input type="checkbox" className="checkbox" checked={selected.has(st.id)} onChange={() => toggleSelect(st.id)} /></td>
                   <td className="cell-symbol">
                     <NavLink className="stock-link" to={`/${m}/lookup/${encodeURIComponent(st.symbol)}`}>{st.symbol}</NavLink>
                   </td>
                   <td>{st.companyName}</td>
                   <td style={{ textAlign: 'right' }}>{formatMarketCap(st.marketCap, m)}</td>
                   <td className="cell-center">{st.isFno ? <span className="badge badge-count">F&amp;O</span> : <span className="cell-muted">-</span>}</td>
-                  <td className="cell-actions">
+                  <td className="cell-actions" onClick={e => e.stopPropagation()}>
                     <button className="btn btn-ghost btn-sm" onClick={() => { setSelected(new Set([st.id])); setShowMove(true); }}>
                       <ArrowRightLeft size={14} />
                     </button>
@@ -490,6 +491,7 @@ function SectorDetail() {
 function StocksPage() {
   const { market } = useParams<{ market: string }>();
   const m = market as Market;
+  const navigate = useNavigate();
 
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -606,14 +608,16 @@ function StocksPage() {
             </thead>
             <tbody>
               {stocks.map(st => (
-                <tr key={st.id}>
-                  <td><input type="checkbox" className="checkbox" checked={selected.has(st.id)} onChange={() => toggleSelect(st.id)} /></td>
-                  <td className="cell-symbol">{st.symbol}</td>
+                <tr key={st.id} className="row-clickable" onClick={() => navigate(`/${m}/lookup/${encodeURIComponent(st.symbol)}`)}>
+                  <td onClick={e => e.stopPropagation()}><input type="checkbox" className="checkbox" checked={selected.has(st.id)} onChange={() => toggleSelect(st.id)} /></td>
+                  <td className="cell-symbol">
+                    <NavLink className="stock-link" to={`/${m}/lookup/${encodeURIComponent(st.symbol)}`}>{st.symbol}</NavLink>
+                  </td>
                   <td>{st.companyName}</td>
                   <td className="cell-muted">{st.sectorName || '-'}</td>
                   <td style={{ textAlign: 'right' }}>{formatMarketCap(st.marketCap, m)}</td>
                   <td className="cell-center">{st.isFno ? <span className="badge badge-count">F&amp;O</span> : <span className="cell-muted">-</span>}</td>
-                  <td className="cell-actions">
+                  <td className="cell-actions" onClick={e => e.stopPropagation()}>
                     <button className="btn btn-ghost btn-sm" onClick={() => { setSelected(new Set([st.id])); setShowMove(true); }}>
                       <ArrowRightLeft size={14} />
                     </button>
