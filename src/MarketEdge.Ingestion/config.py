@@ -54,6 +54,11 @@ class Config:
     # Parallel threads used inside a single yfinance batch download / market-cap chunk.
     YFINANCE_THREADS = _get_int("YFINANCE_THREADS", 10)
 
+    # Parallel worker threads for the per-symbol fundamentals loop (analyst / EPS / earnings
+    # / signals). Each worker uses its own DB connection. Tune down if Yahoo rate-limits the
+    # heavier per-symbol fundamentals calls; set 1 to force the old sequential behaviour.
+    FUNDAMENTALS_THREADS = _get_int("FUNDAMENTALS_THREADS", 8)
+
     # Sleep (seconds) between per-ticker fundamentals/signals calls. Raise this if Yahoo
     # starts rate-limiting the sequential fundamentals loop (default 0 = no extra pacing).
     YFINANCE_TICKER_DELAY = _get_float("YFINANCE_TICKER_DELAY", 0.0)

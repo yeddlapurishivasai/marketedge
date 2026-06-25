@@ -64,7 +64,10 @@ def _ordered_steps(requested: list[str] | None) -> list[str]:
     return [s for s in _PIPELINE if s in wanted]
 
 
-def _build_args(cli: str, step: str, market: str, payload: dict) -> list[str]:
+def _build_args(cli: str, step: str, market: str, payload: dict,
+                run_id: int | None = None,
+                progress_start: int | None = None,
+                progress_end: int | None = None) -> list[str]:
     args = [sys.executable, cli, "ingest", step, "--market", market]
     if payload.get("testSample"):
         args.append("--test-sample")
@@ -78,6 +81,11 @@ def _build_args(cli: str, step: str, market: str, payload: dict) -> list[str]:
         if isinstance(symbols, (list, tuple)):
             symbols = ",".join(str(s) for s in symbols)
         args += ["--symbols", str(symbols)]
+    # Let the step report live in-band progress straight to its JobRun row.
+    if run_id is not None and progress_start is not None and progress_end is not None:
+        args += ["--run-id", str(int(run_id)),
+                 "--progress-start", str(int(progress_start)),
+                 "--progress-end", str(int(progress_end))]
     return args
 
 
@@ -168,10 +176,14 @@ def _run_steps(conn, run_id: int, market: str, steps: list[str], payload: dict,
     """
     missing = bool(payload.get("missingOnly"))
     failed = False
+    n = len(steps)
     for i, step in enumerate(steps):
         header = f"=== {step} ({market}){' [missing-only]' if missing else ''} ==="
         output.append(header)
-        args = _build_args(cli, step, market, payload)
+        band_start = int(i * progress_ceiling / n)
+        band_end = int((i + 1) * progress_ceiling / n)
+        args = _build_args(cli, step, market, payload,
+                           run_id=run_id, progress_start=band_start, progress_end=band_end)
         try:
             proc = subprocess.run(
                 args,

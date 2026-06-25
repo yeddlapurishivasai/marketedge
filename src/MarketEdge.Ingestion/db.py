@@ -56,6 +56,21 @@ def get_connection() -> pyodbc.Connection:
     return pyodbc.connect(Config.SQL_CONNECTION_STRING)
 
 
+def update_job_progress(conn: pyodbc.Connection, run_id: int, progress: int) -> None:
+    """Set the live ``Progress`` (0-100) on a JobRun row.
+
+    Lets a long ingestion step report fine-grained, in-band progress (e.g. per-symbol in
+    the fundamentals loop) so the UI doesn't sit at a single percentage for the whole step.
+    Best-effort: a failed progress write must never abort ingestion.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE dbo.JobRuns SET Progress = ? WHERE Id = ?",
+        [int(progress), int(run_id)],
+    )
+    conn.commit()
+
+
 def _clean(value: Any) -> Any:
     """Convert NaN/inf to None for SQL Server compatibility."""
     if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):

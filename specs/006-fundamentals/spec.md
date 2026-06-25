@@ -183,6 +183,15 @@ summary reports it as failed while others succeed.
 - **FR-009**: Fundamentals ingestion MUST reuse the existing yfinance retry/backoff +
   throttle settings (`YFINANCE_BATCH_SIZE`, `YFINANCE_BATCH_DELAY`,
   `YFINANCE_MAX_RETRIES`) so it respects the same rate limits as the rest of `005`.
+- **FR-010**: The per-symbol fundamentals loop MUST be parallelised across
+  `FUNDAMENTALS_THREADS` worker threads (default 8; set 1 to force sequential), each with
+  its own DB connection, since the step is dominated by sequential per-ticker yfinance
+  network calls. Per-symbol error isolation (FR-007) and idempotent upserts (FR-005) MUST
+  still hold under concurrency.
+- **FR-011**: When invoked by the queue runner with `--run-id` and a
+  `[--progress-start, --progress-end]` band, the step MUST report live in-band progress to
+  `JobRuns.Progress` as symbols complete (throttled), so a long fundamentals step no longer
+  sits at a single percentage. Absent those flags (manual/inline runs) it MUST be a no-op.
 
 ### Observability & Logging Requirements *(mandatory, cross-cutting)*
 

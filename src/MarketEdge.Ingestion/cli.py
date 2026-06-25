@@ -25,7 +25,9 @@ import logging
 import math
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
+from queue import Queue
 
 import pandas as pd
 
@@ -38,6 +40,55 @@ logger = logging.getLogger("ingestion")
 
 # How many tickers' worth of bars to MERGE per upsert round-trip.
 UPSERT_TICKER_BATCH = 50
+
+# Minimum seconds between live progress writes (throttles JobRuns updates).
+_PROGRESS_MIN_INTERVAL = 2.0
+
+
+class _ProgressReporter:
+    """Reports in-band per-item progress to a JobRun row, throttled to avoid write spam.
+
+    A long step is given a ``[start, end]`` slice of the overall 0-100 bar by the runner;
+    as the step's per-symbol loop advances, this maps ``done/total`` onto that slice and
+    writes ``JobRuns.Progress`` at most every ``_PROGRESS_MIN_INTERVAL`` seconds. A no-op
+    when no run-id was passed (e.g. inline/manual CLI runs). Never raises into the loop.
+    """
+
+    def __init__(self, conn, run_id: int | None, start: int, end: int, total: int) -> None:
+        self._conn = conn
+        self._run_id = run_id
+        self._start = max(0, min(100, int(start)))
+        self._end = max(self._start, min(100, int(end)))
+        self._total = max(1, int(total))
+        self._last_pct = self._start
+        self._last_write = 0.0
+
+    def update(self, done: int) -> None:
+        if self._run_id is None:
+            return
+        frac = min(1.0, max(0.0, done / self._total))
+        pct = self._start + int(round(frac * (self._end - self._start)))
+        if pct <= self._last_pct:
+            return
+        now = time.monotonic()
+        if pct < self._end and (now - self._last_write) < _PROGRESS_MIN_INTERVAL:
+            return
+        try:
+            db.update_job_progress(self._conn, self._run_id, pct)
+            self._last_pct = pct
+            self._last_write = now
+        except Exception:  # noqa: BLE001 - progress is best-effort, never abort the run
+            logger.debug("Progress update failed for run %s", self._run_id, exc_info=True)
+
+
+def _progress_reporter(args, conn, total: int) -> _ProgressReporter:
+    """Build a reporter from the (optional) ``--run-id/--progress-start/--progress-end`` args."""
+    run_id = getattr(args, "run_id", None)
+    start = getattr(args, "progress_start", None)
+    end = getattr(args, "progress_end", None)
+    if run_id is None or start is None or end is None:
+        return _ProgressReporter(conn, None, 0, 0, max(1, total))
+    return _ProgressReporter(conn, int(run_id), int(start), int(end), total)
 
 
 # --------------------------------------------------------------------------- #
@@ -172,7 +223,9 @@ def cmd_ingest_bars(args) -> int:
         total_rows = 0
         pending: list[tuple] = []
         ingested_tickers = 0
-        for symbol in all_symbols:
+        reporter = _progress_reporter(args, conn, len(all_symbols))
+        for processed, symbol in enumerate(all_symbols):
+            reporter.update(processed)
             frame = frames.get(symbol)
             if frame is None or frame.empty:
                 continue
@@ -184,6 +237,8 @@ def cmd_ingest_bars(args) -> int:
 
         if pending:
             total_rows += db.upsert_bars(conn, args.market, pending)
+
+        reporter.update(len(all_symbols))
 
         pruned = db.prune_old_bars(conn, args.market, cutoff)
         db.refresh_bars_available(conn, args.market)
@@ -245,8 +300,10 @@ def cmd_ingest_technical(args) -> int:
         logger.info("Fetching market caps for %s symbols...", len(symbols))
         market_caps = fetch.fetch_market_caps(symbols, args.market)
 
+        reporter = _progress_reporter(args, conn, len(symbols))
         written = 0
-        for symbol in symbols:
+        for idx, symbol in enumerate(symbols):
+            reporter.update(idx)
             bars = db.get_recent_bars(conn, args.market, symbol, lookback=400)
             snapshot = _snapshot_from_bars(bars)
             if snapshot is None:
@@ -257,10 +314,75 @@ def cmd_ingest_technical(args) -> int:
             db.upsert_ticker_technical(conn, args.market, snapshot)
             written += 1
 
+        reporter.update(len(symbols))
         logger.info("Technical ingestion complete: %s snapshots written.", written)
     finally:
         conn.close()
     return 0
+
+
+def _process_symbol_fundamentals(conn, market, symbol, yf, today, market_caps) -> dict:
+    """Run all per-symbol fundamentals work (analyst / EPS / earnings / valuation / signals).
+
+    Self-contained so it can run on a worker thread with its own DB ``conn``. Returns the
+    per-type count deltas to aggregate on the caller; every yfinance call is guarded so one
+    flaky ticker never aborts the run.
+    """
+    c = {
+        "analyst_ok": 0, "analyst_failed": 0,
+        "eps_rows": 0, "eps_failed": 0,
+        "valuation_ok": 0, "valuation_skipped": 0, "valuation_failed": 0,
+        "earnings_ok": 0, "earnings_skipped": 0,
+        "signals_ok": 0, "signals_skipped": 0,
+    }
+    yf_symbol = fetch.to_yfinance_symbol(symbol, market)
+    try:
+        ticker = yf.Ticker(yf_symbol)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not open ticker %s: %s", symbol, exc)
+        c["analyst_failed"] += 1
+        return c
+
+    if _try_analyst_snapshot(conn, market, symbol, ticker, today):
+        c["analyst_ok"] += 1
+    try:
+        c["eps_rows"] += _try_eps_forecasts(conn, market, symbol, ticker, today)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("EPS ingestion failed for %s: %s", symbol, exc)
+        c["eps_failed"] += 1
+
+    try:
+        if _try_earnings_fundamentals(conn, market, symbol, ticker, today):
+            c["earnings_ok"] += 1
+        else:
+            c["earnings_skipped"] += 1
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Earnings fundamentals failed for %s: %s", symbol, exc)
+        c["earnings_skipped"] += 1
+
+    mc = market_caps.get(symbol)
+    if mc is None:
+        c["valuation_skipped"] += 1
+    else:
+        try:
+            db.upsert_market_cap(conn, market, symbol, today, mc)
+            c["valuation_ok"] += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Market-cap upsert failed for %s: %s", symbol, exc)
+            c["valuation_failed"] += 1
+
+    try:
+        if _try_stock_signals(conn, market, symbol, ticker, today):
+            c["signals_ok"] += 1
+        else:
+            c["signals_skipped"] += 1
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Catalyst signals failed for %s: %s", symbol, exc)
+        c["signals_skipped"] += 1
+
+    if Config.YFINANCE_TICKER_DELAY > 0:
+        time.sleep(Config.YFINANCE_TICKER_DELAY)
+    return c
 
 
 def cmd_ingest_fundamentals(args) -> int:
@@ -268,8 +390,10 @@ def cmd_ingest_fundamentals(args) -> int:
 
     yfinance fundamentals APIs are version-dependent and flaky, so every ticker is
     guarded independently: a single failure is logged with context, counted, and
-    skipped — it never aborts the run (FR-007). The run ends with a structured
-    summary of per-type counts and duration (FR-008).
+    skipped — it never aborts the run (FR-007). The per-symbol work is fanned out across
+    ``Config.FUNDAMENTALS_THREADS`` worker threads (each with its own DB connection) since
+    it is dominated by sequential per-ticker yfinance network calls. The run ends with a
+    structured summary of per-type counts and duration (FR-008).
     """
     try:
         import yfinance as yf  # noqa: PLC0415 - imported lazily; optional path
@@ -294,6 +418,7 @@ def cmd_ingest_fundamentals(args) -> int:
         symbols = [u["symbol"] for u in universe]
         counts["tickers"] = len(symbols)
         today = date.today()
+        reporter = _progress_reporter(args, conn, len(symbols))
 
         # Valuation (market cap) in parallel, best-effort (FR-004 / US3).
         market_caps: dict[str, int | None] = {}
@@ -302,55 +427,53 @@ def cmd_ingest_fundamentals(args) -> int:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Market-cap fetch failed wholesale; continuing: %s", exc)
 
-        for symbol in symbols:
-            yf_symbol = fetch.to_yfinance_symbol(symbol, args.market)
-            try:
-                ticker = yf.Ticker(yf_symbol)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Could not open ticker %s: %s", symbol, exc)
-                counts["analyst_failed"] += 1
-                continue
+        workers = max(1, min(int(Config.FUNDAMENTALS_THREADS), len(symbols) or 1))
+        logger.info("Processing fundamentals for %s symbols with %s worker(s)...",
+                    len(symbols), workers)
 
-            if _try_analyst_snapshot(conn, args.market, symbol, ticker, today):
-                counts["analyst_ok"] += 1
-            try:
-                counts["eps_rows"] += _try_eps_forecasts(conn, args.market, symbol, ticker, today)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("EPS ingestion failed for %s: %s", symbol, exc)
-                counts["eps_failed"] += 1
+        def _aggregate(part: dict) -> None:
+            for k, v in part.items():
+                counts[k] += v
 
-            try:
-                if _try_earnings_fundamentals(conn, args.market, symbol, ticker, today):
-                    counts["earnings_ok"] += 1
-                else:
-                    counts["earnings_skipped"] += 1
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Earnings fundamentals failed for %s: %s", symbol, exc)
-                counts["earnings_skipped"] += 1
+        if workers <= 1:
+            for idx, symbol in enumerate(symbols):
+                reporter.update(idx)
+                _aggregate(_process_symbol_fundamentals(
+                    conn, args.market, symbol, yf, today, market_caps))
+        else:
+            # One DB connection per worker (pyodbc connections are not thread-safe to share).
+            pool: Queue = Queue()
+            worker_conns = [db.get_connection() for _ in range(workers)]
+            for wc in worker_conns:
+                pool.put(wc)
 
-            mc = market_caps.get(symbol)
-            if mc is None:
-                counts["valuation_skipped"] += 1
-            else:
+            def _task(sym: str) -> dict:
+                wc = pool.get()
                 try:
-                    db.upsert_market_cap(conn, args.market, symbol, today, mc)
-                    counts["valuation_ok"] += 1
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Market-cap upsert failed for %s: %s", symbol, exc)
-                    counts["valuation_failed"] += 1
+                    return _process_symbol_fundamentals(
+                        wc, args.market, sym, yf, today, market_caps)
+                finally:
+                    pool.put(wc)
 
+            done = 0
             try:
-                if _try_stock_signals(conn, args.market, symbol, ticker, today):
-                    counts["signals_ok"] += 1
-                else:
-                    counts["signals_skipped"] += 1
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Catalyst signals failed for %s: %s", symbol, exc)
-                counts["signals_skipped"] += 1
+                with ThreadPoolExecutor(max_workers=workers) as ex:
+                    futures = [ex.submit(_task, s) for s in symbols]
+                    for fut in as_completed(futures):
+                        try:
+                            _aggregate(fut.result())
+                        except Exception as exc:  # noqa: BLE001 - never abort the whole run
+                            logger.warning("Fundamentals worker failed: %s", exc)
+                        done += 1
+                        reporter.update(done)
+            finally:
+                for wc in worker_conns:
+                    try:
+                        wc.close()
+                    except Exception:  # noqa: BLE001
+                        pass
 
-            if Config.YFINANCE_TICKER_DELAY > 0:
-                time.sleep(Config.YFINANCE_TICKER_DELAY)
-
+        reporter.update(len(symbols))
         duration = round(time.monotonic() - started, 1)
         logger.info(
             "Fundamentals run complete",
@@ -812,6 +935,18 @@ def _add_universe_args(parser: argparse.ArgumentParser, allow_missing: bool = Fa
         )
 
 
+def _add_progress_args(parser: argparse.ArgumentParser) -> None:
+    """Optional hooks for the queue runner to report live in-band progress.
+
+    The worker passes ``--run-id`` plus the ``[--progress-start, --progress-end]`` slice of
+    the overall 0-100 bar allotted to this step; the step writes JobRuns.Progress as its
+    per-symbol loop advances. Hidden from ``--help`` (internal wiring, not for manual use).
+    """
+    parser.add_argument("--run-id", type=int, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--progress-start", type=int, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--progress-end", type=int, default=None, help=argparse.SUPPRESS)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cli.py", description="MarketEdge data ingestion.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -827,16 +962,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     bars = ingest_sub.add_parser("bars", help="Ingest daily OHLCV bars.")
     _add_universe_args(bars, allow_missing=True)
+    _add_progress_args(bars)
     bars.set_defaults(func=cmd_ingest_bars)
 
     technical = ingest_sub.add_parser("technical", help="Ingest daily technical snapshots.")
     _add_universe_args(technical, allow_missing=True)
+    _add_progress_args(technical)
     technical.set_defaults(func=cmd_ingest_technical)
 
     fundamentals = ingest_sub.add_parser(
         "fundamentals", help="Ingest analyst/EPS data (best-effort)."
     )
     _add_universe_args(fundamentals, allow_missing=True)
+    _add_progress_args(fundamentals)
     fundamentals.set_defaults(func=cmd_ingest_fundamentals)
 
     return parser
