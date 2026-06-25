@@ -1,4 +1,4 @@
-CREATE TABLE [dbo].[IndianScannerResults]
+CREATE TABLE [dbo].[IndianTechnicalScannerResults]
 (
     [Id]             INT IDENTITY(1,1) NOT NULL,
     [RunId]          INT            NOT NULL,
@@ -18,10 +18,11 @@ CREATE TABLE [dbo].[IndianScannerResults]
     [TriggerDetails] NVARCHAR(MAX)  NULL,
     [CreatedAt]      DATETIME2      NOT NULL DEFAULT GETUTCDATE(),
 
-    CONSTRAINT [PK_IndianScannerResults] PRIMARY KEY CLUSTERED ([Id]),
-    CONSTRAINT [FK_IndianScannerResults_JobRuns] FOREIGN KEY ([RunId]) REFERENCES [dbo].[JobRuns]([Id]),
-    CONSTRAINT [UX_IndianScannerResults_ScannerDateSymbol] UNIQUE NONCLUSTERED ([ScannerName], [ScanDate], [Symbol]),
-    INDEX [IX_IndianScannerResults_ScannerDate] NONCLUSTERED ([ScannerName], [ScanDate]),
-    INDEX [IX_IndianScannerResults_Symbol] NONCLUSTERED ([Symbol]),
-    INDEX [IX_IndianScannerResults_RunId] NONCLUSTERED ([RunId])
+    CONSTRAINT [PK_IndianTechnicalScannerResults] PRIMARY KEY CLUSTERED ([Id]),
+    CONSTRAINT [FK_IndianTechnicalScannerResults_JobRuns] FOREIGN KEY ([RunId]) REFERENCES [dbo].[JobRuns]([Id]),
+    CONSTRAINT [UX_IndianTechnicalScannerResults_ScannerDateSymbol] UNIQUE NONCLUSTERED ([ScannerName], [ScanDate], [Symbol]),
+    INDEX [IX_IndianTechnicalScannerResults_ScannerDate] NONCLUSTERED ([ScannerName], [ScanDate]),
+    INDEX [IX_IndianTechnicalScannerResults_Symbol] NONCLUSTERED ([Symbol]),
+    INDEX [IX_IndianTechnicalScannerResults_RunId] NONCLUSTERED ([RunId])
 );
+

@@ -1,4 +1,4 @@
-CREATE TABLE [dbo].[USScannerResults]
+CREATE TABLE [dbo].[USTechnicalScannerResults]
 (
     [Id]             INT IDENTITY(1,1) NOT NULL,
     [RunId]          INT            NOT NULL,
@@ -18,10 +18,11 @@ CREATE TABLE [dbo].[USScannerResults]
     [TriggerDetails] NVARCHAR(MAX)  NULL,
     [CreatedAt]      DATETIME2      NOT NULL DEFAULT GETUTCDATE(),
 
-    CONSTRAINT [PK_USScannerResults] PRIMARY KEY CLUSTERED ([Id]),
-    CONSTRAINT [FK_USScannerResults_JobRuns] FOREIGN KEY ([RunId]) REFERENCES [dbo].[JobRuns]([Id]),
-    CONSTRAINT [UX_USScannerResults_ScannerDateSymbol] UNIQUE NONCLUSTERED ([ScannerName], [ScanDate], [Symbol]),
-    INDEX [IX_USScannerResults_ScannerDate] NONCLUSTERED ([ScannerName], [ScanDate]),
-    INDEX [IX_USScannerResults_Symbol] NONCLUSTERED ([Symbol]),
-    INDEX [IX_USScannerResults_RunId] NONCLUSTERED ([RunId])
+    CONSTRAINT [PK_USTechnicalScannerResults] PRIMARY KEY CLUSTERED ([Id]),
+    CONSTRAINT [FK_USTechnicalScannerResults_JobRuns] FOREIGN KEY ([RunId]) REFERENCES [dbo].[JobRuns]([Id]),
+    CONSTRAINT [UX_USTechnicalScannerResults_ScannerDateSymbol] UNIQUE NONCLUSTERED ([ScannerName], [ScanDate], [Symbol]),
+    INDEX [IX_USTechnicalScannerResults_ScannerDate] NONCLUSTERED ([ScannerName], [ScanDate]),
+    INDEX [IX_USTechnicalScannerResults_Symbol] NONCLUSTERED ([Symbol]),
+    INDEX [IX_USTechnicalScannerResults_RunId] NONCLUSTERED ([RunId])
 );
+

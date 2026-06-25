@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace MarketEdge.Api.Models;
 
-public abstract class ScannerResultBase
+public abstract class TechnicalScannerResultBase
 {
     [Key]
     public int Id { get; set; }
@@ -25,11 +25,11 @@ public abstract class ScannerResultBase
     public DateTime CreatedAt { get; set; }
 }
 
-[Table("IndianScannerResults")]
-public class IndianScannerResult : ScannerResultBase { }
+[Table("IndianTechnicalScannerResults")]
+public class IndianTechnicalScannerResult : TechnicalScannerResultBase { }
 
-[Table("USScannerResults")]
-public class USScannerResult : ScannerResultBase { }
+[Table("USTechnicalScannerResults")]
+public class USTechnicalScannerResult : TechnicalScannerResultBase { }
 
 [Table("ScannerSchedules")]
 public class ScannerSchedule

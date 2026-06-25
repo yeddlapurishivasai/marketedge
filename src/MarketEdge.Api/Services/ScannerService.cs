@@ -27,10 +27,10 @@ public class ScannerService : IScannerService
         _queueClient = queueClient;
     }
 
-    private IQueryable<T> ResultSet<T>() where T : ScannerResultBase
-        => typeof(T) == typeof(IndianScannerResult)
-            ? (IQueryable<T>)_db.IndianScannerResults
-            : (IQueryable<T>)_db.USScannerResults;
+    private IQueryable<T> ResultSet<T>() where T : TechnicalScannerResultBase
+        => typeof(T) == typeof(IndianTechnicalScannerResult)
+            ? (IQueryable<T>)_db.IndianTechnicalScannerResults
+            : (IQueryable<T>)_db.USTechnicalScannerResults;
 
     public async Task<int> TriggerScannerAsync(string market, TriggerScannerRequest request)
     {
@@ -72,9 +72,9 @@ public class ScannerService : IScannerService
     }
 
     public async Task<List<ScannerInfoDto>> GetScannersAsync(string market)
-        => market == "india" ? await GetScanners<IndianScannerResult>(market) : await GetScanners<USScannerResult>(market);
+        => market == "india" ? await GetScanners<IndianTechnicalScannerResult>(market) : await GetScanners<USTechnicalScannerResult>(market);
 
-    private async Task<List<ScannerInfoDto>> GetScanners<T>(string market) where T : ScannerResultBase
+    private async Task<List<ScannerInfoDto>> GetScanners<T>(string market) where T : TechnicalScannerResultBase
     {
         var grouped = await ResultSet<T>()
             .GroupBy(r => new { r.ScannerName, r.ScanDate })
@@ -96,9 +96,9 @@ public class ScannerService : IScannerService
     }
 
     public async Task<List<DateTime>> GetScanDatesAsync(string market, string scannerName)
-        => market == "india" ? await GetScanDates<IndianScannerResult>(scannerName) : await GetScanDates<USScannerResult>(scannerName);
+        => market == "india" ? await GetScanDates<IndianTechnicalScannerResult>(scannerName) : await GetScanDates<USTechnicalScannerResult>(scannerName);
 
-    private async Task<List<DateTime>> GetScanDates<T>(string scannerName) where T : ScannerResultBase
+    private async Task<List<DateTime>> GetScanDates<T>(string scannerName) where T : TechnicalScannerResultBase
     {
         return await ResultSet<T>()
             .Where(r => r.ScannerName == scannerName)
@@ -110,9 +110,9 @@ public class ScannerService : IScannerService
     }
 
     public async Task<List<ScannerResultDto>> GetResultsAsync(string market, string scannerName, DateTime? scanDate)
-        => market == "india" ? await GetResults<IndianScannerResult>(scannerName, scanDate) : await GetResults<USScannerResult>(scannerName, scanDate);
+        => market == "india" ? await GetResults<IndianTechnicalScannerResult>(scannerName, scanDate) : await GetResults<USTechnicalScannerResult>(scannerName, scanDate);
 
-    private async Task<List<ScannerResultDto>> GetResults<T>(string scannerName, DateTime? scanDate) where T : ScannerResultBase
+    private async Task<List<ScannerResultDto>> GetResults<T>(string scannerName, DateTime? scanDate) where T : TechnicalScannerResultBase
     {
         var q = ResultSet<T>().Where(r => r.ScannerName == scannerName);
         if (scanDate.HasValue)
@@ -160,3 +160,4 @@ public class ScannerService : IScannerService
         return new ScannerScheduleDto(s.Market, s.Enabled, s.IntervalMinutes, s.LastEnqueuedAt, s.UpdatedAt);
     }
 }
+

@@ -392,3 +392,80 @@ export async function refreshAnalystData(market: Market, symbol: string): Promis
   if (!res.ok) throw new Error((await res.text()) || 'Failed to refresh analyst data');
   return res.json();
 }
+
+// ── Scanners (feature 011) ──
+
+export interface ScannerInfo {
+  name: string;
+  label: string;
+  family: string;
+  comingSoon: boolean;
+  latestHits: number;
+  latestScanDate?: string | null;
+}
+
+export interface ScannerResult {
+  symbol: string;
+  companyName?: string | null;
+  sectorName?: string | null;
+  industry?: string | null;
+  closePrice?: number | null;
+  dayChangePct?: number | null;
+  volume?: number | null;
+  relVolume?: number | null;
+  rsRating?: number | null;
+  triggerDetails?: string | null;
+}
+
+export interface ScannerSchedule {
+  market: string;
+  enabled: boolean;
+  intervalMinutes: number;
+  lastEnqueuedAt?: string | null;
+  updatedAt: string;
+}
+
+export async function fetchScanners(market: Market): Promise<ScannerInfo[]> {
+  const res = await fetch(`${BASE}/${market}/scanners`);
+  if (!res.ok) throw new Error('Failed to load scanners');
+  return res.json();
+}
+
+export async function triggerScanner(market: Market, body: { scannerName?: string | null; universe?: string }): Promise<{ runId: number }> {
+  const res = await fetch(`${BASE}/${market}/scanners/trigger`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error((await res.text()) || 'Failed to trigger scanner');
+  return res.json();
+}
+
+export async function fetchScannerDates(market: Market, scannerName: string): Promise<string[]> {
+  const res = await fetch(`${BASE}/${market}/scanners/${encodeURIComponent(scannerName)}/dates`);
+  if (!res.ok) throw new Error('Failed to load scan dates');
+  return res.json();
+}
+
+export async function fetchScannerResults(market: Market, scannerName: string, date?: string): Promise<ScannerResult[]> {
+  const qs = date ? `?date=${encodeURIComponent(date)}` : '';
+  const res = await fetch(`${BASE}/${market}/scanners/${encodeURIComponent(scannerName)}/results${qs}`);
+  if (!res.ok) throw new Error('Failed to load scanner results');
+  return res.json();
+}
+
+export async function fetchScannerSchedule(market: Market): Promise<ScannerSchedule> {
+  const res = await fetch(`${BASE}/${market}/scanners/schedule`);
+  if (!res.ok) throw new Error('Failed to load schedule');
+  return res.json();
+}
+
+export async function updateScannerSchedule(market: Market, body: { enabled: boolean; intervalMinutes?: number }): Promise<ScannerSchedule> {
+  const res = await fetch(`${BASE}/${market}/scanners/schedule`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error('Failed to update schedule');
+  return res.json();
+}

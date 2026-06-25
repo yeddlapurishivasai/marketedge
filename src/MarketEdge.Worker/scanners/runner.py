@@ -34,7 +34,7 @@ _STOCKS = {"india": "IndianStocks", "us": "USStocks"}
 _SECTORS = {"india": "IndianSectors", "us": "USSectors"}
 _TECH = {"india": "IndianTickerTechnical", "us": "USTickerTechnical"}
 _STAGE = {"india": "IndianStageAnalysisResults", "us": "USStageAnalysisResults"}
-_RESULTS = {"india": "IndianScannerResults", "us": "USScannerResults"}
+_RESULTS = {"india": "IndianTechnicalScannerResults", "us": "USTechnicalScannerResults"}
 
 # One generous load covers every daily scanner (max lookback ~520 for weekly aggregation);
 # indicator values at the last bar are unaffected by extra leading history.

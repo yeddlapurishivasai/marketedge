@@ -1,12 +1,16 @@
-# Feature 011: Stock Scanners
+# Feature 011: Technical Stock Scanners
 
 ## Summary
 
-Add a **stock scanner** subsystem that screens the ingested daily-bar universe for
+Add a **technical stock scanner** subsystem that screens the ingested daily-bar universe for
 technical setups, modelled on the reference scanner spec supplied by the user (a Java/ta4j
 implementation). Scanners run entirely off data we already ingest — `{Market}Bars1D`
 (daily OHLCV) and `{Market}TickerTechnical` (market cap + IBD RS rating) — plus a
 just-before-scan refresh of *today's* bar, so they can run any time during market hours.
+
+These are **technical** scanners; results are stored in `{Market}TechnicalScannerResults`.
+Fundamental scanners (a separate effort) will get their own result tables, keeping the two
+families cleanly isolated.
 
 Each scanner is idempotent per `(ScannerName, Market, ScanDate)`: re-running on the same
 day replaces that day's rows. Results are kept per day so the UI can show previous days'
@@ -106,7 +110,7 @@ idempotently for today's `ScanDate`.
 ## Tables
 
 ```
-IndianScannerResults / USScannerResults
+IndianTechnicalScannerResults / USTechnicalScannerResults
   Id, RunId, ScannerName, ScanDate, Symbol, CompanyName, SectorName, Industry,
   ClosePrice, DayChangePct, Volume, RelVolume, RsRating, TriggerDetails(JSON), CreatedAt
   UNIQUE (ScannerName, ScanDate, Symbol)

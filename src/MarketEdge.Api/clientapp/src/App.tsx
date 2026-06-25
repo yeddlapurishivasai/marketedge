@@ -7,12 +7,13 @@ import { ThemeContext } from './theme';
 import {
   Sun, Moon, ChevronLeft, Search, Plus, Pencil, Trash2,
   ArrowRightLeft, X, TrendingUp, LayoutGrid, BarChart3,
-  IndianRupee, DollarSign, ChevronRight, Activity, Target, Database
+  IndianRupee, DollarSign, ChevronRight, Activity, Target, Database, Radar
 } from 'lucide-react';
 import JobsPage from './pages/JobsPage';
 import AnalysisPage from './pages/AnalysisPage';
 import AdminPage from './pages/AdminPage';
 import StockLookupPage, { StockLookupModal } from './pages/StockLookupPage';
+import ScannersPage from './pages/ScannersPage';
 import './styles.css';
 
 // Theme context
@@ -92,6 +93,7 @@ function App() {
             <Route path="/:market/lookup" element={<StockLookupPage />} />
             <Route path="/:market/lookup/:symbol" element={<StockLookupPage />} />
             <Route path="/:market/analysis" element={<AnalysisPage />} />
+            <Route path="/:market/scanners" element={<ScannersPage />} />
             <Route path="/:market/jobs" element={<JobsPage />} />
             <Route path="/:market/admin" element={<AdminPage />} />
           </Routes>
@@ -160,6 +162,14 @@ function MarketMenu() {
           <div className="menu-card-text">
             <h3>Stage 2 Analysis</h3>
             <p>RS, momentum &amp; sector rotation</p>
+          </div>
+          <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
+        </div>
+        <div className="menu-card" onClick={() => navigate(`/${m}/scanners`)}>
+          <div className="menu-card-icon analysis"><Radar size={22} /></div>
+          <div className="menu-card-text">
+            <h3>Technical Scanners</h3>
+            <p>Screen the universe for technical setups</p>
           </div>
           <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
         </div>
