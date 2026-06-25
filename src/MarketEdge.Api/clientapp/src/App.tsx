@@ -70,9 +70,14 @@ function NavBar() {
           <div className="nav-brand-icon"><TrendingUp size={18} /></div>
           <span className="nav-brand-text">MarketEdge</span>
         </NavLink>
-        <button className="btn btn-ghost" onClick={toggle} title="Toggle theme">
-          {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
-        </button>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <NavLink to="/admin" className="btn btn-ghost" title="Admin">
+            <Database size={18} />
+          </NavLink>
+          <button className="btn btn-ghost" onClick={toggle} title="Toggle theme">
+            {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
+          </button>
+        </div>
       </div>
     </header>
   );
@@ -95,7 +100,7 @@ function App() {
             <Route path="/:market/analysis" element={<AnalysisPage />} />
             <Route path="/:market/scanners" element={<ScannersPage />} />
             <Route path="/:market/jobs" element={<JobsPage />} />
-            <Route path="/:market/admin" element={<AdminPage />} />
+            <Route path="/admin" element={<AdminPage />} />
           </Routes>
         </div>
       </BrowserRouter>
@@ -178,14 +183,6 @@ function MarketMenu() {
           <div className="menu-card-text">
             <h3>Job Runs</h3>
             <p>Monitor analysis job runs</p>
-          </div>
-          <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
-        </div>
-        <div className="menu-card" onClick={() => navigate(`/${m}/admin`)}>
-          <div className="menu-card-icon sectors"><Database size={22} /></div>
-          <div className="menu-card-text">
-            <h3>Admin / Data Ingestion</h3>
-            <p>Seed tickers &amp; ingest bars, technicals, fundamentals</p>
           </div>
           <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
         </div>

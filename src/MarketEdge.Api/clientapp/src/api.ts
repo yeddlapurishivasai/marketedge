@@ -424,6 +424,7 @@ export interface ScannerSchedule {
   lastEnqueuedAt?: string | null;
   updatedAt: string;
   isMarketOpen: boolean;
+  lastRunAt?: string | null;
 }
 
 export async function fetchScanners(market: Market): Promise<ScannerInfo[]> {

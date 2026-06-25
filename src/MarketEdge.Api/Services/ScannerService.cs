@@ -140,10 +140,15 @@ public class ScannerService : IScannerService
     public async Task<ScannerScheduleDto> GetScheduleAsync(string market)
     {
         var s = await _db.ScannerSchedules.FirstOrDefaultAsync(x => x.Market == market);
-        var open = MarketHours.IsOpen(market);
         if (s == null)
-            return new ScannerScheduleDto(market, false, 15, null, DateTime.UtcNow, open);
-        return new ScannerScheduleDto(s.Market, s.Enabled, s.IntervalMinutes, s.LastEnqueuedAt, s.UpdatedAt, open);
+        {
+            // Default: enabled (the scheduler only fires during market hours anyway).
+            s = new ScannerSchedule { Market = market, Enabled = true, IntervalMinutes = 15, UpdatedAt = DateTime.UtcNow };
+            _db.ScannerSchedules.Add(s);
+            await _db.SaveChangesAsync();
+        }
+        var lastRun = await GetLastRunAtAsync(market);
+        return new ScannerScheduleDto(s.Market, s.Enabled, s.IntervalMinutes, s.LastEnqueuedAt, s.UpdatedAt, MarketHours.IsOpen(market), lastRun);
     }
 
     public async Task<ScannerScheduleDto> UpdateScheduleAsync(string market, UpdateScannerScheduleRequest request)
@@ -158,7 +163,19 @@ public class ScannerService : IScannerService
         if (request.IntervalMinutes is int iv && iv > 0) s.IntervalMinutes = iv;
         s.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
-        return new ScannerScheduleDto(s.Market, s.Enabled, s.IntervalMinutes, s.LastEnqueuedAt, s.UpdatedAt, MarketHours.IsOpen(market));
+        var lastRun = await GetLastRunAtAsync(market);
+        return new ScannerScheduleDto(s.Market, s.Enabled, s.IntervalMinutes, s.LastEnqueuedAt, s.UpdatedAt, MarketHours.IsOpen(market), lastRun);
+    }
+
+    private async Task<DateTime?> GetLastRunAtAsync(string market)
+    {
+        var job = await _db.JobRuns
+            .Where(j => j.JobType == "scanner" && j.Market == market)
+            .OrderByDescending(j => j.Id)
+            .Select(j => new { j.CompletedAt, j.StartedAt, j.CreatedAt })
+            .FirstOrDefaultAsync();
+        if (job == null) return null;
+        return job.CompletedAt ?? job.StartedAt ?? job.CreatedAt;
     }
 }
 
