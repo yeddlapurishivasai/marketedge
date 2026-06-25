@@ -1260,3 +1260,6 @@ body {
 .muted-note { color: var(--text-secondary); font-size: 0.82rem; margin: 8px 0 0; }
 .eps-table .rev-up { color: var(--success); font-weight: 600; margin-right: 10px; }
 .eps-table .rev-down { color: var(--danger); font-weight: 600; }
+
+.stock-link { color: var(--accent); font-weight: 600; text-decoration: none; }
+.stock-link:hover { text-decoration: underline; }

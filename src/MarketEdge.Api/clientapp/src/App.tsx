@@ -7,7 +7,7 @@ import { ThemeContext } from './theme';
 import {
   Sun, Moon, ChevronLeft, Search, Plus, Pencil, Trash2,
   ArrowRightLeft, X, TrendingUp, LayoutGrid, BarChart3,
-  IndianRupee, DollarSign, ChevronRight, Activity, Target, Database, LineChart
+  IndianRupee, DollarSign, ChevronRight, Activity, Target, Database
 } from 'lucide-react';
 import JobsPage from './pages/JobsPage';
 import AnalysisPage from './pages/AnalysisPage';
@@ -90,6 +90,7 @@ function App() {
             <Route path="/:market/sectors/:sectorId" element={<SectorDetail />} />
             <Route path="/:market/stocks" element={<StocksPage />} />
             <Route path="/:market/lookup" element={<StockLookupPage />} />
+            <Route path="/:market/lookup/:symbol" element={<StockLookupPage />} />
             <Route path="/:market/analysis" element={<AnalysisPage />} />
             <Route path="/:market/jobs" element={<JobsPage />} />
             <Route path="/:market/admin" element={<AdminPage />} />
@@ -150,15 +151,7 @@ function MarketMenu() {
           <div className="menu-card-icon stocks"><BarChart3 size={22} /></div>
           <div className="menu-card-text">
             <h3>Stocks</h3>
-            <p>Search, move, and manage stocks</p>
-          </div>
-          <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
-        </div>
-        <div className="menu-card" onClick={() => navigate(`/${m}/lookup`)}>
-          <div className="menu-card-icon analysis"><LineChart size={22} /></div>
-          <div className="menu-card-text">
-            <h3>Stock Lookup</h3>
-            <p>Chart, metrics &amp; analyst data for one symbol</p>
+            <p>Search, manage &amp; view chart, metrics and analyst data</p>
           </div>
           <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
         </div>
@@ -442,7 +435,9 @@ function SectorDetail() {
               {stocks.map(st => (
                 <tr key={st.id}>
                   <td><input type="checkbox" className="checkbox" checked={selected.has(st.id)} onChange={() => toggleSelect(st.id)} /></td>
-                  <td className="cell-symbol">{st.symbol}</td>
+                  <td className="cell-symbol">
+                    <NavLink className="stock-link" to={`/${m}/lookup/${encodeURIComponent(st.symbol)}`}>{st.symbol}</NavLink>
+                  </td>
                   <td>{st.companyName}</td>
                   <td style={{ textAlign: 'right' }}>{formatMarketCap(st.marketCap, m)}</td>
                   <td className="cell-center">{st.isFno ? <span className="badge badge-count">F&amp;O</span> : <span className="cell-muted">-</span>}</td>

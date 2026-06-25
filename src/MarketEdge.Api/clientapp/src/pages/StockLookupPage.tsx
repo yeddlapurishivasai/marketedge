@@ -134,7 +134,7 @@ function fmtPeriod(d: string): string {
 }
 
 export default function StockLookupPage() {
-  const { market: routeMarket } = useParams<{ market: string }>();
+  const { market: routeMarket, symbol: routeSymbol } = useParams<{ market: string; symbol?: string }>();
   const navigate = useNavigate();
   const { theme } = useContext(ThemeContext);
 
@@ -168,6 +168,18 @@ export default function StockLookupPage() {
     }
     setLoading(false);
   }, [timeframe, loadBars]);
+
+  // Keep the active market in sync with the URL and load the symbol from the route
+  // (deep-link / click-through from the Stocks list).
+  useEffect(() => {
+    if (routeMarket) setMarket(routeMarket as Market);
+  }, [routeMarket]);
+
+  useEffect(() => {
+    const m = (routeMarket as Market) || market;
+    if (routeSymbol) runSearch(m, decodeURIComponent(routeSymbol));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeMarket, routeSymbol]);
 
   // Reload bars when timeframe changes for the loaded symbol.
   useEffect(() => {
@@ -212,15 +224,15 @@ export default function StockLookupPage() {
     <div className="page">
       <div className="lookup-header-bar">
         <div>
-          <button className="back-link" onClick={() => navigate(`/${market}`)}>
-            <ChevronLeft size={16} /> Back
+          <button className="back-link" onClick={() => navigate(`/${market}/stocks`)}>
+            <ChevronLeft size={16} /> Stocks
           </button>
           <h1 className="page-title" style={{ marginBottom: 2 }}>Stock Lookup</h1>
           <p className="page-subtitle">Search by symbol or company name, then inspect the chart and stock properties.</p>
         </div>
         <form
           className="lookup-search"
-          onSubmit={e => { e.preventDefault(); runSearch(market, query); }}
+          onSubmit={e => { e.preventDefault(); const s = query.trim(); if (s) navigate(`/${market}/lookup/${encodeURIComponent(s)}`); }}
         >
           <div className="lookup-search-input">
             <input
@@ -232,7 +244,7 @@ export default function StockLookupPage() {
             {suggestions.length > 0 && (
               <ul className="lookup-suggestions">
                 {suggestions.map(s => (
-                  <li key={s.symbol} onMouseDown={() => runSearch(market, s.symbol)}>
+                  <li key={s.symbol} onMouseDown={() => navigate(`/${market}/lookup/${encodeURIComponent(s.symbol)}`)}>
                     <strong>{s.symbol}</strong> <span>{s.companyName}</span>
                   </li>
                 ))}
