@@ -262,6 +262,7 @@ def cmd_ingest_fundamentals(args) -> int:
         "analyst_ok": 0, "analyst_failed": 0,
         "eps_rows": 0, "eps_failed": 0,
         "valuation_ok": 0, "valuation_skipped": 0, "valuation_failed": 0,
+        "earnings_ok": 0, "earnings_skipped": 0,
         "tickers": 0,
     }
 
@@ -296,6 +297,15 @@ def cmd_ingest_fundamentals(args) -> int:
                 logger.warning("EPS ingestion failed for %s: %s", symbol, exc)
                 counts["eps_failed"] += 1
 
+            try:
+                if _try_earnings_fundamentals(conn, args.market, symbol, ticker, today):
+                    counts["earnings_ok"] += 1
+                else:
+                    counts["earnings_skipped"] += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Earnings fundamentals failed for %s: %s", symbol, exc)
+                counts["earnings_skipped"] += 1
+
             mc = market_caps.get(symbol)
             if mc is None:
                 counts["valuation_skipped"] += 1
@@ -318,10 +328,12 @@ def cmd_ingest_fundamentals(args) -> int:
         )
         logger.info(
             "Fundamentals summary: %s tickers | analyst ok=%s failed=%s | "
-            "eps rows=%s failed=%s | valuation ok=%s skipped=%s failed=%s | %ss",
+            "eps rows=%s failed=%s | valuation ok=%s skipped=%s failed=%s | "
+            "earnings ok=%s skipped=%s | %ss",
             counts["tickers"], counts["analyst_ok"], counts["analyst_failed"],
             counts["eps_rows"], counts["eps_failed"], counts["valuation_ok"],
-            counts["valuation_skipped"], counts["valuation_failed"], duration,
+            counts["valuation_skipped"], counts["valuation_failed"],
+            counts["earnings_ok"], counts["earnings_skipped"], duration,
         )
     finally:
         conn.close()
@@ -408,8 +420,143 @@ def _try_eps_forecasts(conn, market, symbol, ticker, as_of) -> int:
     return written
 
 
-# --------------------------------------------------------------------------- #
-# Argument parsing
+def _row_value(stmt, labels, col_idx):
+    """Return a numeric value from a quarterly statement row, trying label aliases."""
+    if stmt is None or not hasattr(stmt, "index"):
+        return None
+    cols = list(stmt.columns)
+    if col_idx >= len(cols):
+        return None
+    for label in labels:
+        if label in stmt.index:
+            try:
+                return _safe_num(stmt.loc[label].iloc[col_idx])
+            except Exception:  # noqa: BLE001
+                continue
+    return None
+
+
+def _pct_change(cur, base):
+    if cur is None or base is None or base == 0:
+        return None
+    return (cur - base) / abs(base) * 100.0
+
+
+def _margin(numerator, revenue):
+    if numerator is None or revenue is None or revenue == 0:
+        return None
+    return numerator / revenue * 100.0
+
+
+def _trend(cur, prev):
+    if cur is None or prev is None:
+        return None
+    if cur > prev:
+        return "expanding"
+    if cur < prev:
+        return "decreasing"
+    return "flat"
+
+
+def _try_earnings_fundamentals(conn, market, symbol, ticker, as_of) -> bool:
+    """Compute reported quarterly earnings fundamentals from yfinance and upsert.
+
+    Reads ``quarterly_income_stmt`` (Total Revenue / Operating Income / Net Income) for
+    current / previous-quarter / year-ago-quarter columns, plus ``get_earnings_dates`` for
+    the last two reported announcement dates. Best-effort; returns True if a row was written.
+    """
+    try:
+        stmt = ticker.quarterly_income_stmt
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("No quarterly income stmt for %s: %s", symbol, exc)
+        stmt = None
+
+    revenue = op_profit = net_profit = None
+    revenue_pq = op_profit_pq = net_profit_pq = None
+    revenue_yo = op_profit_yo = net_profit_yo = None
+    latest_q_end = None
+
+    if stmt is not None and hasattr(stmt, "columns") and len(stmt.columns) > 0:
+        rev_labels = ["Total Revenue", "Operating Revenue"]
+        op_labels = ["Operating Income", "Operating Income Or Loss"]
+        ni_labels = ["Net Income", "Net Income Common Stockholders",
+                     "Net Income Continuous Operations"]
+        revenue = _row_value(stmt, rev_labels, 0)
+        op_profit = _row_value(stmt, op_labels, 0)
+        net_profit = _row_value(stmt, ni_labels, 0)
+        revenue_pq = _row_value(stmt, rev_labels, 1)
+        op_profit_pq = _row_value(stmt, op_labels, 1)
+        net_profit_pq = _row_value(stmt, ni_labels, 1)
+        revenue_yo = _row_value(stmt, rev_labels, 4)
+        op_profit_yo = _row_value(stmt, op_labels, 4)
+        net_profit_yo = _row_value(stmt, ni_labels, 4)
+        try:
+            latest_q_end = stmt.columns[0].date()
+        except Exception:  # noqa: BLE001
+            latest_q_end = None
+
+    # Earnings announcement dates (reported only).
+    last_date = prev_date = last_eps = last_surprise = None
+    try:
+        ed = ticker.get_earnings_dates(limit=12)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("No earnings dates for %s: %s", symbol, exc)
+        ed = None
+    if ed is not None and hasattr(ed, "iterrows") and not ed.empty:
+        reported = []
+        for idx, erow in ed.iterrows():
+            rep = erow.get("Reported EPS")
+            try:
+                idate = idx.date()
+            except Exception:  # noqa: BLE001
+                continue
+            if rep is not None and not (isinstance(rep, float) and math.isnan(rep)) \
+                    and idate <= as_of:
+                reported.append((idate, _safe_num(rep), _safe_num(erow.get("Surprise(%)"))))
+        reported.sort(key=lambda r: r[0], reverse=True)
+        if reported:
+            last_date, last_eps, last_surprise = reported[0]
+        if len(reported) > 1:
+            prev_date = reported[1][0]
+
+    # Nothing usable at all -> skip.
+    if revenue is None and net_profit is None and last_date is None:
+        return False
+
+    opm = _margin(op_profit, revenue)
+    opm_pq = _margin(op_profit_pq, revenue_pq)
+    opm_yo = _margin(op_profit_yo, revenue_yo)
+    net_margin = _margin(net_profit, revenue)
+    earnings_yoy = _pct_change(net_profit, net_profit_yo)
+    earnings_qoq = _pct_change(net_profit, net_profit_pq)
+    earnings_increasing = None
+    if net_profit is not None and net_profit_yo is not None:
+        earnings_increasing = bool(net_profit > net_profit_yo and net_profit > 0)
+
+    row = {
+        "ticker": symbol,
+        "as_of_date": as_of,
+        "latest_quarter_end": latest_q_end,
+        "revenue": revenue, "revenue_prev_q": revenue_pq, "revenue_yoy_q": revenue_yo,
+        "revenue_growth_yoy_pct": _pct_change(revenue, revenue_yo),
+        "operating_profit": op_profit, "operating_profit_prev_q": op_profit_pq,
+        "operating_profit_yoy_q": op_profit_yo,
+        "opm": opm, "opm_prev_q": opm_pq, "opm_yoy_q": opm_yo,
+        "net_profit": net_profit, "net_profit_prev_q": net_profit_pq,
+        "net_profit_yoy_q": net_profit_yo, "net_margin_pct": net_margin,
+        "earnings_growth_yoy_pct": earnings_yoy, "earnings_growth_qoq_pct": earnings_qoq,
+        "earnings_increasing": earnings_increasing,
+        "operating_profit_trend": _trend(op_profit, op_profit_pq),
+        "opm_trend": _trend(opm, opm_pq),
+        "last_earnings_date": last_date, "prev_earnings_date": prev_date,
+        "last_reported_eps": last_eps, "last_eps_surprise_pct": last_surprise,
+    }
+    try:
+        db.upsert_earnings_fundamentals(conn, market, row)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed earnings fundamentals upsert for %s: %s", symbol, exc)
+        return False
 # --------------------------------------------------------------------------- #
 def _add_universe_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--market", required=True, choices=["india", "us"])

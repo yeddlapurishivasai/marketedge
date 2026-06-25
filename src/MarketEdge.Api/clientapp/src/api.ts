@@ -471,3 +471,66 @@ export async function updateScannerSchedule(market: Market, body: { enabled: boo
   if (!res.ok) throw new Error('Failed to update schedule');
   return res.json();
 }
+
+// ---------- Fundamental Scanners ----------
+
+export interface FundamentalRow {
+  symbol: string;
+  companyName: string;
+  broadSector?: string | null;
+  industry?: string | null;
+  asOfDate: string;
+  latestQuarterEnd?: string | null;
+  revenue?: number | null;
+  revenueGrowthYoyPct?: number | null;
+  operatingProfit?: number | null;
+  opm?: number | null;
+  opmPrevQ?: number | null;
+  opmYoyQ?: number | null;
+  opmTrend?: string | null;
+  netProfit?: number | null;
+  netMarginPct?: number | null;
+  earningsGrowthYoyPct?: number | null;
+  earningsGrowthQoqPct?: number | null;
+  earningsIncreasing?: boolean | null;
+  operatingProfitTrend?: string | null;
+  lastEarningsDate?: string | null;
+  prevEarningsDate?: string | null;
+  lastReportedEps?: number | null;
+  lastEpsSurprisePct?: number | null;
+  earningsAnnouncedRecent: boolean;
+}
+
+export interface FundamentalDetail {
+  row: FundamentalRow;
+  note?: string | null;
+}
+
+export type FundamentalScanner =
+  | 'all'
+  | 'earnings_increasing'
+  | 'margin_expanding'
+  | 'operating_profit_expanding'
+  | 'recently_announced';
+
+export async function fetchFundamentals(market: Market, scanner: FundamentalScanner = 'all'): Promise<FundamentalRow[]> {
+  const qs = scanner && scanner !== 'all' ? `?scanner=${encodeURIComponent(scanner)}` : '';
+  const res = await fetch(`${BASE}/${market}/fundamentals${qs}`);
+  if (!res.ok) throw new Error('Failed to load fundamentals');
+  return res.json();
+}
+
+export async function fetchFundamentalDetail(market: Market, symbol: string): Promise<FundamentalDetail> {
+  const res = await fetch(`${BASE}/${market}/fundamentals/${encodeURIComponent(symbol)}`);
+  if (!res.ok) throw new Error('Failed to load fundamental detail');
+  return res.json();
+}
+
+export async function saveFundamentalNote(market: Market, symbol: string, noteText: string): Promise<void> {
+  const res = await fetch(`${BASE}/${market}/fundamentals/${encodeURIComponent(symbol)}/note`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ noteText })
+  });
+  if (!res.ok) throw new Error('Failed to save note');
+}

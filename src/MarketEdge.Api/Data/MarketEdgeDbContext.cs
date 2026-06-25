@@ -34,6 +34,12 @@ public class MarketEdgeDbContext : DbContext
     public DbSet<USTechnicalScannerResult> USTechnicalScannerResults => Set<USTechnicalScannerResult>();
     public DbSet<ScannerSchedule> ScannerSchedules => Set<ScannerSchedule>();
 
+    // Fundamental Scanners (earnings fundamentals + per-stock note)
+    public DbSet<IndianEarningsFundamentals> IndianEarningsFundamentals => Set<IndianEarningsFundamentals>();
+    public DbSet<USEarningsFundamentals> USEarningsFundamentals => Set<USEarningsFundamentals>();
+    public DbSet<IndianStockNote> IndianStockNotes => Set<IndianStockNote>();
+    public DbSet<USStockNote> USStockNotes => Set<USStockNote>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<IndianSector>()
@@ -74,6 +80,35 @@ public class MarketEdgeDbContext : DbContext
 
         ConfigureLookupEntities(modelBuilder);
         ConfigureScannerEntities(modelBuilder);
+        ConfigureFundamentalEntities(modelBuilder);
+    }
+
+    private static void ConfigureFundamentalEntities(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<IndianEarningsFundamentals>().HasKey(e => e.Ticker);
+        modelBuilder.Entity<USEarningsFundamentals>().HasKey(e => e.Ticker);
+        modelBuilder.Entity<IndianStockNote>().HasKey(n => n.Ticker);
+        modelBuilder.Entity<USStockNote>().HasKey(n => n.Ticker);
+
+        foreach (var t in new[] { typeof(IndianEarningsFundamentals), typeof(USEarningsFundamentals) })
+        {
+            var e = modelBuilder.Entity(t);
+            foreach (var p in new[] { nameof(EarningsFundamentalsBase.Revenue), nameof(EarningsFundamentalsBase.RevenuePrevQ),
+                nameof(EarningsFundamentalsBase.RevenueYoyQ), nameof(EarningsFundamentalsBase.OperatingProfit),
+                nameof(EarningsFundamentalsBase.OperatingProfitPrevQ), nameof(EarningsFundamentalsBase.OperatingProfitYoyQ),
+                nameof(EarningsFundamentalsBase.NetProfit), nameof(EarningsFundamentalsBase.NetProfitPrevQ),
+                nameof(EarningsFundamentalsBase.NetProfitYoyQ) })
+                e.Property(p).HasColumnType("decimal(20,2)");
+            foreach (var p in new[] { nameof(EarningsFundamentalsBase.RevenueGrowthYoyPct),
+                nameof(EarningsFundamentalsBase.EarningsGrowthYoyPct), nameof(EarningsFundamentalsBase.EarningsGrowthQoqPct) })
+                e.Property(p).HasColumnType("decimal(12,4)");
+            foreach (var p in new[] { nameof(EarningsFundamentalsBase.Opm), nameof(EarningsFundamentalsBase.OpmPrevQ),
+                nameof(EarningsFundamentalsBase.OpmYoyQ), nameof(EarningsFundamentalsBase.NetMarginPct) })
+                e.Property(p).HasColumnType("decimal(9,4)");
+            foreach (var p in new[] { nameof(EarningsFundamentalsBase.LastReportedEps),
+                nameof(EarningsFundamentalsBase.LastEpsSurprisePct) })
+                e.Property(p).HasColumnType("decimal(12,4)");
+        }
     }
 
     private static void ConfigureScannerEntities(ModelBuilder modelBuilder)

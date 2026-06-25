@@ -24,6 +24,8 @@ MARKET_TABLES = {
         "technical": "IndianTickerTechnical",
         "analyst": "IndianAnalystSnapshot",
         "eps": "IndianEpsForecasts",
+        "earnings": "IndianEarningsFundamentals",
+        "note": "IndianStockNote",
         "ticker_len": 30,
     },
     "us": {
@@ -33,6 +35,8 @@ MARKET_TABLES = {
         "technical": "USTickerTechnical",
         "analyst": "USAnalystSnapshot",
         "eps": "USEpsForecasts",
+        "earnings": "USEarningsFundamentals",
+        "note": "USStockNote",
         "ticker_len": 20,
     },
 }
@@ -281,7 +285,71 @@ def upsert_eps_forecast(conn: pyodbc.Connection, market: str, row: dict[str, Any
     conn.commit()
 
 
-def prune_old_bars(conn: pyodbc.Connection, market: str, cutoff: date) -> int:
+def upsert_earnings_fundamentals(conn: pyodbc.Connection, market: str, row: dict[str, Any]) -> None:
+    """Upsert a single per-ticker earnings fundamentals snapshot (PK = Ticker)."""
+    t = tables_for(market)
+    table = t["earnings"]
+    cols = (
+        "AsOfDate", "LatestQuarterEnd",
+        "Revenue", "RevenuePrevQ", "RevenueYoyQ", "RevenueGrowthYoyPct",
+        "OperatingProfit", "OperatingProfitPrevQ", "OperatingProfitYoyQ",
+        "Opm", "OpmPrevQ", "OpmYoyQ",
+        "NetProfit", "NetProfitPrevQ", "NetProfitYoyQ", "NetMarginPct",
+        "EarningsGrowthYoyPct", "EarningsGrowthQoqPct",
+        "EarningsIncreasing", "OperatingProfitTrend", "OpmTrend",
+        "LastEarningsDate", "PrevEarningsDate", "LastReportedEps", "LastEpsSurprisePct",
+    )
+    keys = (
+        "as_of_date", "latest_quarter_end",
+        "revenue", "revenue_prev_q", "revenue_yoy_q", "revenue_growth_yoy_pct",
+        "operating_profit", "operating_profit_prev_q", "operating_profit_yoy_q",
+        "opm", "opm_prev_q", "opm_yoy_q",
+        "net_profit", "net_profit_prev_q", "net_profit_yoy_q", "net_margin_pct",
+        "earnings_growth_yoy_pct", "earnings_growth_qoq_pct",
+        "earnings_increasing", "operating_profit_trend", "opm_trend",
+        "last_earnings_date", "prev_earnings_date", "last_reported_eps", "last_eps_surprise_pct",
+    )
+    set_clause = ", ".join(f"{c} = ?" for c in cols) + ", UpdatedAt = GETUTCDATE()"
+    insert_cols = "Ticker, " + ", ".join(cols)
+    insert_ph = "?, " + ", ".join("?" for _ in cols)
+    merge = f"""
+        MERGE dbo.{table} AS tgt
+        USING (SELECT ? AS Ticker) AS src
+        ON tgt.Ticker = src.Ticker
+        WHEN MATCHED THEN UPDATE SET {set_clause}
+        WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_ph});
+    """
+    vals = [_clean(row.get(k)) for k in keys]
+    params = [row["ticker"], *vals, row["ticker"], *vals]
+    cursor = conn.cursor()
+    cursor.execute(merge, params)
+    conn.commit()
+
+
+def get_stock_note(conn: pyodbc.Connection, market: str, ticker: str) -> str | None:
+    """Return the saved free-text note for a ticker, or None."""
+    t = tables_for(market)
+    table = t["note"]
+    cursor = conn.cursor()
+    cursor.execute(f"SELECT NoteText FROM dbo.{table} WHERE Ticker = ?", [ticker])
+    found = cursor.fetchone()
+    return found[0] if found else None
+
+
+def upsert_stock_note(conn: pyodbc.Connection, market: str, ticker: str, note_text: str | None) -> None:
+    """Upsert the per-ticker free-text note (input for the AI workflow)."""
+    t = tables_for(market)
+    table = t["note"]
+    merge = f"""
+        MERGE dbo.{table} AS tgt
+        USING (SELECT ? AS Ticker) AS src
+        ON tgt.Ticker = src.Ticker
+        WHEN MATCHED THEN UPDATE SET NoteText = ?, UpdatedAt = GETUTCDATE()
+        WHEN NOT MATCHED THEN INSERT (Ticker, NoteText) VALUES (?, ?);
+    """
+    cursor = conn.cursor()
+    cursor.execute(merge, [ticker, note_text, ticker, note_text])
+    conn.commit()
     """Delete bars older than ``cutoff`` so storage holds a rolling window only.
 
     Returns the number of rows deleted. Makes repeated ingests idempotent: the stored
