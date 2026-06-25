@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { Market, JobRun, IngestionStep } from '../api';
+import type { Market, JobRun } from '../api';
 import { fetchJobRuns, triggerIngestion } from '../api';
 import {
-  ChevronLeft, RefreshCw, Database, Download, LineChart, FileText,
-  PlayCircle, Clock, CheckCircle2, XCircle, Loader2, AlertCircle, ListChecks
+  ChevronLeft, RefreshCw, Database, PlayCircle,
+  Clock, CheckCircle2, XCircle, Loader2, AlertCircle
 } from 'lucide-react';
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
@@ -23,20 +23,6 @@ const STATUS_CLASS: Record<string, string> = {
   cancelled: 'status-cancelled'
 };
 
-interface StepDef {
-  step: IngestionStep;
-  label: string;
-  desc: string;
-  icon: React.ReactNode;
-}
-
-const STEPS: StepDef[] = [
-  { step: 'seed_tickers', label: 'Seed Tickers', desc: 'Populate the ticker master from the catalog', icon: <Database size={20} /> },
-  { step: 'bars', label: 'Ingest Bars', desc: 'Fetch last 1 year of daily OHLCV (rolling window)', icon: <Download size={20} /> },
-  { step: 'technical', label: 'Ingest Technical', desc: 'Compute daily technical snapshots', icon: <LineChart size={20} /> },
-  { step: 'fundamentals', label: 'Ingest Fundamentals', desc: 'Analyst, EPS & market-cap (best-effort)', icon: <FileText size={20} /> },
-];
-
 function formatDuration(seconds?: number): string {
   if (!seconds) return '—';
   if (seconds < 60) return `${Math.round(seconds)}s`;
@@ -49,9 +35,8 @@ function formatDate(dateStr?: string): string {
   return dateStr ? new Date(dateStr).toLocaleString() : '—';
 }
 
-function stepLabel(run: JobRun): string {
-  const s = run.parameters?.step;
-  return typeof s === 'string' ? s.replace(/_/g, ' ') : run.jobType.replace(/_/g, ' ');
+function runMode(run: JobRun): string {
+  return run.parameters?.testSample ? 'Sample (200)' : 'Full universe';
 }
 
 export default function AdminPage() {
@@ -62,8 +47,7 @@ export default function AdminPage() {
   const [runs, setRuns] = useState<JobRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [testSample, setTestSample] = useState(true);
-  const [limit, setLimit] = useState<string>('');
-  const [busy, setBusy] = useState<IngestionStep | null>(null);
+  const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -84,23 +68,17 @@ export default function AdminPage() {
     return () => clearInterval(interval);
   }, [runs, load]);
 
-  const trigger = async (step: IngestionStep) => {
-    setBusy(step);
+  const ingest = async () => {
+    setBusy(true);
     setMessage(null);
     try {
-      const parsedLimit = limit.trim() ? parseInt(limit, 10) : undefined;
-      if (parsedLimit !== undefined && (isNaN(parsedLimit) || parsedLimit < 1)) {
-        setMessage('Limit must be a positive number.');
-        setBusy(null);
-        return;
-      }
-      const { runId } = await triggerIngestion(m, { step, testSample, limit: parsedLimit });
-      setMessage(`Started run #${runId} (${step.replace(/_/g, ' ')}).`);
+      const { runId } = await triggerIngestion(m, { testSample });
+      setMessage(`Started ingestion run #${runId} (${testSample ? 'Sample 200' : 'Full universe'}).`);
       await load();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Failed to trigger ingestion.');
     }
-    setBusy(null);
+    setBusy(false);
   };
 
   return (
@@ -121,64 +99,57 @@ export default function AdminPage() {
         </div>
       </div>
 
-      {/* Options */}
-      <div className="card" style={{ padding: 16, marginBottom: 16, display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input type="checkbox" checked={testSample} onChange={e => setTestSample(e.target.checked)} />
-          Test sample only
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          Limit
-          <input
-            type="number"
-            min={1}
-            placeholder="all"
-            value={limit}
-            onChange={e => setLimit(e.target.value)}
-            style={{ width: 90 }}
-          />
-        </label>
-        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-          Options apply to the next step you start.
-        </span>
-      </div>
+      {/* Ingest panel */}
+      <div className="card" style={{ padding: 20, marginBottom: 20, maxWidth: 560 }}>
+        <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: '0.88rem' }}>
+          Runs the full pipeline for {m === 'india' ? 'India' : 'US'}: daily bars
+          (seeds tickers, rolling 1-year window) → technicals → fundamentals.
+        </p>
 
-      {message && (
-        <div className="card" style={{ padding: '10px 16px', marginBottom: 16, fontSize: '0.85rem' }}>
-          {message}
-        </div>
-      )}
-
-      {/* Step cards */}
-      <div className="menu-grid" style={{ marginBottom: 20 }}>
-        {STEPS.map(s => (
-          <div key={s.step} className="menu-card" style={{ cursor: 'default' }}>
-            <div className="menu-card-icon jobs">{s.icon}</div>
-            <div className="menu-card-text">
-              <h3>{s.label}</h3>
-              <p>{s.desc}</p>
-            </div>
+        {/* Run mode: sample vs full universe (mirrors Stage 2) */}
+        <div className="form-group">
+          <label className="form-label">Run Mode</label>
+          <div style={{ display: 'flex', gap: 8 }}>
             <button
-              className="btn btn-primary btn-sm"
-              style={{ marginLeft: 'auto' }}
-              disabled={busy !== null}
-              onClick={() => trigger(s.step)}
+              type="button"
+              className={`btn btn-sm ${testSample ? 'btn-primary' : 'btn-outline'}`}
+              style={{ flex: 1 }}
+              onClick={() => setTestSample(true)}
             >
-              {busy === s.step ? <Loader2 size={14} className="spin-icon" /> : <PlayCircle size={14} />} Run
+              Sample (200 stocks)
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${!testSample ? 'btn-primary' : 'btn-outline'}`}
+              style={{ flex: 1 }}
+              onClick={() => setTestSample(false)}
+            >
+              Full universe
             </button>
           </div>
-        ))}
-      </div>
+          <div style={{ marginTop: 6, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+            {testSample
+              ? 'Ingests only the curated test-sample stocks — fast, ideal for local testing.'
+              : 'Ingests the entire ticker universe — slower, full dataset.'}
+          </div>
+        </div>
 
-      <button
-        className="btn btn-primary"
-        style={{ marginBottom: 24 }}
-        disabled={busy !== null}
-        onClick={() => trigger('full')}
-      >
-        {busy === 'full' ? <Loader2 size={16} className="spin-icon" /> : <ListChecks size={16} />}
-        &nbsp;Run Full Pipeline (seed → bars → technical → fundamentals)
-      </button>
+        <button
+          className="btn btn-primary"
+          style={{ marginTop: 16 }}
+          disabled={busy}
+          onClick={ingest}
+        >
+          {busy ? <Loader2 size={16} className="spin-icon" /> : <PlayCircle size={16} />}
+          &nbsp;Ingest Data
+        </button>
+
+        {message && (
+          <div style={{ marginTop: 12, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            {message}
+          </div>
+        )}
+      </div>
 
       {/* Recent runs */}
       <h2 className="section-title">Recent ingestion runs</h2>
@@ -188,14 +159,14 @@ export default function AdminPage() {
         ) : runs.length === 0 ? (
           <div className="empty-state">
             <div className="empty-state-icon">🗄️</div>
-            <p className="empty-state-text">No ingestion runs yet. Start a step above.</p>
+            <p className="empty-state-text">No ingestion runs yet. Click "Ingest Data" above.</p>
           </div>
         ) : (
           <table className="table">
             <thead>
               <tr>
                 <th>ID</th>
-                <th>Step</th>
+                <th>Mode</th>
                 <th>Status</th>
                 <th>Progress</th>
                 <th>Started</th>
@@ -207,7 +178,7 @@ export default function AdminPage() {
               {runs.map(run => (
                 <tr key={run.id}>
                   <td style={{ fontWeight: 600 }}>#{run.id}</td>
-                  <td style={{ textTransform: 'capitalize' }}>{stepLabel(run)}</td>
+                  <td>{runMode(run)}</td>
                   <td>
                     <span className={`status-badge ${STATUS_CLASS[run.status]}`}>
                       {STATUS_ICON[run.status]} {run.status}

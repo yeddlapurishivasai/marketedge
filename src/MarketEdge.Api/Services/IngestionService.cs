@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace MarketEdge.Api.Services;
 
-public record TriggerIngestionRequest(string Step, bool TestSample = false, int? Limit = null);
+public record TriggerIngestionRequest(bool TestSample = false, int? Limit = null);
 
 public interface IIngestionService
 {
@@ -19,22 +19,22 @@ public interface IIngestionService
 /// tracks each invocation as a <c>data_ingestion</c> <see cref="JobRun"/>. The HTTP request
 /// returns as soon as the run row exists; the process runs on a background task that updates
 /// the row's terminal state.
+///
+/// A single trigger runs the whole pipeline in order: <c>ingest bars</c> (which also seeds
+/// the ticker universe), then <c>ingest technical</c>, then <c>ingest fundamentals</c>.
 /// </summary>
 public class IngestionService : IIngestionService
 {
     public const string JobType = "data_ingestion";
 
-    // step -> CLI argument list (market + shared flags appended at runtime).
-    private static readonly Dictionary<string, string[]> StepArgs = new()
+    // Pipeline stage -> CLI argument list (market + shared flags appended at runtime).
+    // The bars stage seeds the ticker universe internally, so there is no separate seed step.
+    private static readonly (string Name, string[] Args)[] Pipeline =
     {
-        ["seed_tickers"] = new[] { "seed", "tickers" },
-        ["bars"] = new[] { "ingest", "bars" },
-        ["technical"] = new[] { "ingest", "technical" },
-        ["fundamentals"] = new[] { "ingest", "fundamentals" },
+        ("bars", new[] { "ingest", "bars" }),
+        ("technical", new[] { "ingest", "technical" }),
+        ("fundamentals", new[] { "ingest", "fundamentals" }),
     };
-
-    // Ordered steps run by the "full" pipeline.
-    private static readonly string[] FullPipeline = { "seed_tickers", "bars", "technical", "fundamentals" };
 
     private readonly MarketEdgeDbContext _db;
     private readonly IServiceScopeFactory _scopeFactory;
@@ -61,25 +61,19 @@ public class IngestionService : IIngestionService
         if (market != "india" && market != "us")
             throw new ArgumentException("Market must be 'india' or 'us'.");
 
-        var step = (request.Step ?? string.Empty).Trim();
-        if (step != "full" && !StepArgs.ContainsKey(step))
-            throw new ArgumentException($"Unknown step '{step}'.");
-
         if (request.Limit is < 1)
             throw new ArgumentException("Limit must be a positive integer.");
 
-        // One in-flight run per (market, step): return the existing run if present.
-        var inFlight = await _db.JobRuns
+        // One in-flight run per market: return the existing run if present.
+        var existing = await _db.JobRuns
             .Where(j => j.JobType == JobType && j.Market == market && j.Status == "running")
             .OrderByDescending(j => j.CreatedAt)
-            .ToListAsync();
-        var existing = inFlight.FirstOrDefault(j => StepOf(j) == step);
+            .FirstOrDefaultAsync();
         if (existing != null)
             return existing.Id;
 
         var parameters = new Dictionary<string, object?>
         {
-            ["step"] = step,
             ["market"] = market,
             ["testSample"] = request.TestSample,
         };
@@ -104,26 +98,25 @@ public class IngestionService : IIngestionService
         var runId = job.Id;
         var testSample = request.TestSample;
         var limit = request.Limit;
-        _ = Task.Run(() => RunStepsAsync(runId, market, step, testSample, limit));
+        _ = Task.Run(() => RunPipelineAsync(runId, market, testSample, limit));
 
         return runId;
     }
 
-    private async Task RunStepsAsync(int runId, string market, string step, bool testSample, int? limit)
+    private async Task RunPipelineAsync(int runId, string market, bool testSample, int? limit)
     {
-        var steps = step == "full" ? FullPipeline : new[] { step };
         var output = new StringBuilder();
         var startedAt = DateTime.UtcNow;
         var failed = false;
 
-        for (var i = 0; i < steps.Length; i++)
+        for (var i = 0; i < Pipeline.Length; i++)
         {
-            var current = steps[i];
-            output.AppendLine($"=== {current} ({market}) ===");
+            var (name, args) = Pipeline[i];
+            output.AppendLine($"=== {name} ({market}) ===");
             int exitCode;
             try
             {
-                exitCode = await RunProcessAsync(market, current, testSample, limit, output);
+                exitCode = await RunProcessAsync(market, args, testSample, limit, output);
             }
             catch (Exception ex)
             {
@@ -131,12 +124,12 @@ public class IngestionService : IIngestionService
                 exitCode = -1;
             }
 
-            await UpdateProgressAsync(runId, (int)Math.Round((i + 1) * 100.0 / steps.Length));
+            await UpdateProgressAsync(runId, (int)Math.Round((i + 1) * 100.0 / Pipeline.Length));
 
             if (exitCode != 0)
             {
                 failed = true;
-                output.AppendLine($"[step '{current}' exited {exitCode}]");
+                output.AppendLine($"[step '{name}' exited {exitCode}]");
                 break;
             }
         }
@@ -144,11 +137,11 @@ public class IngestionService : IIngestionService
         await FinalizeAsync(runId, failed, startedAt, output.ToString());
     }
 
-    private async Task<int> RunProcessAsync(string market, string step, bool testSample, int? limit, StringBuilder output)
+    private async Task<int> RunProcessAsync(string market, string[] stepArgs, bool testSample, int? limit, StringBuilder output)
     {
         var (python, workingDir) = ResolvePaths();
         var args = new List<string> { "cli.py" };
-        args.AddRange(StepArgs[step]);
+        args.AddRange(stepArgs);
         args.Add("--market");
         args.Add(market);
         if (testSample) args.Add("--test-sample");
@@ -233,17 +226,6 @@ public class IngestionService : IIngestionService
 
         await db.SaveChangesAsync();
         _logger.LogInformation("Ingestion run {RunId} {Status}", runId, job.Status);
-    }
-
-    private static string StepOf(JobRun job)
-    {
-        if (string.IsNullOrEmpty(job.Parameters)) return string.Empty;
-        try
-        {
-            var dict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(job.Parameters);
-            return dict != null && dict.TryGetValue("step", out var v) ? v.GetString() ?? "" : "";
-        }
-        catch { return string.Empty; }
     }
 
     private static string GetIsoWeekNumber(DateTime date)

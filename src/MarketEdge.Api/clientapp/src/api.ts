@@ -147,10 +147,7 @@ export async function cancelJobRun(id: number): Promise<void> {
 
 // ── Data Ingestion (Admin) ──
 
-export type IngestionStep = 'seed_tickers' | 'bars' | 'technical' | 'fundamentals' | 'full';
-
 export interface TriggerIngestionRequest {
-  step: IngestionStep;
   testSample?: boolean;
   limit?: number;
 }
