@@ -400,7 +400,12 @@ def _try_analyst_snapshot(conn, market, symbol, ticker, as_of) -> bool:
     # _upside_eps computes (NextYearEps / CurrentYearEps - 1) * 100 from these.
     trailing_eps = _safe_num(info.get("trailingEps"))
     forward_eps = _safe_num(info.get("forwardEps"))
-    if rating is None and num is None and trailing_eps is None and forward_eps is None:
+    # Analyst 12-month price targets (low / mean / high) → bear / base / bull price scenarios.
+    target_low = _safe_num(info.get("targetLowPrice"))
+    target_mean = _safe_num(info.get("targetMeanPrice"))
+    target_high = _safe_num(info.get("targetHighPrice"))
+    if (rating is None and num is None and trailing_eps is None and forward_eps is None
+            and target_low is None and target_mean is None and target_high is None):
         return False
     try:
         db.upsert_analyst_snapshot(
@@ -414,6 +419,9 @@ def _try_analyst_snapshot(conn, market, symbol, ticker, as_of) -> bool:
                 "next_quarter_eps": None,
                 "current_year_eps": trailing_eps,
                 "next_year_eps": forward_eps,
+                "target_low_price": target_low,
+                "target_mean_price": target_mean,
+                "target_high_price": target_high,
             },
         )
         return True

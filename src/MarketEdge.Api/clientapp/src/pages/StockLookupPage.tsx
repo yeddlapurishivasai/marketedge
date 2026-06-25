@@ -153,12 +153,17 @@ function fmtPeriod(d: string): string {
   return dt.toLocaleString('en-US', { month: 'short', year: 'numeric' });
 }
 
-// Best/base/worst EPS upside, computed server-side at constant P/E. Each case shows the
-// implied % price move and the implied stock price for the Low / Consensus / High estimate.
-function UpsideCases({ year, quarter, market }: { year?: UpsideProjection | null; quarter?: UpsideProjection | null; market: Market }) {
+// Best/base/worst upside scenarios from multiple sources: deterministic EPS at constant P/E
+// (per quarter / per year), analyst 12-month price targets, and an AI placeholder. Each case
+// shows the implied % price move and the implied stock price.
+function UpsideCases(
+  { year, quarter, analyst, ai, market }:
+  { year?: UpsideProjection | null; quarter?: UpsideProjection | null;
+    analyst?: UpsideProjection | null; ai?: UpsideProjection | null; market: Market }
+) {
   const sym = currencySymbol(market);
   const has = (p?: UpsideProjection | null): p is UpsideProjection => !!p && !!(p.bear || p.base || p.bull);
-  if (!has(year) && !has(quarter)) return null;
+  if (!has(year) && !has(quarter) && !has(analyst) && !ai) return null;
 
   const caseCell = (c?: UpsideCase | null) => {
     if (!c || c.upsidePct == null) return <span className="muted-note">—</span>;
@@ -171,37 +176,55 @@ function UpsideCases({ year, quarter, market }: { year?: UpsideProjection | null
     );
   };
 
-  const row = (label: string, p?: UpsideProjection | null) => has(p) ? (
+  const row = (label: string, sub: string, p?: UpsideProjection | null) => has(p) ? (
     <tr>
-      <td style={{ fontWeight: 600 }}>
-        {label}{p.source === 'ai' && <span className="pill" style={{ marginLeft: 6 }}>AI</span>}
-      </td>
+      <td style={{ fontWeight: 600 }}>{label}<div className="muted-note" style={{ fontWeight: 400 }}>{sub}</div></td>
       <td className="cell-center">{caseCell(p.bear)}</td>
       <td className="cell-center">{caseCell(p.base)}</td>
       <td className="cell-center">{caseCell(p.bull)}</td>
     </tr>
   ) : null;
 
+  // The AI row always renders as a placeholder until a prediction model is wired in.
+  const aiRow = ai ? (
+    <tr className="upside-row-ai">
+      <td style={{ fontWeight: 600 }}>
+        AI <span className="pill" style={{ marginLeft: 6 }}>AI</span>
+        <div className="muted-note" style={{ fontWeight: 400 }}>model prediction</div>
+      </td>
+      {has(ai)
+        ? (<>
+            <td className="cell-center">{caseCell(ai.bear)}</td>
+            <td className="cell-center">{caseCell(ai.base)}</td>
+            <td className="cell-center">{caseCell(ai.bull)}</td>
+          </>)
+        : <td className="cell-center" colSpan={3}><span className="muted-note">Coming soon</span></td>}
+    </tr>
+  ) : null;
+
   return (
     <div className="upside-callout">
-      <span className="upside-title">Potential upside @ constant P/E</span>
+      <span className="upside-title">Potential upside scenarios</span>
       <table className="table" style={{ marginTop: 8 }}>
         <thead>
           <tr>
-            <th>Horizon</th>
-            <th style={{ textAlign: 'center' }}>Bear · low EPS</th>
-            <th style={{ textAlign: 'center' }}>Base · consensus</th>
-            <th style={{ textAlign: 'center' }}>Bull · high EPS</th>
+            <th>Source</th>
+            <th style={{ textAlign: 'center' }}>Bear</th>
+            <th style={{ textAlign: 'center' }}>Base</th>
+            <th style={{ textAlign: 'center' }}>Bull</th>
           </tr>
         </thead>
         <tbody>
-          {row('Per quarter', quarter)}
-          {row('Per year', year)}
+          {row('EPS @ const P/E', 'per quarter', quarter)}
+          {row('EPS @ const P/E', 'per year', year)}
+          {row('Analyst targets', '12-month price target', analyst)}
+          {aiRow}
         </tbody>
       </table>
       <p className="muted-note">
-        Holds the current P/E and moves price with the analyst Low / Consensus / High EPS estimate —
-        each cell shows the implied % move and price.
+        EPS rows hold the current P/E and move price with the Low / Consensus / High EPS estimate.
+        Analyst targets are yfinance 12-month Low / Mean / High price targets. Each cell shows the
+        implied % move and price.
       </p>
     </div>
   );
@@ -400,7 +423,7 @@ export function StockDetailView({ market, symbol }: { market: Market; symbol: st
               </tr>
             </tbody>
           </table>
-          <UpsideCases year={detail.yearUpside} quarter={detail.quarterUpside} market={market} />
+          <UpsideCases year={detail.yearUpside} quarter={detail.quarterUpside} analyst={detail.analystUpside} ai={detail.aiUpside} market={market} />
           {a.numAnalysts != null && <p className="muted-note">Based on {a.numAnalysts} analysts offering recommendations for '{detail.symbol}'.</p>}
         </div>
       )}

@@ -108,6 +108,8 @@ public class LookupService : ILookupService
         decimal? currentPrice = tech?.Close;
         var yearUpside = BuildProjection("year", currentPrice, analystDto?.CurrentYearEps, yearly);
         var quarterUpside = BuildProjection("quarter", currentPrice, analystDto?.CurrentQuarterEps, quarterly);
+        var analystUpside = BuildAnalystProjection(currentPrice, analystDto);
+        var aiUpside = BuildAiPlaceholder(currentPrice);
 
         return new StockLookupDetail(
             symbol, companyName, broadSector, industry, market,
@@ -115,7 +117,7 @@ public class LookupService : ILookupService
             tech,
             analystDto,
             quarterly, yearly,
-            quarterUpside, yearUpside);
+            quarterUpside, yearUpside, analystUpside, aiUpside);
     }
 
     public async Task<IReadOnlyList<LookupBarDto>> GetBarsAsync(string market, string symbol, string timeframe)
@@ -216,9 +218,39 @@ public class LookupService : ILookupService
             Case(proj.LowEps), Case(proj.ConsensusEps), Case(proj.HighEps));
     }
 
+    // Analyst 12-month price-target scenarios from yfinance: bear=low, base=mean, bull=high.
+    // Each case's implied price is the target itself; the % move is vs the current price.
+    private static UpsideProjectionDto? BuildAnalystProjection(decimal? currentPrice, LookupAnalystDto? analyst)
+    {
+        if (analyst is null) return null;
+        var low = analyst.TargetLowPrice;
+        var mean = analyst.TargetMeanPrice;
+        var high = analyst.TargetHighPrice;
+        if (low is null && mean is null && high is null) return null;
+
+        UpsideCaseDto? Case(decimal? target)
+        {
+            if (target is null) return null;
+            decimal? pct = currentPrice is > 0
+                ? decimal.Round((target.Value / currentPrice.Value - 1m) * 100m, 2)
+                : null;
+            return new UpsideCaseDto(null, pct, decimal.Round(target.Value, 2));
+        }
+
+        return new UpsideProjectionDto(
+            "analyst", "analyst", currentPrice, null,
+            Case(low), Case(mean), Case(high));
+    }
+
+    // AI-predicted scenarios: placeholder until a model is wired in. Returns an empty
+    // projection so the UI can show an "AI" row marked as coming soon.
+    private static UpsideProjectionDto BuildAiPlaceholder(decimal? currentPrice) =>
+        new("ai", "ai", currentPrice, null, null, null, null);
+
     private static LookupAnalystDto ToAnalystDto(AnalystSnapshotBase a) => new(
         a.AsOfDate, a.ConsensusRating, a.NumAnalysts,
-        a.CurrentQuarterEps, a.NextQuarterEps, a.CurrentYearEps, a.NextYearEps);
+        a.CurrentQuarterEps, a.NextQuarterEps, a.CurrentYearEps, a.NextYearEps,
+        a.TargetLowPrice, a.TargetMeanPrice, a.TargetHighPrice);
 
     private static LookupEpsForecastDto ToEpsDto(EpsForecastBase e) => new(
         e.PeriodType, e.PeriodEndDate, e.ConsensusEps, e.HighEps, e.LowEps,

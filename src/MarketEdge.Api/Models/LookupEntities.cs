@@ -54,6 +54,9 @@ public abstract class AnalystSnapshotBase
     public decimal? NextQuarterEps { get; set; }
     public decimal? CurrentYearEps { get; set; }
     public decimal? NextYearEps { get; set; }
+    public decimal? TargetLowPrice { get; set; }
+    public decimal? TargetMeanPrice { get; set; }
+    public decimal? TargetHighPrice { get; set; }
 }
 
 [Table("IndianAnalystSnapshot")] public class IndianAnalystSnapshot : AnalystSnapshotBase { }

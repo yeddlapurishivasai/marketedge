@@ -12,7 +12,8 @@ public record LookupTechnicalDto(
 public record LookupAnalystDto(
     DateOnly? AsOfDate, string? ConsensusRating, int? NumAnalysts,
     decimal? CurrentQuarterEps, decimal? NextQuarterEps,
-    decimal? CurrentYearEps, decimal? NextYearEps);
+    decimal? CurrentYearEps, decimal? NextYearEps,
+    decimal? TargetLowPrice, decimal? TargetMeanPrice, decimal? TargetHighPrice);
 
 public record LookupEpsForecastDto(
     string PeriodType, DateOnly PeriodEndDate,
@@ -23,8 +24,10 @@ public record LookupEpsForecastDto(
 // % price move vs the base EPS, and the implied stock price.
 public record UpsideCaseDto(decimal? Eps, decimal? UpsidePct, decimal? ImpliedPrice);
 
-// Best/base/worst upside for a horizon (quarter or year). Source is "deterministic" today;
-// an AI prediction can later supply an alternate projection with Source "ai".
+// Best/base/worst upside for a horizon. Source distinguishes the method:
+//   "deterministic" – EPS at constant P/E (horizon quarter/year)
+//   "analyst"       – yfinance analyst 12-month price targets (low/mean/high)
+//   "ai"            – AI-predicted scenarios (placeholder until a model is wired in)
 public record UpsideProjectionDto(
     string Horizon, string Source,
     decimal? CurrentPrice, decimal? BaseEps,
@@ -36,7 +39,8 @@ public record StockLookupDetail(
     LookupTechnicalDto? Technical, LookupAnalystDto? Analyst,
     IReadOnlyList<LookupEpsForecastDto> QuarterlyEps,
     IReadOnlyList<LookupEpsForecastDto> YearlyEps,
-    UpsideProjectionDto? QuarterUpside, UpsideProjectionDto? YearUpside);
+    UpsideProjectionDto? QuarterUpside, UpsideProjectionDto? YearUpside,
+    UpsideProjectionDto? AnalystUpside, UpsideProjectionDto? AiUpside);
 
 public record LookupBarDto(
     DateOnly Date, decimal? Open, decimal? High, decimal? Low, decimal? Close, long? Volume);

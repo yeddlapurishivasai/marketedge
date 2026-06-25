@@ -266,16 +266,21 @@ def upsert_analyst_snapshot(conn: pyodbc.Connection, market: str, row: dict[str,
         ON tgt.Ticker = src.Ticker AND tgt.AsOfDate = src.AsOfDate
         WHEN MATCHED THEN UPDATE SET
             ConsensusRating = ?, NumAnalysts = ?, CurrentQuarterEps = ?,
-            NextQuarterEps = ?, CurrentYearEps = ?, NextYearEps = ?, UpdatedAt = GETUTCDATE()
+            NextQuarterEps = ?, CurrentYearEps = ?, NextYearEps = ?,
+            TargetLowPrice = ?, TargetMeanPrice = ?, TargetHighPrice = ?,
+            UpdatedAt = GETUTCDATE()
         WHEN NOT MATCHED THEN INSERT
             (Ticker, AsOfDate, ConsensusRating, NumAnalysts, CurrentQuarterEps,
-             NextQuarterEps, CurrentYearEps, NextYearEps)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+             NextQuarterEps, CurrentYearEps, NextYearEps,
+             TargetLowPrice, TargetMeanPrice, TargetHighPrice)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """
     common = (
         row.get("consensus_rating"), _clean(row.get("num_analysts")),
         _clean(row.get("current_quarter_eps")), _clean(row.get("next_quarter_eps")),
         _clean(row.get("current_year_eps")), _clean(row.get("next_year_eps")),
+        _clean(row.get("target_low_price")), _clean(row.get("target_mean_price")),
+        _clean(row.get("target_high_price")),
     )
     params = [row["ticker"], row["as_of_date"], *common, row["ticker"], row["as_of_date"], *common]
     cursor = conn.cursor()
