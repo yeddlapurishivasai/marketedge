@@ -22,11 +22,21 @@ deterministic.
 - We want analysis broken into composable steps; RS-from-ingested-data is the first extracted step.
 
 ## Definitions
-- **RS Rating (window)**: the percentile rank (1–99) of a symbol's trailing price return over a
-  window, relative to the whole evaluated universe. Higher = stronger.
-- **Windows**: 1d (1 trading bar), 1w (5), 1m (21), 3m (63), 6m (126).
-- **Composite RS** (`Rs`): percentile rank of a weighted blend of the window returns
-  (weights 1w 0.15, 1m 0.25, 3m 0.35, 6m 0.25; renormalised over whatever windows a symbol has).
+- **Base RS score (IBD-style)**: a weighted trailing price-performance score over four 63-day
+  quarters, most-recent quarter double-weighted: `raw = (2*Q1 + Q2 + Q3 + Q4) / 5`, where `Qk` is
+  the simple return of quarter `k` ending at the as-of bar. Weights are **renormalised over
+  whatever quarters have enough history** — the ingested window is ~1 year, so older snapshots
+  naturally use fewer quarters.
+- **RS Rating**: the percentile rank (1–99) of the base RS score across the evaluated universe at a
+  given as-of point. Higher = stronger.
+- **`Rs*` columns are the same rating snapshotted back through time** (an RS history), **not**
+  different return horizons:
+  - `Rs` — rating as of the latest bar
+  - `Rs1d` — 1 trading day ago · `Rs1w` — 5 · `Rs1m` — 21 · `Rs3m` — 63 · `Rs6m` — 126 days ago
+
+  Each snapshot recomputes the base RS score as-of that bar and re-ranks the universe at that
+  point, so the values drift smoothly (e.g. 93 / 93 / 96 / 78 / 84) rather than scattering like
+  raw single-horizon returns.
 
 ## User stories
 
@@ -44,12 +54,13 @@ are refreshed alongside the stage-2 results.
 
 ## Functional requirements
 - **FR-001** A pure step `compute_rs_ratings(conn, market, test_sample_only=False, symbols=None)`
-  reads `{Market}Bars1D`, computes per-symbol window returns + composite, percentile-ranks each
-  (1–99) across the evaluated universe, and upserts the ratings onto each symbol's **latest**
-  `{Market}TickerTechnical` row (insert a row at the bars as-of date if none exists). It returns a
-  summary `{market, evaluated, updated, as_of}`.
-- **FR-002** Symbols with insufficient history for a window get `NULL` for that window but may still
-  receive ratings for the windows they do satisfy and the composite (if any window is available).
+  reads `{Market}Bars1D`, computes the IBD-style base RS score at six as-of points
+  (now, 1d/1w/1m/3m/6m ago), percentile-ranks each (1–99) across the evaluated universe, and
+  upserts the ratings onto each symbol's **latest** `{Market}TickerTechnical` row (insert a row at
+  the bars as-of date if none exists). It returns a summary `{market, evaluated, updated, as_of}`.
+- **FR-002** Quarter weights are renormalised over whatever quarters have data; a snapshot with not
+  even one full quarter of prior history gets `NULL` for that column. Under the ~1-year bar cap,
+  older snapshots (`Rs3m`, `Rs6m`) use fewer quarters than `Rs`.
 - **FR-003** `RsType` is set to `'Full'` and `RsDate` to the as-of (max bar) date.
 - **FR-004** The step makes **no network calls** — ingested bars only.
 - **FR-005** Stage 2 `process_message` invokes the step once per run, over the run's universe scope

@@ -4,6 +4,28 @@ This step reads only already-ingested data (``{Market}Bars1D``) — it makes no 
 calls — and writes percentile RS ratings (1-99) onto the latest ``{Market}TickerTechnical``
 row for each symbol. It can be run on its own (worker ``/steps/compute-rs`` endpoint) or as
 part of a Stage 2 analysis run.
+
+RS model
+--------
+The base rating is an IBD-style weighted price-performance score computed over trailing
+quarters (63 trading days each), most-recent quarter double-weighted::
+
+    raw = (2*Q1 + Q2 + Q3 + Q4) / (2 + 1 + 1 + 1)
+
+where ``Qk`` is the simple return of quarter ``k`` back from the as-of bar. Weights are
+renormalised over whatever quarters have enough history (the ingested window is ~1 year, so
+older snapshots naturally use fewer quarters). The raw scores are percentile-ranked across
+the universe to 1-99.
+
+The ``Rs*`` columns are the *same* rating snapshotted back through time, not different return
+horizons:
+
+* ``Rs``   — rating as of the latest bar
+* ``Rs1d`` — rating as of 1 trading day ago
+* ``Rs1w`` — 5 trading days ago
+* ``Rs1m`` — 21 trading days ago
+* ``Rs3m`` — 63 trading days ago
+* ``Rs6m`` — 126 trading days ago
 """
 
 import logging
@@ -20,25 +42,21 @@ TICKER_TABLES = {
     "us": ("USBars1D", "USTickerTechnical", "USStocks"),
 }
 
-# Window label -> trailing trading-day offset.
-WINDOWS: dict[str, int] = {
-    "1d": 1,
-    "1w": 5,
-    "1m": 21,
-    "3m": 63,
-    "6m": 126,
+# Snapshot column -> how many trading days back the rating is computed as-of.
+SNAPSHOT_OFFSETS: dict[str, int] = {
+    "rs": 0,
+    "rs1d": 1,
+    "rs1w": 5,
+    "rs1m": 21,
+    "rs3m": 63,
+    "rs6m": 126,
 }
 
-# Composite blend weights (renormalised over the windows a symbol actually has).
-COMPOSITE_WEIGHTS: dict[str, float] = {
-    "1w": 0.15,
-    "1m": 0.25,
-    "3m": 0.35,
-    "6m": 0.25,
-}
+_QUARTER_BARS = 63
+_QUARTER_WEIGHTS = (2.0, 1.0, 1.0, 1.0)  # most-recent quarter double-weighted (IBD-style)
 
-# Enough history for the longest window plus a small cushion.
-_MAX_LOOKBACK_BARS = max(WINDOWS.values()) + 10
+# Longest as-of offset plus the deepest quarter lookback we may try to use.
+_MAX_LOOKBACK_BARS = max(SNAPSHOT_OFFSETS.values()) + _QUARTER_BARS * len(_QUARTER_WEIGHTS) + 5
 
 
 def _resolve_tables(market: str) -> tuple[str, str, str]:
@@ -87,24 +105,27 @@ def _load_bars(
     )
 
 
-def _window_return(closes: list[float], offset: int) -> float | None:
-    if len(closes) <= offset:
-        return None
-    prior = closes[-1 - offset]
-    latest = closes[-1]
-    if prior is None or latest is None or prior == 0:
-        return None
-    return latest / prior - 1.0
+def _ibd_raw(closes: list[float], as_of_index: int) -> float | None:
+    """IBD-style weighted quarterly return ending at ``as_of_index``.
 
-
-def _composite_return(window_returns: dict[str, float | None]) -> float | None:
+    Uses whatever trailing quarters have data, renormalising the weights. Returns ``None``
+    when not even the most recent quarter is available.
+    """
+    if as_of_index < _QUARTER_BARS:
+        return None
     num = 0.0
     den = 0.0
-    for window, weight in COMPOSITE_WEIGHTS.items():
-        value = window_returns.get(window)
-        if value is not None:
-            num += weight * value
-            den += weight
+    for k, weight in enumerate(_QUARTER_WEIGHTS):
+        end = as_of_index - k * _QUARTER_BARS
+        start = as_of_index - (k + 1) * _QUARTER_BARS
+        if start < 0:
+            break
+        c_end = closes[end]
+        c_start = closes[start]
+        if c_end is None or c_start is None or c_start == 0:
+            break
+        num += weight * (c_end / c_start - 1.0)
+        den += weight
     if den == 0:
         return None
     return num / den
@@ -118,9 +139,7 @@ def _percentile_rank(series: pd.Series) -> pd.Series:
     if len(valid) == 1:
         ranks = pd.Series([99.0], index=valid.index)
     else:
-        ranks = (
-            (valid.rank(method="average") - 1) / (len(valid) - 1) * 98 + 1
-        ).round()
+        ranks = ((valid.rank(method="average") - 1) / (len(valid) - 1) * 98 + 1).round()
     return ranks.reindex(series.index)
 
 
@@ -147,26 +166,21 @@ def compute_rs_ratings(
 
     as_of: date = bars["bar_date"].max()
 
-    rows: list[dict[str, Any]] = []
+    # ticker -> chronological close series (trimmed to the deepest lookback we need).
+    closes_by_ticker: dict[str, list[float]] = {}
     for ticker, group in bars.groupby("ticker", sort=False):
-        closes = group["close"].tolist()[-_MAX_LOOKBACK_BARS:]
-        window_returns = {w: _window_return(closes, off) for w, off in WINDOWS.items()}
-        record: dict[str, Any] = {"ticker": ticker}
-        for window in WINDOWS:
-            record[f"ret_{window}"] = window_returns[window]
-        record["ret_composite"] = _composite_return(window_returns)
-        rows.append(record)
+        closes_by_ticker[ticker] = group["close"].tolist()[-_MAX_LOOKBACK_BARS:]
 
-    frame = pd.DataFrame(rows).set_index("ticker")
+    frame = pd.DataFrame(index=pd.Index(list(closes_by_ticker.keys()), name="ticker"))
 
-    rating_cols: dict[str, str] = {}
-    for window in WINDOWS:
-        col = f"rs_{window}"
-        frame[col] = _percentile_rank(frame[f"ret_{window}"])
-        rating_cols[window] = col
-    frame["rs"] = _percentile_rank(frame["ret_composite"])
+    for column, offset in SNAPSHOT_OFFSETS.items():
+        raw: dict[str, float | None] = {}
+        for ticker, closes in closes_by_ticker.items():
+            as_of_index = len(closes) - 1 - offset
+            raw[ticker] = _ibd_raw(closes, as_of_index) if as_of_index >= 0 else None
+        frame[column] = _percentile_rank(pd.Series(raw))
 
-    updated = _persist(conn, technical_table, frame, rating_cols, as_of)
+    updated = _persist(conn, technical_table, frame, as_of)
     logger.info(
         "Compute RS ratings: market=%s evaluated=%s updated=%s as_of=%s",
         market, len(frame), updated, as_of,
@@ -184,7 +198,6 @@ def _persist(
     conn: pyodbc.Connection,
     technical_table: str,
     frame: pd.DataFrame,
-    rating_cols: dict[str, str],
     as_of: date,
 ) -> int:
     """Upsert RS ratings onto each symbol's latest TickerTechnical row."""
@@ -204,11 +217,11 @@ def _persist(
     updated = 0
     for ticker, row in frame.iterrows():
         rs = _to_int(row.get("rs"))
-        rs1d = _to_int(row.get(rating_cols["1d"]))
-        rs1w = _to_int(row.get(rating_cols["1w"]))
-        rs1m = _to_int(row.get(rating_cols["1m"]))
-        rs3m = _to_int(row.get(rating_cols["3m"]))
-        rs6m = _to_int(row.get(rating_cols["6m"]))
+        rs1d = _to_int(row.get("rs1d"))
+        rs1w = _to_int(row.get("rs1w"))
+        rs1m = _to_int(row.get("rs1m"))
+        rs3m = _to_int(row.get("rs3m"))
+        rs6m = _to_int(row.get("rs6m"))
 
         cursor.execute(update_sql, rs, rs1d, rs1w, rs1m, rs3m, rs6m, as_of, ticker, ticker)
         if cursor.rowcount == 0:
