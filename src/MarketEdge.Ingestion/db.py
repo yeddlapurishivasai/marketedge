@@ -26,6 +26,7 @@ MARKET_TABLES = {
         "eps": "IndianEpsForecasts",
         "earnings": "IndianEarningsFundamentals",
         "note": "IndianStockNote",
+        "signals": "IndianStockSignals",
         "ticker_len": 30,
     },
     "us": {
@@ -37,6 +38,7 @@ MARKET_TABLES = {
         "eps": "USEpsForecasts",
         "earnings": "USEarningsFundamentals",
         "note": "USStockNote",
+        "signals": "USStockSignals",
         "ticker_len": 20,
     },
 }
@@ -104,6 +106,7 @@ def get_present_tickers(conn: pyodbc.Connection, market: str, kind: str) -> set[
         "bars"       -> tickers whose master row reports BarsAvailable > 0
         "technical"  -> tickers with at least one technical snapshot
         "earnings"   -> tickers with an earnings-fundamentals snapshot
+        "signals"    -> tickers with an auto-signals snapshot
     Used to drive ``--missing`` gap-fill runs.
     """
     t = tables_for(market)
@@ -113,6 +116,8 @@ def get_present_tickers(conn: pyodbc.Connection, market: str, kind: str) -> set[
         query = f"SELECT DISTINCT Ticker FROM dbo.{t['technical']}"
     elif kind == "earnings":
         query = f"SELECT Ticker FROM dbo.{t['earnings']}"
+    elif kind == "signals":
+        query = f"SELECT Ticker FROM dbo.{t['signals']}"
     else:
         raise ValueError(f"Unsupported kind: {kind}")
     rows = conn.cursor().execute(query).fetchall()
@@ -371,6 +376,55 @@ def upsert_stock_note(conn: pyodbc.Connection, market: str, ticker: str, note_te
     """
     cursor = conn.cursor()
     cursor.execute(merge, [ticker, note_text, ticker, note_text])
+    conn.commit()
+
+
+def get_stock_signals(conn: pyodbc.Connection, market: str, ticker: str) -> dict[str, Any] | None:
+    """Return the saved auto-signals snapshot for a ticker, or None."""
+    t = tables_for(market)
+    table = t["signals"]
+    cursor = conn.cursor()
+    cursor.execute(
+        f"""SELECT CapexCwip, CapexCwipPrevQ, CapexChangePct, CapexTrend,
+                   NewsJson, SignalsText, UpdatedAt
+            FROM dbo.{table} WHERE Ticker = ?""",
+        [ticker],
+    )
+    r = cursor.fetchone()
+    if not r:
+        return None
+    return {
+        "capex_cwip": r[0], "capex_cwip_prev_q": r[1], "capex_change_pct": r[2],
+        "capex_trend": r[3], "news_json": r[4], "signals_text": r[5], "updated_at": r[6],
+    }
+
+
+def upsert_stock_signals(conn: pyodbc.Connection, market: str, row: dict[str, Any]) -> None:
+    """Upsert the per-ticker auto-detected signals snapshot (PK = Ticker).
+
+    Holds CWIP/capex trend + recent news headlines + a compact, token-friendly
+    ``SignalsText`` that is fed (alongside the user's StockNote) to the AI workflow.
+    """
+    t = tables_for(market)
+    table = t["signals"]
+    cols = ("CapexCwip", "CapexCwipPrevQ", "CapexChangePct", "CapexTrend",
+            "NewsJson", "SignalsText")
+    keys = ("capex_cwip", "capex_cwip_prev_q", "capex_change_pct", "capex_trend",
+            "news_json", "signals_text")
+    set_clause = ", ".join(f"{c} = ?" for c in cols) + ", UpdatedAt = GETUTCDATE()"
+    insert_cols = "Ticker, " + ", ".join(cols)
+    insert_ph = "?, " + ", ".join("?" for _ in cols)
+    merge = f"""
+        MERGE dbo.{table} AS tgt
+        USING (SELECT ? AS Ticker) AS src
+        ON tgt.Ticker = src.Ticker
+        WHEN MATCHED THEN UPDATE SET {set_clause}
+        WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_ph});
+    """
+    vals = [_clean(row.get(k)) for k in keys]
+    params = [row["ticker"], *vals, row["ticker"], *vals]
+    cursor = conn.cursor()
+    cursor.execute(merge, params)
     conn.commit()
 
 

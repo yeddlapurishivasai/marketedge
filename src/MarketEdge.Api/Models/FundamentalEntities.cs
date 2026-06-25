@@ -57,3 +57,21 @@ public abstract class StockNoteBase
 
 [Table("IndianStockNote")] public class IndianStockNote : StockNoteBase { }
 [Table("USStockNote")] public class USStockNote : StockNoteBase { }
+
+// Per-stock auto-detected catalyst signals (CWIP/capex trend + recent news headlines),
+// scraped daily during fundamentals ingestion. Read-only from the API. Kept SEPARATE from
+// StockNote: both feed the downstream AI workflow as distinct inputs.
+public abstract class StockSignalsBase
+{
+    public string Ticker { get; set; } = string.Empty;
+    public decimal? CapexCwip { get; set; }
+    public decimal? CapexCwipPrevQ { get; set; }
+    public decimal? CapexChangePct { get; set; }
+    public string? CapexTrend { get; set; }
+    public string? NewsJson { get; set; }
+    public string? SignalsText { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+[Table("IndianStockSignals")] public class IndianStockSignals : StockSignalsBase { }
+[Table("USStockSignals")] public class USStockSignals : StockSignalsBase { }

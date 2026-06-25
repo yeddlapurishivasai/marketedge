@@ -503,9 +503,27 @@ export interface FundamentalRow {
   earningsAnnouncedRecent: boolean;
 }
 
+export interface SignalNewsItem {
+  title: string;
+  publisher?: string | null;
+  date?: string | null;
+  link?: string | null;
+}
+
+export interface FundamentalSignals {
+  capexCwip?: number | null;
+  capexCwipPrevQ?: number | null;
+  capexChangePct?: number | null;
+  capexTrend?: string | null;
+  news: SignalNewsItem[];
+  signalsText?: string | null;
+  updatedAt: string;
+}
+
 export interface FundamentalDetail {
   row: FundamentalRow;
   note?: string | null;
+  signals?: FundamentalSignals | null;
 }
 
 export type FundamentalScanner =

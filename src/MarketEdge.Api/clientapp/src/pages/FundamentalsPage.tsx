@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { Market, FundamentalRow, FundamentalScanner } from '../api';
+import type { Market, FundamentalRow, FundamentalScanner, FundamentalSignals } from '../api';
 import { fetchFundamentals, fetchFundamentalDetail, saveFundamentalNote } from '../api';
 import {
-  ChevronLeft, RefreshCw, LineChart, X, Loader2, TrendingUp, TrendingDown, Minus, BadgeCheck
+  ChevronLeft, RefreshCw, LineChart, X, Loader2, TrendingUp, TrendingDown, Minus, BadgeCheck, Radar
 } from 'lucide-react';
 
 const FILTERS: { name: FundamentalScanner; label: string }[] = [
@@ -49,9 +49,61 @@ function TrendBadge({ trend }: { trend?: string | null }) {
   );
 }
 
+function AutoSignalsBlock({ signals }: { signals: FundamentalSignals | null }) {
+  if (!signals) return null;
+  const capexColor = signals.capexTrend === 'rising' ? 'var(--success)'
+    : signals.capexTrend === 'falling' ? 'var(--danger)' : 'var(--text-muted)';
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+        <Radar size={14} /> Auto-detected signals (daily) — read-only AI input
+      </label>
+      <p className="cell-muted" style={{ fontSize: '0.78rem', marginTop: 0, marginBottom: 6 }}>
+        Scraped from yfinance during ingestion. Fed to the AI workflow alongside your additional context below.
+      </p>
+      <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10, background: 'var(--bg-subtle, rgba(127,127,127,0.06))' }}>
+        <div style={{ fontSize: '0.82rem', marginBottom: 8 }}>
+          <strong>Capex (CWIP):</strong>{' '}
+          {signals.capexCwip == null ? (
+            <span className="cell-muted">not reported</span>
+          ) : (
+            <span>
+              {fmtMoney(signals.capexCwip)} vs {fmtMoney(signals.capexCwipPrevQ)} prev Q{' '}
+              <span style={{ color: capexColor }}>
+                ({fmtPct(signals.capexChangePct)}{signals.capexTrend ? `, ${signals.capexTrend}` : ''})
+              </span>
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize: '0.82rem' }}>
+          <strong>Recent news:</strong>
+          {signals.news.length === 0 ? (
+            <span className="cell-muted"> none in window</span>
+          ) : (
+            <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+              {signals.news.map((n, i) => (
+                <li key={i} style={{ marginBottom: 4 }}>
+                  {n.date && <span className="cell-muted">{n.date} · </span>}
+                  {n.link ? (
+                    <a href={n.link} target="_blank" rel="noreferrer">{n.title}</a>
+                  ) : (
+                    n.title
+                  )}
+                  {n.publisher && <span className="cell-muted"> ({n.publisher})</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function FundamentalDetailModal({ market, symbol, onClose }: { market: Market; symbol: string; onClose: () => void }) {
   const [row, setRow] = useState<FundamentalRow | null>(null);
   const [note, setNote] = useState('');
+  const [signals, setSignals] = useState<FundamentalSignals | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -65,6 +117,7 @@ function FundamentalDetailModal({ market, symbol, onClose }: { market: Market; s
         if (cancelled) return;
         setRow(d.row);
         setNote(d.note ?? '');
+        setSignals(d.signals ?? null);
       } catch {
         if (!cancelled) setRow(null);
       }
@@ -133,6 +186,8 @@ function FundamentalDetailModal({ market, symbol, onClose }: { market: Market; s
               {metric('Earnings growth QoQ', fmtPct(row.earningsGrowthQoqPct))}
               {metric('Earnings increasing', row.earningsIncreasing == null ? '—' : (row.earningsIncreasing ? 'Yes' : 'No'))}
             </div>
+
+            <AutoSignalsBlock signals={signals} />
 
             <div>
               <label className="form-label" style={{ display: 'block', marginBottom: 4 }}>

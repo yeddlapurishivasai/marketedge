@@ -20,6 +20,7 @@ bulk-upserts them, then refreshes each ticker's BarsAvailable count.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import math
 import sys
@@ -282,6 +283,7 @@ def cmd_ingest_fundamentals(args) -> int:
         "eps_rows": 0, "eps_failed": 0,
         "valuation_ok": 0, "valuation_skipped": 0, "valuation_failed": 0,
         "earnings_ok": 0, "earnings_skipped": 0,
+        "signals_ok": 0, "signals_skipped": 0,
         "tickers": 0,
     }
 
@@ -337,6 +339,18 @@ def cmd_ingest_fundamentals(args) -> int:
                     logger.warning("Market-cap upsert failed for %s: %s", symbol, exc)
                     counts["valuation_failed"] += 1
 
+            try:
+                if _try_stock_signals(conn, args.market, symbol, ticker, today):
+                    counts["signals_ok"] += 1
+                else:
+                    counts["signals_skipped"] += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Catalyst signals failed for %s: %s", symbol, exc)
+                counts["signals_skipped"] += 1
+
+            if Config.YFINANCE_TICKER_DELAY > 0:
+                time.sleep(Config.YFINANCE_TICKER_DELAY)
+
         duration = round(time.monotonic() - started, 1)
         logger.info(
             "Fundamentals run complete",
@@ -349,11 +363,12 @@ def cmd_ingest_fundamentals(args) -> int:
         logger.info(
             "Fundamentals summary: %s tickers | analyst ok=%s failed=%s | "
             "eps rows=%s failed=%s | valuation ok=%s skipped=%s failed=%s | "
-            "earnings ok=%s skipped=%s | %ss",
+            "earnings ok=%s skipped=%s | signals ok=%s skipped=%s | %ss",
             counts["tickers"], counts["analyst_ok"], counts["analyst_failed"],
             counts["eps_rows"], counts["eps_failed"], counts["valuation_ok"],
             counts["valuation_skipped"], counts["valuation_failed"],
-            counts["earnings_ok"], counts["earnings_skipped"], duration,
+            counts["earnings_ok"], counts["earnings_skipped"],
+            counts["signals_ok"], counts["signals_skipped"], duration,
         )
     finally:
         conn.close()
@@ -576,6 +591,137 @@ def _try_earnings_fundamentals(conn, market, symbol, ticker, as_of) -> bool:
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed earnings fundamentals upsert for %s: %s", symbol, exc)
+        return False
+
+
+def _human_num(value) -> str:
+    """Compact human-readable magnitude (1.2B / 3.4M / 567) for token-friendly text."""
+    if value is None:
+        return "n/a"
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    a = abs(v)
+    for div, suf in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if a >= div:
+            return f"{v / div:.1f}{suf}"
+    return f"{v:.0f}"
+
+
+_CWIP_LABELS = [
+    "Construction In Progress", "Capital Work In Progress",
+    "Construction In Progress Net", "ConstructionInProgress",
+]
+
+
+def _extract_news(ticker, since, limit: int = 8) -> list[dict]:
+    """Recent news as dicts, tolerant of both the legacy and newer yfinance schemas."""
+    try:
+        raw = ticker.news
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("No news: %s", exc)
+        return []
+    if not raw:
+        return []
+    items: list[dict] = []
+    for art in raw:
+        if not isinstance(art, dict):
+            continue
+        content = art.get("content")
+        ts = None
+        if isinstance(content, dict):  # newer schema
+            title = content.get("title")
+            pub = (content.get("provider") or {}).get("displayName")
+            pub_date = content.get("pubDate") or content.get("displayTime")
+            link = ((content.get("canonicalUrl") or {}).get("url")
+                    or (content.get("clickThroughUrl") or {}).get("url"))
+            if pub_date:
+                try:
+                    ts = datetime.fromisoformat(str(pub_date).replace("Z", "+00:00")).date()
+                except Exception:  # noqa: BLE001
+                    ts = None
+        else:  # legacy schema
+            title = art.get("title")
+            pub = art.get("publisher")
+            link = art.get("link")
+            epoch = art.get("providerPublishTime")
+            if epoch:
+                try:
+                    ts = datetime.utcfromtimestamp(int(epoch)).date()
+                except Exception:  # noqa: BLE001
+                    ts = None
+        if not title:
+            continue
+        if since is not None and ts is not None and ts < since:
+            continue
+        items.append({
+            "title": str(title).strip(), "publisher": pub,
+            "date": ts.isoformat() if ts else None, "link": link,
+        })
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _try_stock_signals(conn, market, symbol, ticker, as_of,
+                       news_days: int = 7, news_limit: int = 8) -> bool:
+    """Scrape lightweight catalyst signals and upsert a compact AI-ready summary.
+
+    Sources (yfinance only, reusing the already-open ``ticker`` to avoid extra throttling):
+      * CWIP / "Construction In Progress" from ``quarterly_balance_sheet`` -> major-capex trend
+        (India reports this widely; many US issuers do not, so it can be absent there).
+      * ``Ticker.news`` recent headlines -> raw evidence of M&A / spin-off / new business /
+        policy catalysts, which the AI workflow classifies.
+    Kept SEPARATE from the user-entered StockNote. Best-effort; returns True if a row written.
+    """
+    cwip = cwip_prev = change_pct = trend = None
+    try:
+        bs = ticker.quarterly_balance_sheet
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("No quarterly balance sheet for %s: %s", symbol, exc)
+        bs = None
+    if bs is not None and hasattr(bs, "columns") and len(bs.columns) > 0:
+        cwip = _row_value(bs, _CWIP_LABELS, 0)
+        cwip_prev = _row_value(bs, _CWIP_LABELS, 1)
+        change_pct = _pct_change(cwip, cwip_prev)
+        if cwip is not None and cwip_prev is not None:
+            trend = "rising" if cwip > cwip_prev else "falling" if cwip < cwip_prev else "flat"
+
+    since = as_of - timedelta(days=news_days)
+    news = _extract_news(ticker, since, limit=news_limit)
+
+    if cwip is None and not news:
+        return False
+
+    lines = []
+    if cwip is not None:
+        cap = f"CAPEX(CWIP): {_human_num(cwip)} vs {_human_num(cwip_prev)} prev Q"
+        if change_pct is not None:
+            cap += f" ({change_pct:+.0f}%, {(trend or 'flat').upper()})"
+        lines.append(cap)
+    else:
+        lines.append("CAPEX(CWIP): n/a")
+    if news:
+        lines.append(f"NEWS({news_days}d):")
+        for n in news:
+            pub = f" ({n['publisher']})" if n["publisher"] else ""
+            lines.append(f"- {n['date'] or '?'} | {n['title']}{pub}")
+    else:
+        lines.append(f"NEWS({news_days}d): none")
+
+    row = {
+        "ticker": symbol,
+        "capex_cwip": cwip, "capex_cwip_prev_q": cwip_prev,
+        "capex_change_pct": change_pct, "capex_trend": trend,
+        "news_json": json.dumps(news, ensure_ascii=False) if news else None,
+        "signals_text": "\n".join(lines),
+    }
+    try:
+        db.upsert_stock_signals(conn, market, row)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed signals upsert for %s: %s", symbol, exc)
         return False
 # --------------------------------------------------------------------------- #
 def _add_universe_args(parser: argparse.ArgumentParser, allow_missing: bool = False) -> None:

@@ -64,6 +64,10 @@ public class FundamentalsService : IFundamentalsService
             ? await _db.USStockNotes.FirstOrDefaultAsync(n => n.Ticker.ToUpper() == upper)
             : await _db.IndianStockNotes.FirstOrDefaultAsync(n => n.Ticker.ToUpper() == upper);
 
+        StockSignalsBase? signalsRow = IsUs(market)
+            ? await _db.USStockSignals.FirstOrDefaultAsync(s => s.Ticker.ToUpper() == upper)
+            : await _db.IndianStockSignals.FirstOrDefaultAsync(s => s.Ticker.ToUpper() == upper);
+
         var dtoRow = row != null
             ? ToRow(row, meta, today)
             : new FundamentalRow(
@@ -71,7 +75,32 @@ public class FundamentalsService : IFundamentalsService
                 today, null, null, null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, false);
 
-        return new FundamentalDetail(dtoRow, note?.NoteText);
+        return new FundamentalDetail(dtoRow, note?.NoteText, ToSignals(signalsRow));
+    }
+
+    private static FundamentalSignals? ToSignals(StockSignalsBase? s)
+    {
+        if (s == null) return null;
+        IReadOnlyList<SignalNewsItem> news = Array.Empty<SignalNewsItem>();
+        if (!string.IsNullOrWhiteSpace(s.NewsJson))
+        {
+            try
+            {
+                news = System.Text.Json.JsonSerializer.Deserialize<List<SignalNewsItem>>(
+                    s.NewsJson,
+                    new System.Text.Json.JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true,
+                    }) ?? new List<SignalNewsItem>();
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                news = Array.Empty<SignalNewsItem>();
+            }
+        }
+        return new FundamentalSignals(
+            s.CapexCwip, s.CapexCwipPrevQ, s.CapexChangePct, s.CapexTrend,
+            news, s.SignalsText, s.UpdatedAt);
     }
 
     public async Task<bool> SaveNoteAsync(string market, string symbol, string? noteText)

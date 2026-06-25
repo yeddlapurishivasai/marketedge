@@ -54,6 +54,10 @@ class Config:
     # Parallel threads used inside a single yfinance batch download / market-cap chunk.
     YFINANCE_THREADS = _get_int("YFINANCE_THREADS", 10)
 
+    # Sleep (seconds) between per-ticker fundamentals/signals calls. Raise this if Yahoo
+    # starts rate-limiting the sequential fundamentals loop (default 0 = no extra pacing).
+    YFINANCE_TICKER_DELAY = _get_float("YFINANCE_TICKER_DELAY", 0.0)
+
     # Daily-bar history window fetched per ticker (yfinance period string).
     DAILY_LOOKBACK_PERIOD = os.getenv("DAILY_LOOKBACK_PERIOD", "1y")
     DAILY_INTERVAL = "1d"

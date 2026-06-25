@@ -30,6 +30,20 @@ public record FundamentalRow(
 
 public record FundamentalDetail(
     FundamentalRow Row,
-    string? Note);
+    string? Note,
+    FundamentalSignals? Signals);
+
+// Auto-detected catalyst signals (read-only). SignalsText is the compact, token-friendly
+// blob fed to the AI workflow; News is the structured headline list for UI display.
+public record FundamentalSignals(
+    decimal? CapexCwip,
+    decimal? CapexCwipPrevQ,
+    decimal? CapexChangePct,
+    string? CapexTrend,
+    IReadOnlyList<SignalNewsItem> News,
+    string? SignalsText,
+    DateTime UpdatedAt);
+
+public record SignalNewsItem(string Title, string? Publisher, string? Date, string? Link);
 
 public record SaveNoteRequest(string? NoteText);

@@ -39,6 +39,8 @@ public class MarketEdgeDbContext : DbContext
     public DbSet<USEarningsFundamentals> USEarningsFundamentals => Set<USEarningsFundamentals>();
     public DbSet<IndianStockNote> IndianStockNotes => Set<IndianStockNote>();
     public DbSet<USStockNote> USStockNotes => Set<USStockNote>();
+    public DbSet<IndianStockSignals> IndianStockSignals => Set<IndianStockSignals>();
+    public DbSet<USStockSignals> USStockSignals => Set<USStockSignals>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -89,6 +91,16 @@ public class MarketEdgeDbContext : DbContext
         modelBuilder.Entity<USEarningsFundamentals>().HasKey(e => e.Ticker);
         modelBuilder.Entity<IndianStockNote>().HasKey(n => n.Ticker);
         modelBuilder.Entity<USStockNote>().HasKey(n => n.Ticker);
+
+        modelBuilder.Entity<IndianStockSignals>().HasKey(s => s.Ticker);
+        modelBuilder.Entity<USStockSignals>().HasKey(s => s.Ticker);
+        foreach (var t in new[] { typeof(IndianStockSignals), typeof(USStockSignals) })
+        {
+            var e = modelBuilder.Entity(t);
+            e.Property(nameof(StockSignalsBase.CapexCwip)).HasColumnType("decimal(20,2)");
+            e.Property(nameof(StockSignalsBase.CapexCwipPrevQ)).HasColumnType("decimal(20,2)");
+            e.Property(nameof(StockSignalsBase.CapexChangePct)).HasColumnType("decimal(12,4)");
+        }
 
         foreach (var t in new[] { typeof(IndianEarningsFundamentals), typeof(USEarningsFundamentals) })
         {
