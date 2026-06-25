@@ -3,14 +3,22 @@
 Source of truth: `src/MarketEdge.Worker/stage_analysis.py`, `worker.py`, `db.py`.
 This documents the EXISTING computation exactly. **UI is out of scope.**
 
+> **Base-data change**: price/benchmark inputs are now **read from the ingested
+> SQL Server tables** (`{Indian|US}Bars1D`, `{Indian|US}TickerTechnical`) instead of
+> fetched live from yfinance — see `specs/005-data-ingestion/`. The formulas below are
+> unchanged; only the source of the input frames moved from the network to SQL.
+
 ## Inputs
 
-- **Weekly price frame** per stock: yfinance OHLCV, interval `1wk`, period `2y`
-  (or a `start..end` window of `WEEKLY_LOOKBACK_DAYS = 760` for point-in-time),
-  trimmed to the last 60 non-empty bars. Columns flattened from any `MultiIndex`.
-- **Benchmark frame**: weekly Close of `^NSEI` (India) or `^GSPC` (US), fetched
-  once per run (same windowing rules).
-- **Minimum history**: `calculate_stage2` returns `None` if `< 30` bars.
+- **Weekly price frame** per stock: read daily OHLCV from `{Indian|US}Bars1D` and
+  resample to weekly (W-FRI), bounded to the week-exclusive end for point-in-time
+  (past weeks) or all bars through today (current week), trimmed to the last 60
+  non-empty weekly bars. Columns are already normalized at ingestion time.
+- **Benchmark frame**: weekly Close derived from the ingested daily bars of `^NSEI`
+  (India) or `^GSPC` (US), read once per run (same windowing/point-in-time rules).
+- **Market cap**: read from the latest `{Indian|US}TickerTechnical` row at/before the
+  week end (used for `min/max` cap filtering); no live `fast_info` call.
+- **Minimum history**: `calculate_stage2` returns `None` if `< 30` weekly bars.
 
 ## Per-stock metrics (`calculate_stage2`)
 
@@ -116,17 +124,21 @@ All three are computed over the FULL week snapshot read back via
 
 ## Market mapping
 
-| market | stocks / sectors / results | benchmark | yfinance suffix | fundamentals |
-|--------|----------------------------|-----------|-----------------|--------------|
-| india | IndianStocks / IndianSectors / IndianStageAnalysisResults | `^NSEI` | `.NS` | IndianStockFundamentals |
-| us | USStocks / USSectors / USStageAnalysisResults | `^GSPC` | (none) | USStockFundamentals |
+| market | stocks / sectors / results | benchmark | ingested base-data tables | fundamentals |
+|--------|----------------------------|-----------|---------------------------|--------------|
+| india | IndianStocks / IndianSectors / IndianStageAnalysisResults | `^NSEI` | IndianBars1D / IndianTickerTechnical | IndianStockFundamentals |
+| us | USStocks / USSectors / USStageAnalysisResults | `^GSPC` | USBars1D / USTickerTechnical | USStockFundamentals |
+
+(The `.NS` suffix for India and the benchmark symbols are applied by the ingestion
+pipeline, `specs/005-data-ingestion/`, when populating the base-data tables.)
 
 ## Configuration (`config.py`)
 
 `QUEUE_NAME=stage-analysis-jobs`, `QUEUE_POLL_INTERVAL=10s`,
-`YFINANCE_BATCH_SIZE=50`, `YFINANCE_BATCH_DELAY=4.0s`, `YFINANCE_MAX_RETRIES=3`,
 `MAX_RUN_TIMEOUT=14400s`, `QUEUE_VISIBILITY_TIMEOUT=18000s`. SQL via ODBC Driver 17,
-Windows Auth + `TrustServerCertificate`.
+Windows Auth + `TrustServerCertificate`. The former `YFINANCE_*` fetch settings are
+retired from the worker now that base data is read from SQL; yfinance fetching config
+lives in the ingestion pipeline instead.
 
 ## Worker HTTP surface (`app.py`)
 

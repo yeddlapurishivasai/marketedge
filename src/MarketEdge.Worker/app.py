@@ -2,6 +2,12 @@ import threading
 
 from flask import Flask, jsonify
 
+from observability import configure_logging
+
+# Route all logging through OpenTelemetry to the OS-specific file sink before any
+# other module configures logging (worker.py's basicConfig then becomes a no-op).
+configure_logging("marketedge-worker")
+
 from config import Config
 from worker import get_worker_status, start_queue_listener
 

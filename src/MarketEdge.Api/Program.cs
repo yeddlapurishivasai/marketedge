@@ -1,9 +1,13 @@
 using Azure.Storage.Queues;
 using MarketEdge.Api.Data;
+using MarketEdge.Api.Observability;
 using MarketEdge.Api.Services;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// OpenTelemetry file logging (OS-specific dir, daily rotation, 7-day retention)
+builder.AddMarketEdgeLogging();
 
 // EF Core (no migrations - schema managed by SQL project)
 builder.Services.AddDbContext<MarketEdgeDbContext>(options =>
