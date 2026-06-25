@@ -29,6 +29,11 @@ public class MarketEdgeDbContext : DbContext
     public DbSet<IndianBar1D> IndianBars1D => Set<IndianBar1D>();
     public DbSet<USBar1D> USBars1D => Set<USBar1D>();
 
+    // Scanners (feature 011)
+    public DbSet<IndianScannerResult> IndianScannerResults => Set<IndianScannerResult>();
+    public DbSet<USScannerResult> USScannerResults => Set<USScannerResult>();
+    public DbSet<ScannerSchedule> ScannerSchedules => Set<ScannerSchedule>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<IndianSector>()
@@ -68,6 +73,19 @@ public class MarketEdgeDbContext : DbContext
         ConfigureDecimalProperties<USStageAnalysisResult>(modelBuilder);
 
         ConfigureLookupEntities(modelBuilder);
+        ConfigureScannerEntities(modelBuilder);
+    }
+
+    private static void ConfigureScannerEntities(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<ScannerSchedule>().HasKey(s => s.Market);
+        foreach (var t in new[] { typeof(IndianScannerResult), typeof(USScannerResult) })
+        {
+            var e = modelBuilder.Entity(t);
+            e.Property(nameof(ScannerResultBase.ClosePrice)).HasColumnType("decimal(18,4)");
+            e.Property(nameof(ScannerResultBase.DayChangePct)).HasColumnType("decimal(10,4)");
+            e.Property(nameof(ScannerResultBase.RelVolume)).HasColumnType("decimal(12,4)");
+        }
     }
 
     private static void ConfigureLookupEntities(ModelBuilder modelBuilder)

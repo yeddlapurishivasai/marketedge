@@ -26,6 +26,8 @@ builder.Services.AddScoped<IStockService, StockService>();
 builder.Services.AddScoped<IJobService, JobService>();
 builder.Services.AddScoped<IIngestionService, IngestionService>();
 builder.Services.AddScoped<ILookupService, LookupService>();
+builder.Services.AddScoped<IScannerService, ScannerService>();
+builder.Services.AddHostedService<ScannerScheduleService>();
 
 // API
 builder.Services.AddControllers();
