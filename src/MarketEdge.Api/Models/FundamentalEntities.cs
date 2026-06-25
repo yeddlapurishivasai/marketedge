@@ -68,6 +68,7 @@ public abstract class StockSignalsBase
     public decimal? CapexCwipPrevQ { get; set; }
     public decimal? CapexChangePct { get; set; }
     public string? CapexTrend { get; set; }
+    public DateOnly? CapexAsOf { get; set; }
     public string? NewsJson { get; set; }
     public string? SignalsText { get; set; }
     public DateTime UpdatedAt { get; set; }

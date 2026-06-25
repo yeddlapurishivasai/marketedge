@@ -385,7 +385,7 @@ def get_stock_signals(conn: pyodbc.Connection, market: str, ticker: str) -> dict
     table = t["signals"]
     cursor = conn.cursor()
     cursor.execute(
-        f"""SELECT CapexCwip, CapexCwipPrevQ, CapexChangePct, CapexTrend,
+        f"""SELECT CapexCwip, CapexCwipPrevQ, CapexChangePct, CapexTrend, CapexAsOf,
                    NewsJson, SignalsText, UpdatedAt
             FROM dbo.{table} WHERE Ticker = ?""",
         [ticker],
@@ -395,7 +395,8 @@ def get_stock_signals(conn: pyodbc.Connection, market: str, ticker: str) -> dict
         return None
     return {
         "capex_cwip": r[0], "capex_cwip_prev_q": r[1], "capex_change_pct": r[2],
-        "capex_trend": r[3], "news_json": r[4], "signals_text": r[5], "updated_at": r[6],
+        "capex_trend": r[3], "capex_as_of": r[4], "news_json": r[5],
+        "signals_text": r[6], "updated_at": r[7],
     }
 
 
@@ -408,9 +409,9 @@ def upsert_stock_signals(conn: pyodbc.Connection, market: str, row: dict[str, An
     t = tables_for(market)
     table = t["signals"]
     cols = ("CapexCwip", "CapexCwipPrevQ", "CapexChangePct", "CapexTrend",
-            "NewsJson", "SignalsText")
+            "CapexAsOf", "NewsJson", "SignalsText")
     keys = ("capex_cwip", "capex_cwip_prev_q", "capex_change_pct", "capex_trend",
-            "news_json", "signals_text")
+            "capex_as_of", "news_json", "signals_text")
     set_clause = ", ".join(f"{c} = ?" for c in cols) + ", UpdatedAt = GETUTCDATE()"
     insert_cols = "Ticker, " + ", ".join(cols)
     insert_ph = "?, " + ", ".join("?" for _ in cols)

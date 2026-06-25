@@ -99,7 +99,8 @@ public class FundamentalsService : IFundamentalsService
             }
         }
         return new FundamentalSignals(
-            s.CapexCwip, s.CapexCwipPrevQ, s.CapexChangePct, s.CapexTrend,
+            s.CapexCwip, s.CapexCwipPrevQ, s.CapexChangePct, s.CapexTrend, s.CapexAsOf,
+            news.SelectMany(n => n.Tags ?? Array.Empty<string>()).Distinct().OrderBy(t => t).ToList(),
             news, s.SignalsText, s.UpdatedAt);
     }
 

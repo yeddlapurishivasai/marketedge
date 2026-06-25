@@ -508,6 +508,7 @@ export interface SignalNewsItem {
   publisher?: string | null;
   date?: string | null;
   link?: string | null;
+  tags?: string[] | null;
 }
 
 export interface FundamentalSignals {
@@ -515,6 +516,8 @@ export interface FundamentalSignals {
   capexCwipPrevQ?: number | null;
   capexChangePct?: number | null;
   capexTrend?: string | null;
+  capexAsOf?: string | null;
+  detected: string[];
   news: SignalNewsItem[];
   signalsText?: string | null;
   updatedAt: string;

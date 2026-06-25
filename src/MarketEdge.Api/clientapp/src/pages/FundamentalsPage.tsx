@@ -57,11 +57,22 @@ function AutoSignalsBlock({ signals }: { signals: FundamentalSignals | null }) {
     <div style={{ marginBottom: 18 }}>
       <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
         <Radar size={14} /> Auto-detected signals (daily) — read-only AI input
+        {signals.updatedAt && (
+          <span className="cell-muted" style={{ fontWeight: 400, fontSize: '0.74rem' }}>
+            · scraped {fmtDate(signals.updatedAt)}
+          </span>
+        )}
       </label>
       <p className="cell-muted" style={{ fontSize: '0.78rem', marginTop: 0, marginBottom: 6 }}>
         Scraped from yfinance during ingestion. Fed to the AI workflow alongside your additional context below.
       </p>
       <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10, background: 'var(--bg-subtle, rgba(127,127,127,0.06))' }}>
+        {signals.detected.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+            <span style={{ fontSize: '0.78rem', fontWeight: 600 }}>Detected:</span>
+            {signals.detected.map(t => <TagBadge key={t} tag={t} />)}
+          </div>
+        )}
         <div style={{ fontSize: '0.82rem', marginBottom: 8 }}>
           <strong>Capex (CWIP):</strong>{' '}
           {signals.capexCwip == null ? (
@@ -72,6 +83,9 @@ function AutoSignalsBlock({ signals }: { signals: FundamentalSignals | null }) {
               <span style={{ color: capexColor }}>
                 ({fmtPct(signals.capexChangePct)}{signals.capexTrend ? `, ${signals.capexTrend}` : ''})
               </span>
+              {signals.capexAsOf && (
+                <span className="cell-muted"> · as of {fmtDate(signals.capexAsOf)}</span>
+              )}
             </span>
           )}
         </div>
@@ -82,7 +96,7 @@ function AutoSignalsBlock({ signals }: { signals: FundamentalSignals | null }) {
           ) : (
             <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
               {signals.news.map((n, i) => (
-                <li key={i} style={{ marginBottom: 4 }}>
+                <li key={i} style={{ marginBottom: 6 }}>
                   {n.date && <span className="cell-muted">{n.date} · </span>}
                   {n.link ? (
                     <a href={n.link} target="_blank" rel="noreferrer">{n.title}</a>
@@ -90,6 +104,11 @@ function AutoSignalsBlock({ signals }: { signals: FundamentalSignals | null }) {
                     n.title
                   )}
                   {n.publisher && <span className="cell-muted"> ({n.publisher})</span>}
+                  {n.tags && n.tags.length > 0 && (
+                    <span style={{ display: 'inline-flex', gap: 4, marginLeft: 6, verticalAlign: 'middle' }}>
+                      {n.tags.map(t => <TagBadge key={t} tag={t} />)}
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>
@@ -97,6 +116,24 @@ function AutoSignalsBlock({ signals }: { signals: FundamentalSignals | null }) {
         </div>
       </div>
     </div>
+  );
+}
+
+const TAG_COLORS: Record<string, string> = {
+  'M&A': '#7c3aed',
+  'NEW-BIZ': '#2563eb',
+  'SPINOFF': '#db2777',
+  'POLICY': '#d97706',
+  'DEMAND/PRICING': '#059669',
+};
+
+function TagBadge({ tag }: { tag: string }) {
+  const color = TAG_COLORS[tag] ?? 'var(--text-muted)';
+  return (
+    <span style={{
+      fontSize: '0.68rem', fontWeight: 600, padding: '1px 6px', borderRadius: 10,
+      color: '#fff', background: color, whiteSpace: 'nowrap',
+    }}>{tag}</span>
   );
 }
 

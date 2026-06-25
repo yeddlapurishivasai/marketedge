@@ -40,10 +40,12 @@ public record FundamentalSignals(
     decimal? CapexCwipPrevQ,
     decimal? CapexChangePct,
     string? CapexTrend,
+    DateOnly? CapexAsOf,
+    IReadOnlyList<string> Detected,
     IReadOnlyList<SignalNewsItem> News,
     string? SignalsText,
     DateTime UpdatedAt);
 
-public record SignalNewsItem(string Title, string? Publisher, string? Date, string? Link);
+public record SignalNewsItem(string Title, string? Publisher, string? Date, string? Link, IReadOnlyList<string>? Tags);
 
 public record SaveNoteRequest(string? NoteText);

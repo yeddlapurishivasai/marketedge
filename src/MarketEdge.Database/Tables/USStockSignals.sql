@@ -9,6 +9,7 @@ CREATE TABLE [dbo].[USStockSignals]
     [CapexCwipPrevQ]    DECIMAL(20,2) NULL,          -- prior quarter
     [CapexChangePct]    DECIMAL(12,4) NULL,          -- QoQ % change
     [CapexTrend]        NVARCHAR(12)  NULL,          -- rising / falling / flat
+    [CapexAsOf]         DATE          NULL,          -- quarter-end the CWIP figure is dated to
 
     -- Raw yfinance news headlines (recent window), structured for the UI list
     [NewsJson]          NVARCHAR(MAX) NULL,

@@ -614,6 +614,45 @@ _CWIP_LABELS = [
     "Construction In Progress Net", "ConstructionInProgress",
 ]
 
+# Lightweight keyword classifier mapping news headlines to the catalyst categories the AI
+# workflow cares about. Deterministic (no AI): the tags are hints, not verdicts; the AI does
+# the final interpretation. Keys are compact tag labels; values are lower-cased substrings.
+_NEWS_CATEGORIES: dict[str, tuple[str, ...]] = {
+    "M&A": (
+        "merger", "merges", "merge with", "acquire", "acquisition", "acquires", "takeover",
+        "to buy", "buys ", "buyout", "majority stake", "controlling stake", "stake in",
+        "open offer", "amalgamation",
+    ),
+    "NEW-BIZ": (
+        "launch", "launches", "unveils", "enters", "foray", "new product", "new plant",
+        "new facility", "expands into", "order win", "bags order", "wins order", "wins contract",
+        "bags contract", "secures order", "partnership", "tie-up", "tieup", "tie up",
+        "collaborat", "joint venture", " jv ", "mou", "signs ", "signs pact", "signs deal",
+        "to set up", "commissions", "capacity expansion",
+    ),
+    "SPINOFF": (
+        "spin-off", "spinoff", "spin off", "demerger", "demerge", "hive off", "hive-off",
+        "carve out", "carve-out", "split into", "separate listing",
+    ),
+    "POLICY": (
+        "government", "govt", "policy", "regulation", "regulator", "tariff", "subsidy",
+        "incentive", " pli", "budget", "ban on", "import duty", "export duty", "duty hike",
+        "sanction", "gst", "rbi ", "sebi", "ministry", "scheme", "approval", "clearance",
+        "mandate", "norms",
+    ),
+    "DEMAND/PRICING": (
+        "price hike", "price increase", "raises price", "hikes price", "pricing power",
+        "shortage", "supply crunch", "supply gap", "tight supply", "strong demand",
+        "demand surge", "record demand", "price cut", "cuts price", "oversupply", "glut",
+    ),
+}
+
+
+def _tag_headline(title: str) -> list[str]:
+    """Return the catalyst-category tags matched by a headline (keyword heuristic)."""
+    text = f" {title.lower()} "
+    return [tag for tag, kws in _NEWS_CATEGORIES.items() if any(k in text for k in kws)]
+
 
 def _extract_news(ticker, since, limit: int = 8) -> list[dict]:
     """Recent news as dicts, tolerant of both the legacy and newer yfinance schemas."""
@@ -655,9 +694,11 @@ def _extract_news(ticker, since, limit: int = 8) -> list[dict]:
             continue
         if since is not None and ts is not None and ts < since:
             continue
+        title = str(title).strip()
         items.append({
-            "title": str(title).strip(), "publisher": pub,
+            "title": title, "publisher": pub,
             "date": ts.isoformat() if ts else None, "link": link,
+            "tags": _tag_headline(title),
         })
         if len(items) >= limit:
             break
@@ -676,6 +717,7 @@ def _try_stock_signals(conn, market, symbol, ticker, as_of,
     Kept SEPARATE from the user-entered StockNote. Best-effort; returns True if a row written.
     """
     cwip = cwip_prev = change_pct = trend = None
+    cwip_as_of = None
     try:
         bs = ticker.quarterly_balance_sheet
     except Exception as exc:  # noqa: BLE001
@@ -687,6 +729,11 @@ def _try_stock_signals(conn, market, symbol, ticker, as_of,
         change_pct = _pct_change(cwip, cwip_prev)
         if cwip is not None and cwip_prev is not None:
             trend = "rising" if cwip > cwip_prev else "falling" if cwip < cwip_prev else "flat"
+        if cwip is not None:
+            try:
+                cwip_as_of = bs.columns[0].date()
+            except Exception:  # noqa: BLE001
+                cwip_as_of = None
 
     since = as_of - timedelta(days=news_days)
     news = _extract_news(ticker, since, limit=news_limit)
@@ -694,11 +741,17 @@ def _try_stock_signals(conn, market, symbol, ticker, as_of,
     if cwip is None and not news:
         return False
 
-    lines = []
+    detected = sorted({tag for n in news for tag in n.get("tags", [])})
+
+    lines = [f"AS OF {as_of.isoformat()} (scraped)"]
+    if detected:
+        lines.append(f"SIGNALS DETECTED: {', '.join(detected)}")
     if cwip is not None:
         cap = f"CAPEX(CWIP): {_human_num(cwip)} vs {_human_num(cwip_prev)} prev Q"
         if change_pct is not None:
             cap += f" ({change_pct:+.0f}%, {(trend or 'flat').upper()})"
+        if cwip_as_of is not None:
+            cap += f" [as of {cwip_as_of.isoformat()}]"
         lines.append(cap)
     else:
         lines.append("CAPEX(CWIP): n/a")
@@ -706,7 +759,8 @@ def _try_stock_signals(conn, market, symbol, ticker, as_of,
         lines.append(f"NEWS({news_days}d):")
         for n in news:
             pub = f" ({n['publisher']})" if n["publisher"] else ""
-            lines.append(f"- {n['date'] or '?'} | {n['title']}{pub}")
+            tags = f"  [{', '.join(n['tags'])}]" if n.get("tags") else ""
+            lines.append(f"- {n['date'] or '?'} | {n['title']}{pub}{tags}")
     else:
         lines.append(f"NEWS({news_days}d): none")
 
@@ -714,6 +768,7 @@ def _try_stock_signals(conn, market, symbol, ticker, as_of,
         "ticker": symbol,
         "capex_cwip": cwip, "capex_cwip_prev_q": cwip_prev,
         "capex_change_pct": change_pct, "capex_trend": trend,
+        "capex_as_of": cwip_as_of,
         "news_json": json.dumps(news, ensure_ascii=False) if news else None,
         "signals_text": "\n".join(lines),
     }
