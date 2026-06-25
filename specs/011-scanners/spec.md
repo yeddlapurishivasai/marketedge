@@ -73,9 +73,18 @@ scoring and Stock Lookup reflect today's data. This is best-effort and never abo
   a second enqueue the same local day, and it never enqueues while a fundamentals run is
   already queued/running for the market. Job type: `fundamentals`.
 
-### Schedule (auto start/stop during market hours)
+### Weekend stage2 analysis
 
-- An admin toggle enables an automatic schedule per market.
+- An admin toggle enables a per-market weekend stage2 schedule.
+- A background service in the API checks every minute and **enqueues a full stage2 analysis
+  run once per exchange-local weekend day** (Saturday and Sunday), after the configured
+  `HourLocal` (default 20:00). Running over the weekend refreshes the week's stage2
+  classification while markets are closed, off the weekday critical path.
+- Idempotent: `LastEnqueuedAt` (persisted, compared in the exchange-local timezone) prevents
+  a second enqueue the same local day, and stage2 analysis already dedupes one in-flight run
+  per (week, market). Job type: `stage2_analysis`.
+
+### Schedule (auto start/stop during market hours)
 - A background service in the API checks every minute and **enqueues a pre-close scan
   message every 15 minutes while the market is open**, in the exchange's local timezone:
   - India (NSE): 09:15-15:30 IST (`India Standard Time`), Mon-Fri.
@@ -136,5 +145,8 @@ ScannerSchedules
   Market (PK), Enabled, IntervalMinutes, LastEnqueuedAt, UpdatedAt
 
 FundamentalsSchedules
+  Market (PK), Enabled, HourLocal, LastEnqueuedAt, UpdatedAt
+
+Stage2Schedules
   Market (PK), Enabled, HourLocal, LastEnqueuedAt, UpdatedAt
 ```

@@ -31,6 +31,7 @@ builder.Services.AddScoped<IFundamentalsService, FundamentalsService>();
 builder.Services.AddScoped<IScoresService, ScoresService>();
 builder.Services.AddHostedService<ScannerScheduleService>();
 builder.Services.AddHostedService<FundamentalsScheduleService>();
+builder.Services.AddHostedService<Stage2ScheduleService>();
 
 // API
 builder.Services.AddControllers();
