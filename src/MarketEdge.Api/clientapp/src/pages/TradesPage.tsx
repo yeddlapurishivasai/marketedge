@@ -251,6 +251,11 @@ export default function TradesPage() {
   const m = market as Market;
   const navigate = useNavigate();
   const [tab, setTab] = useState<'scores' | 'trades' | 'patterns' | 'weights'>('scores');
+  // Swing vs positional is shared across the Scores and Trades tabs so the chosen trade
+  // style persists when switching between them. Lifted here to make a future split into
+  // fully separate Swing / Positional sections straightforward.
+  const [profile, setProfile] = useState<TradeProfile>('swing');
+  const profiled = tab === 'scores' || tab === 'trades';
 
   return (
     <div className="page">
@@ -281,10 +286,29 @@ export default function TradesPage() {
         </button>
       </div>
 
-      {tab === 'scores' ? <ScoresTab market={m} />
-        : tab === 'trades' ? <TradesTab market={m} />
+      {profiled && <ProfileTabs profile={profile} onChange={setProfile} />}
+
+      {tab === 'scores' ? <ScoresTab market={m} profile={profile} />
+        : tab === 'trades' ? <TradesTab market={m} profile={profile} />
         : tab === 'patterns' ? <PatternsTab market={m} />
         : <WeightsTab market={m} />}
+    </div>
+  );
+}
+
+/**
+ * Swing / Positional sub-tab selector shared by the Scores and Trades tabs.
+ * Swing leans on the technical pattern; positional weights fundamentals at 50%.
+ */
+function ProfileTabs({ profile, onChange }: { profile: TradeProfile; onChange: (p: TradeProfile) => void }) {
+  return (
+    <div className="sub-tabs">
+      <button className={`sub-tab ${profile === 'swing' ? 'on' : ''}`} onClick={() => onChange('swing')}>
+        Swing <span className="sub-tab-note">technical</span>
+      </button>
+      <button className={`sub-tab ${profile === 'positional' ? 'on' : ''}`} onClick={() => onChange('positional')}>
+        Positional <span className="sub-tab-note">fundamentals 50%</span>
+      </button>
     </div>
   );
 }
@@ -482,8 +506,7 @@ function mixLabel(key: string): string {
   return `${profile.charAt(0).toUpperCase()}${profile.slice(1)} · ${comp}`;
 }
 
-function ScoresTab({ market }: { market: Market }) {
-  const [profile, setProfile] = useState<TradeProfile>('swing');
+function ScoresTab({ market, profile }: { market: Market; profile: TradeProfile }) {
   const [side, setSide] = useState<string>('');
   const [rows, setRows] = useState<StockScore[]>([]);
   const [loading, setLoading] = useState(false);
@@ -507,13 +530,6 @@ function ScoresTab({ market }: { market: Market }) {
   return (
     <>
       <div className="toolbar" style={{ gap: 8, flexWrap: 'wrap' }}>
-        <button className={`btn btn-sm ${profile === 'swing' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setProfile('swing')}>
-          Swing (technical)
-        </button>
-        <button className={`btn btn-sm ${profile === 'positional' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setProfile('positional')}>
-          Positional (fundamentals 50%)
-        </button>
-        <span style={{ width: 1, height: 24, background: 'var(--border)', margin: '0 4px' }} />
         <select className="search-input" style={{ width: 'auto' }} value={side} onChange={e => setSide(e.target.value)}>
           <option value="">All sides</option>
           <option value="long">Long</option>
@@ -598,9 +614,8 @@ function ScoresTab({ market }: { market: Market }) {
   );
 }
 
-function TradesTab({ market }: { market: Market }) {
+function TradesTab({ market, profile }: { market: Market; profile: TradeProfile }) {
   const [status, setStatus] = useState<string>('active');
-  const [tradeType, setTradeType] = useState<string>('');
   const [rows, setRows] = useState<Trade[]>([]);
   const [stats, setStats] = useState<TradeStats | null>(null);
   const [loading, setLoading] = useState(false);
@@ -611,13 +626,13 @@ function TradesTab({ market }: { market: Market }) {
   const load = useCallback(() => {
     setLoading(true);
     Promise.all([
-      fetchTrades(market, { status: status || undefined, tradeType: tradeType || undefined }),
+      fetchTrades(market, { status: status || undefined, tradeType: profile }),
       fetchTradeStats(market),
     ])
       .then(([t, s]) => { setRows(t); setStats(s); })
       .catch(() => { setRows([]); setStats(null); })
       .finally(() => setLoading(false));
-  }, [market, status, tradeType]);
+  }, [market, status, profile]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -660,11 +675,6 @@ function TradesTab({ market }: { market: Market }) {
           <option value="active">Active</option>
           <option value="closed">Closed</option>
           <option value="">All</option>
-        </select>
-        <select className="search-input" style={{ width: 'auto' }} value={tradeType} onChange={e => setTradeType(e.target.value)}>
-          <option value="">All types</option>
-          <option value="swing">Swing</option>
-          <option value="positional">Positional</option>
         </select>
         <button className="btn btn-ghost btn-sm" onClick={backfill} disabled={backfilling} style={{ marginLeft: 'auto' }}
           title="Replay the last 7 days of volume-confirmed breakouts into the blotter">
