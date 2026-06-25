@@ -276,6 +276,22 @@ def upsert_eps_forecast(conn: pyodbc.Connection, market: str, row: dict[str, Any
     conn.commit()
 
 
+def prune_old_bars(conn: pyodbc.Connection, market: str, cutoff: date) -> int:
+    """Delete bars older than ``cutoff`` so storage holds a rolling window only.
+
+    Returns the number of rows deleted. Makes repeated ingests idempotent: the stored
+    history never grows beyond the configured lookback regardless of prior runs.
+    """
+    t = tables_for(market)
+    cursor = conn.cursor()
+    cursor.execute(f"DELETE FROM dbo.{t['bars1d']} WHERE BarDate < ?", [cutoff])
+    deleted = cursor.rowcount
+    conn.commit()
+    if deleted:
+        logger.info("Pruned %s bars older than %s from %s", deleted, cutoff, t["bars1d"])
+    return deleted
+
+
 def refresh_bars_available(conn: pyodbc.Connection, market: str) -> None:
     """Set BarsAvailable on the ticker master from the Bars1D row counts."""
     t = tables_for(market)

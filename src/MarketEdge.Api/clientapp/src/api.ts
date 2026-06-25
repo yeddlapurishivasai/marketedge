@@ -145,6 +145,26 @@ export async function cancelJobRun(id: number): Promise<void> {
   if (!res.ok) throw new Error('Failed to cancel job run');
 }
 
+// ── Data Ingestion (Admin) ──
+
+export type IngestionStep = 'seed_tickers' | 'bars' | 'technical' | 'fundamentals' | 'full';
+
+export interface TriggerIngestionRequest {
+  step: IngestionStep;
+  testSample?: boolean;
+  limit?: number;
+}
+
+export async function triggerIngestion(market: Market, request: TriggerIngestionRequest): Promise<{ runId: number }> {
+  const res = await fetch(`${BASE}/${market}/ingestion/trigger`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  if (!res.ok) throw new Error((await res.text()) || 'Failed to trigger ingestion');
+  return res.json();
+}
+
 // ── Stage 2 Analysis ──
 
 export interface TriggerAnalysisRequest {

@@ -24,7 +24,7 @@ import logging
 import math
 import sys
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 
@@ -76,11 +76,13 @@ def _seed(conn, market: str, universe: list[dict]) -> None:
 # --------------------------------------------------------------------------- #
 # Frame -> row conversion
 # --------------------------------------------------------------------------- #
-def _to_bar_rows(ticker: str, frame: pd.DataFrame) -> list[tuple]:
+def _to_bar_rows(ticker: str, frame: pd.DataFrame, cutoff: date | None = None) -> list[tuple]:
     rows: list[tuple] = []
     for index, series in frame.iterrows():
         bar_date = index.date() if isinstance(index, (pd.Timestamp, datetime)) else index
         if not isinstance(bar_date, date):
+            continue
+        if cutoff is not None and bar_date < cutoff:
             continue
         rows.append(
             (
@@ -138,6 +140,7 @@ def cmd_ingest_bars(args) -> int:
         logger.info("Fetching daily bars for %s symbols (incl. benchmark)...", len(all_symbols))
         frames = fetch.fetch_daily_bars(all_symbols, args.market)
 
+        cutoff = date.today() - timedelta(days=Config.DAILY_LOOKBACK_DAYS)
         total_rows = 0
         pending: list[tuple] = []
         ingested_tickers = 0
@@ -145,7 +148,7 @@ def cmd_ingest_bars(args) -> int:
             frame = frames.get(symbol)
             if frame is None or frame.empty:
                 continue
-            pending.extend(_to_bar_rows(symbol, frame))
+            pending.extend(_to_bar_rows(symbol, frame, cutoff))
             ingested_tickers += 1
             if ingested_tickers % UPSERT_TICKER_BATCH == 0 and pending:
                 total_rows += db.upsert_bars(conn, args.market, pending)
@@ -154,11 +157,13 @@ def cmd_ingest_bars(args) -> int:
         if pending:
             total_rows += db.upsert_bars(conn, args.market, pending)
 
+        pruned = db.prune_old_bars(conn, args.market, cutoff)
         db.refresh_bars_available(conn, args.market)
 
         logger.info(
-            "Bars ingestion complete: %s tickers with data, %s bar rows upserted (of %s requested).",
-            ingested_tickers, total_rows, len(all_symbols),
+            "Bars ingestion complete: %s tickers with data, %s bar rows upserted "
+            "(of %s requested), %s stale rows pruned, window >= %s.",
+            ingested_tickers, total_rows, len(all_symbols), pruned, cutoff,
         )
     finally:
         conn.close()

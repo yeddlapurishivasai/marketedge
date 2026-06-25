@@ -24,6 +24,7 @@ builder.Services.AddSingleton(_ => new QueueClient(storageConnectionString, queu
 builder.Services.AddScoped<ISectorService, SectorService>();
 builder.Services.AddScoped<IStockService, StockService>();
 builder.Services.AddScoped<IJobService, JobService>();
+builder.Services.AddScoped<IIngestionService, IngestionService>();
 
 // API
 builder.Services.AddControllers();

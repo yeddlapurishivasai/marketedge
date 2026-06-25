@@ -455,6 +455,21 @@ body {
   box-shadow: var(--shadow-sm);
 }
 
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.section-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 8px 0 12px;
+}
+
+
 .table {
   width: 100%;
   border-collapse: collapse;

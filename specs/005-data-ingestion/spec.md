@@ -44,6 +44,10 @@ catalog; assert `IndianBars1D` is populated for each active ticker and the bench
 2. **Given** a ticker already has bars up to date D, **When** ingestion re-runs,
    **Then** only missing/newer bars are written and existing rows are not duplicated
    (idempotent upsert by `(Ticker, BarDate)`).
+3. **Given** the configured 1-year window (`DAILY_LOOKBACK_DAYS`, default 365),
+   **When** ingestion runs, **Then** only bars on or after `today - lookback` are
+   stored and any bars older than the window are pruned, so the stored history is a
+   strict rolling 1-year window that never grows beyond the cap across repeated runs.
 3. **Given** the market benchmark symbol (`^NSEI` India / `^GSPC` US), **When**
    ingestion runs, **Then** the benchmark is ingested as a ticker row and its daily
    bars are stored like any other ticker so consumers read it locally.
@@ -176,6 +180,11 @@ key.
 - **FR-011**: All time-series writes MUST be idempotent upserts on the natural key
   (`(Ticker, BarDate)`, `(Ticker, AsOfDate)`,
   `(Ticker, AsOfDate, PeriodType, PeriodEndDate)`); re-runs update in place.
+- **FR-011a**: Daily-bar ingestion MUST store at most a rolling 1-year window. Bars
+  older than `today - DAILY_LOOKBACK_DAYS` (default 365) MUST NOT be staged and MUST be
+  pruned on every run, so storage never exceeds the configured window regardless of how
+  many times ingestion runs. `DAILY_LOOKBACK_PERIOD` (yfinance fetch window) defaults to
+  `1y` to align with this cap.
 - **FR-012**: The pipeline MUST fetch from yfinance with retries + exponential backoff
   and throttling, carrying over the worker's prior settings — batched fetches
   (`YFINANCE_BATCH_SIZE`, default 50), an inter-batch delay (`YFINANCE_BATCH_DELAY`,

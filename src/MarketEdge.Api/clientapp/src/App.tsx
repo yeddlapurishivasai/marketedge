@@ -6,10 +6,11 @@ import { formatMarketCap } from './format';
 import {
   Sun, Moon, ChevronLeft, Search, Plus, Pencil, Trash2,
   ArrowRightLeft, X, TrendingUp, LayoutGrid, BarChart3,
-  IndianRupee, DollarSign, ChevronRight, Activity, Target
+  IndianRupee, DollarSign, ChevronRight, Activity, Target, Database
 } from 'lucide-react';
 import JobsPage from './pages/JobsPage';
 import AnalysisPage from './pages/AnalysisPage';
+import AdminPage from './pages/AdminPage';
 import './styles.css';
 
 // Theme context
@@ -90,6 +91,7 @@ function App() {
             <Route path="/:market/stocks" element={<StocksPage />} />
             <Route path="/:market/analysis" element={<AnalysisPage />} />
             <Route path="/:market/jobs" element={<JobsPage />} />
+            <Route path="/:market/admin" element={<AdminPage />} />
           </Routes>
         </div>
       </BrowserRouter>
@@ -164,6 +166,14 @@ function MarketMenu() {
           <div className="menu-card-text">
             <h3>Job Runs</h3>
             <p>Monitor analysis job runs</p>
+          </div>
+          <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
+        </div>
+        <div className="menu-card" onClick={() => navigate(`/${m}/admin`)}>
+          <div className="menu-card-icon sectors"><Database size={22} /></div>
+          <div className="menu-card-text">
+            <h3>Admin / Data Ingestion</h3>
+            <p>Seed tickers &amp; ingest bars, technicals, fundamentals</p>
           </div>
           <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
         </div>

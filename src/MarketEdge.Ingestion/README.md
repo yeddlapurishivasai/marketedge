@@ -66,9 +66,10 @@ python cli.py ingest bars --market india --limit 200
 ```
 
 This resolves 200 catalog symbols, seeds them (plus `^NSEI`) into `IndianTickers`,
-fetches ~2y of daily bars in throttled batches, bulk-upserts into `IndianBars1D`, and
-refreshes each ticker's `BarsAvailable` count. Swap `--market us` (benchmark `^GSPC`) for
-the US universe.
+fetches the last 1 year of daily bars in throttled batches, bulk-upserts into
+`IndianBars1D`, prunes anything older than the rolling 1-year window
+(`DAILY_LOOKBACK_DAYS`, default 365), and refreshes each ticker's `BarsAvailable` count.
+Swap `--market us` (benchmark `^GSPC`) for the US universe.
 
 ## Throttling
 

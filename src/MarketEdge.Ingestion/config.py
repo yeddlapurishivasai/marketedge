@@ -55,5 +55,9 @@ class Config:
     YFINANCE_THREADS = _get_int("YFINANCE_THREADS", 10)
 
     # Daily-bar history window fetched per ticker (yfinance period string).
-    DAILY_LOOKBACK_PERIOD = os.getenv("DAILY_LOOKBACK_PERIOD", "2y")
+    DAILY_LOOKBACK_PERIOD = os.getenv("DAILY_LOOKBACK_PERIOD", "1y")
     DAILY_INTERVAL = "1d"
+
+    # Hard cap on stored history: bars older than this many days are never staged
+    # and are pruned on every run, keeping a strict rolling 1-year window.
+    DAILY_LOOKBACK_DAYS = _get_int("DAILY_LOOKBACK_DAYS", 365)
