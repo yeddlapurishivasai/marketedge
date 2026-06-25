@@ -24,15 +24,17 @@ from db import (
     get_week_results,
     save_single_result,
     update_job_status,
-    update_market_cap,
 )
 from stage_analysis import (
     calculate_stage2,
     classify_stocks,
     compute_rs_ranks,
     fetch_benchmark_data,
+    fetch_benchmark_weekly_from_daily,
     fetch_market_caps,
     fetch_price_data,
+    load_market_cap_from_db,
+    load_weekly_price_from_db,
     week_exclusive_end,
 )
 
@@ -291,8 +293,9 @@ def process_message(message_content: str) -> None:
         except Exception:
             logger.exception("RS ratings step failed — continuing Stage 2 run")
 
-        # Fetch benchmark once
-        benchmark_data = fetch_benchmark_data(market, end_date=as_of_end)
+        # Fetch benchmark once (the index is not part of the ingested universe, so this is the
+        # only remaining yfinance call — one download per run, not per stock).
+        benchmark_data = fetch_benchmark_weekly_from_daily(market, end_date=as_of_end)
 
         # Process stock by stock within each sector
         all_results: list[dict[str, Any]] = []
@@ -300,8 +303,6 @@ def process_message(message_content: str) -> None:
         total_processed = 0
         total_skipped = 0
         total_filtered = 0
-        stock_delay = max(Config.YFINANCE_BATCH_DELAY / 2, 1.0)
-        sector_delay = Config.YFINANCE_BATCH_DELAY * 3
         run_start_time = time.monotonic()
         run_timeout = Config.MAX_RUN_TIMEOUT
 
@@ -324,16 +325,9 @@ def process_message(message_content: str) -> None:
             for stock_idx, stock in enumerate(sector_stocks):
                 symbol = stock["symbol"]
 
-                # 1. Fetch market cap for this stock
-                mc = _fetch_single_market_cap(symbol, market)
+                # 1. Market cap from ingested fundamentals (no network).
+                mc = load_market_cap_from_db(conn, market, symbol)
                 stock["market_cap"] = mc
-                # Persist the freshly fetched market cap to the fundamentals table
-                if mc is not None:
-                    try:
-                        update_market_cap(conn, market, stock["id"], mc)
-                    except Exception as exc:
-                        logger.warning("Failed to persist market cap for %s: %s", symbol, exc)
-                time.sleep(stock_delay)
 
                 # 2. Apply market cap filter
                 if min_market_cap is not None or max_market_cap is not None:
@@ -349,9 +343,8 @@ def process_message(message_content: str) -> None:
 
                 total_filtered += 1
 
-                # 3. Fetch price data for this stock
-                price_frame = _fetch_single_price_data(symbol, market, end_date=as_of_end)
-                time.sleep(stock_delay)
+                # 3. Price data from ingested daily bars, resampled to weekly (no network).
+                price_frame = load_weekly_price_from_db(conn, market, symbol, end_date=as_of_end)
 
                 # 4. Analyze
                 total_processed += 1
@@ -408,11 +401,6 @@ def process_message(message_content: str) -> None:
                 "Sector %s/%s complete — %s processed, %s Stage 2",
                 sector_idx + 1, total_sectors, total_processed, len(current_stage2_symbols),
             )
-
-            # Throttle between sectors
-            if sector_idx < total_sectors - 1:
-                logger.info("Pausing %ss between sectors...", sector_delay)
-                time.sleep(sector_delay)
 
         # --- Post-processing over the FULL week's result set ---
         # Results are upserted per week, so classification/ranks/weeks must be computed
