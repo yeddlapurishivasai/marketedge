@@ -29,13 +29,23 @@ function fmtDate(d?: string | null): string {
   return d ? new Date(d).toLocaleDateString() : '—';
 }
 
-function fmtMoney(v?: number | null): string {
+function curSym(market: Market): string {
+  return market === 'us' ? '$' : '₹';
+}
+
+function fmtMoney(v: number | null | undefined, market: Market): string {
   if (v == null) return '—';
+  const sym = curSym(market);
   const abs = Math.abs(v);
-  if (abs >= 1e9) return `${(v / 1e9).toFixed(2)}B`;
-  if (abs >= 1e7) return `${(v / 1e7).toFixed(2)}Cr`;
-  if (abs >= 1e5) return `${(v / 1e5).toFixed(2)}L`;
-  return v.toFixed(0);
+  if (market === 'us') {
+    if (abs >= 1e9) return `${sym}${(v / 1e9).toFixed(2)}B`;
+    if (abs >= 1e6) return `${sym}${(v / 1e6).toFixed(2)}M`;
+    if (abs >= 1e3) return `${sym}${(v / 1e3).toFixed(2)}K`;
+    return `${sym}${v.toFixed(0)}`;
+  }
+  if (abs >= 1e7) return `${sym}${(v / 1e7).toFixed(2)} Cr`;
+  if (abs >= 1e5) return `${sym}${(v / 1e5).toFixed(2)} L`;
+  return `${sym}${v.toFixed(0)}`;
 }
 
 function TrendBadge({ trend }: { trend?: string | null }) {
@@ -49,7 +59,7 @@ function TrendBadge({ trend }: { trend?: string | null }) {
   );
 }
 
-function AutoSignalsBlock({ signals }: { signals: FundamentalSignals | null }) {
+function AutoSignalsBlock({ signals, market }: { signals: FundamentalSignals | null; market: Market }) {
   if (!signals) return null;
   const capexColor = signals.capexTrend === 'rising' ? 'var(--success)'
     : signals.capexTrend === 'falling' ? 'var(--danger)' : 'var(--text-muted)';
@@ -79,7 +89,7 @@ function AutoSignalsBlock({ signals }: { signals: FundamentalSignals | null }) {
             <span className="cell-muted">not reported</span>
           ) : (
             <span>
-              {fmtMoney(signals.capexCwip)} vs {fmtMoney(signals.capexCwipPrevQ)} prev Q{' '}
+              {fmtMoney(signals.capexCwip, market)} vs {fmtMoney(signals.capexCwipPrevQ, market)} prev Q{' '}
               <span style={{ color: capexColor }}>
                 ({fmtPct(signals.capexChangePct)}{signals.capexTrend ? `, ${signals.capexTrend}` : ''})
               </span>
@@ -210,21 +220,21 @@ function FundamentalDetailModal({ market, symbol, onClose }: { market: Market; s
               {metric('Latest quarter end', fmtDate(row.latestQuarterEnd))}
               {metric('Last earnings date', fmtDate(row.lastEarningsDate))}
               {metric('Previous earnings date', fmtDate(row.prevEarningsDate))}
-              {metric('Reported EPS (surprise)', `${fmtNum(row.lastReportedEps)} (${fmtPct(row.lastEpsSurprisePct)})`)}
-              {metric('Revenue', fmtMoney(row.revenue))}
+              {metric('Reported EPS (surprise)', `${row.lastReportedEps == null ? '—' : curSym(market) + fmtNum(row.lastReportedEps)} (${fmtPct(row.lastEpsSurprisePct)})`)}
+              {metric('Revenue', fmtMoney(row.revenue, market))}
               {metric('Revenue growth YoY', fmtPct(row.revenueGrowthYoyPct))}
-              {metric('Operating profit', fmtMoney(row.operatingProfit))}
+              {metric('Operating profit', fmtMoney(row.operatingProfit, market))}
               {metric('Operating profit trend', <TrendBadge trend={row.operatingProfitTrend} />)}
               {metric('OPM', `${fmtNum(row.opm)}%`)}
               {metric('OPM trend', <TrendBadge trend={row.opmTrend} />)}
-              {metric('Net profit', fmtMoney(row.netProfit))}
+              {metric('Net profit', fmtMoney(row.netProfit, market))}
               {metric('Net margin', `${fmtNum(row.netMarginPct)}%`)}
               {metric('Earnings growth YoY', fmtPct(row.earningsGrowthYoyPct))}
               {metric('Earnings growth QoQ', fmtPct(row.earningsGrowthQoqPct))}
               {metric('Earnings increasing', row.earningsIncreasing == null ? '—' : (row.earningsIncreasing ? 'Yes' : 'No'))}
             </div>
 
-            <AutoSignalsBlock signals={signals} />
+            <AutoSignalsBlock signals={signals} market={market} />
 
             <div>
               <label className="form-label" style={{ display: 'block', marginBottom: 4 }}>
