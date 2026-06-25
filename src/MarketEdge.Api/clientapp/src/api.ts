@@ -201,6 +201,7 @@ export interface StageAnalysisResult {
   weeksInStage2?: number;
   rsScore?: number;
   rsRank?: number;
+  rsRating?: number;
   rs1w?: number;
   rs2w?: number;
   rs3w?: number;

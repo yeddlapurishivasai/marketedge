@@ -226,6 +226,8 @@ public class JobService : IJobService
                 .ToList()
         };
 
+        await PopulateRsRatingsAsync(market, summary.Top25);
+
         return summary;
     }
 
@@ -254,11 +256,13 @@ public class JobService : IJobService
         if (sectorId.HasValue)
             query = query.Where(r => r.SectorId == sectorId.Value);
 
-        return await query
+        var dtos = await query
             .OrderByDescending(r => r.RSScore)
             .ThenByDescending(r => r.MomentumScore)
             .Select(r => MapResult(r))
             .ToListAsync();
+        await PopulateRsRatingsAsync(job.Market, dtos);
+        return dtos;
     }
 
     public async Task<List<SectorRotationDto>> GetSectorRotationAsync(int runId)
@@ -406,6 +410,35 @@ public class JobService : IJobService
                 ? (j.CompletedAt.Value - j.StartedAt.Value).TotalSeconds
                 : null
         };
+    }
+
+    private async Task PopulateRsRatingsAsync(string market, List<StageAnalysisResultDto> dtos)
+    {
+        if (dtos.Count == 0) return;
+        var symbols = dtos.Select(d => d.Symbol).Distinct().ToList();
+
+        Dictionary<string, int?> map;
+        if (market == "india")
+        {
+            var techs = await _db.IndianTickerTechnical
+                .Where(t => symbols.Contains(t.Ticker) && t.Rs != null)
+                .Select(t => new { t.Ticker, t.AsOfDate, t.Rs })
+                .ToListAsync();
+            map = techs.GroupBy(t => t.Ticker)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.AsOfDate).First().Rs);
+        }
+        else
+        {
+            var techs = await _db.USTickerTechnical
+                .Where(t => symbols.Contains(t.Ticker) && t.Rs != null)
+                .Select(t => new { t.Ticker, t.AsOfDate, t.Rs })
+                .ToListAsync();
+            map = techs.GroupBy(t => t.Ticker)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.AsOfDate).First().Rs);
+        }
+
+        foreach (var d in dtos)
+            if (map.TryGetValue(d.Symbol, out var rs)) d.RsRating = rs;
     }
 
     private static StageAnalysisResultDto MapResult(StageAnalysisResultBase r)

@@ -68,6 +68,7 @@ public class StageAnalysisResultDto
     public int? WeeksInStage2 { get; set; }
     public decimal? RSScore { get; set; }
     public int? RSRank { get; set; }
+    public int? RsRating { get; set; }
     public decimal? RS1w { get; set; }
     public decimal? RS2w { get; set; }
     public decimal? RS3w { get; set; }
