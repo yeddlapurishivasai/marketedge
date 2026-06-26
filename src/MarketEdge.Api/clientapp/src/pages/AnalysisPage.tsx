@@ -235,6 +235,75 @@ function QuadrantChart({ data, currentDate }: { data: SectorRotation[]; currentD
   );
 }
 
+function SectorStage2Modal({ market, runId, sector, sectorId, onClose, onPickSymbol }: {
+  market: Market; runId: number; sector: string; sectorId?: number;
+  onClose: () => void; onPickSymbol: (symbol: string) => void;
+}) {
+  const [rows, setRows] = useState<StageAnalysisResult[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    fetchStage2Stocks(market, runId, sectorId ? { sectorId } : undefined)
+      .then(data => {
+        const scoped = sectorId ? data : data.filter(r => r.sectorName === sector);
+        if (active) setRows(scoped.filter(r => r.isStage2));
+      })
+      .catch(() => { if (active) setRows([]); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [market, runId, sectorId, sector]);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal modal-list" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3 className="modal-title">{sector} — {loading ? '…' : rows.length} Stage 2 stock{rows.length === 1 ? '' : 's'}</h3>
+          <button className="modal-close" onClick={onClose}>×</button>
+        </div>
+        <div className="modal-body">
+          {loading ? (
+            <div className="loading"><div className="spinner" /> Loading...</div>
+          ) : rows.length === 0 ? (
+            <div className="empty-state"><p className="empty-state-text">No Stage 2 stocks in this sector.</p></div>
+          ) : (
+            <div className="table-scroll">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Company</th>
+                    <th style={{ textAlign: 'right' }}>Price</th>
+                    <th style={{ textAlign: 'right' }}>RS</th>
+                    <th style={{ textAlign: 'right' }}>Momentum</th>
+                    <th>Classification</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(s => (
+                    <tr key={s.id}>
+                      <td className="cell-symbol">
+                        <button className="stock-link" onClick={() => onPickSymbol(s.symbol)}>{s.symbol}</button>
+                      </td>
+                      <td>{s.companyName.length > 30 ? s.companyName.slice(0, 27) + '...' : s.companyName}</td>
+                      <td style={{ textAlign: 'right' }}>{formatPrice(s.closePrice, market)}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{s.rsRating ?? '-'}</td>
+                      <td style={{ textAlign: 'right', color: (s.momentumScore ?? 0) > 0 ? 'var(--success)' : 'var(--danger)' }}>
+                        {s.momentumScore != null ? s.momentumScore.toFixed(2) : '-'}
+                      </td>
+                      <td>{s.classification ? <span className={`class-badge class-${s.classification}`}>{s.classification}</span> : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AnalysisPage() {
   const { market } = useParams<{ market: string }>();
   const navigate = useNavigate();
@@ -265,11 +334,18 @@ export default function AnalysisPage() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [chartSymbol, setChartSymbol] = useState<string | null>(null);
   const [lookupSymbol, setLookupSymbol] = useState<string | null>(null);
+  const [stage2Sector, setStage2Sector] = useState<string | null>(null);
 
   const top25Sort = useSortableData(summary?.top25 || [], { key: 'rsRating', dir: 'desc' });
   const sectorSort = useSortableData(summary?.bySector || []);
   const rotationSort = useSortableData(rotation);
   const stocksSort = useSortableData(stocks);
+
+  const sectorIdByName = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const s of allSectors) map[s.sectorName] = s.id;
+    return map;
+  }, [allSectors]);
 
   const load = useCallback(async () => {
     try {
@@ -741,7 +817,11 @@ export default function AnalysisPage() {
                   {sectorSort.sorted.map(s => (
                     <tr key={s.sectorName}>
                       <td style={{ fontWeight: 500 }}>{s.sectorName}</td>
-                      <td style={{ fontWeight: 600, color: 'var(--primary)' }}>{s.stage2Count}</td>
+                      <td style={{ fontWeight: 600, color: 'var(--primary)' }}>
+                        {latestRunId && s.stage2Count > 0 ? (
+                          <button className="stock-link" onClick={() => setStage2Sector(s.sectorName)}>{s.stage2Count}</button>
+                        ) : s.stage2Count}
+                      </td>
                       <td className="cell-muted">{s.totalCount}</td>
                       <td>{s.totalCount > 0 ? ((s.stage2Count / s.totalCount) * 100).toFixed(1) : 0}%</td>
                       <td style={{ width: 200 }}>
@@ -926,6 +1006,17 @@ export default function AnalysisPage() {
 
       {lookupSymbol && (
         <StockLookupModal market={m} symbol={lookupSymbol} onClose={() => setLookupSymbol(null)} />
+      )}
+
+      {stage2Sector && latestRunId && (
+        <SectorStage2Modal
+          market={m}
+          runId={latestRunId}
+          sector={stage2Sector}
+          sectorId={sectorIdByName[stage2Sector]}
+          onClose={() => setStage2Sector(null)}
+          onPickSymbol={sym => { setStage2Sector(null); setLookupSymbol(sym); }}
+        />
       )}
     </div>
   );

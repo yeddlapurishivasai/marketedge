@@ -573,6 +573,27 @@ body {
   color: var(--text-secondary);
 }
 
+/* Clickable count badge (opens a popup) */
+.badge-button {
+  border: none;
+  font-family: inherit;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.badge-button:hover:not(:disabled) {
+  background: var(--primary);
+  color: #fff;
+}
+
+.badge-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* Wider modal for list popups */
+.modal-list { max-width: 680px; }
+
 /* Pagination */
 .pagination {
   display: flex;
