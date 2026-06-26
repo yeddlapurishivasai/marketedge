@@ -1,20 +1,24 @@
-import { useState, useEffect, useCallback, createContext, useContext } from 'react';
+import { useState, useEffect, useCallback, useContext } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, useParams, useNavigate } from 'react-router-dom';
 import type { Market, Sector, Stock } from './api';
 import { fetchSectors, fetchStocks, createSector, renameSector, deleteSector, deleteStock, moveStocks } from './api';
 import { formatMarketCap } from './format';
+import { ThemeContext } from './theme';
 import {
   Sun, Moon, ChevronLeft, Search, Plus, Pencil, Trash2,
   ArrowRightLeft, X, TrendingUp, LayoutGrid, BarChart3,
-  IndianRupee, DollarSign, ChevronRight, Activity, Target
+  IndianRupee, DollarSign, ChevronRight, Activity, Target, Database, Radar, LineChart
 } from 'lucide-react';
 import JobsPage from './pages/JobsPage';
 import AnalysisPage from './pages/AnalysisPage';
+import AdminPage from './pages/AdminPage';
+import StockLookupPage, { StockLookupModal } from './pages/StockLookupPage';
+import ScannersPage from './pages/ScannersPage';
+import FundamentalsPage from './pages/FundamentalsPage';
+import TradesPage from './pages/TradesPage';
 import './styles.css';
 
 // Theme context
-const ThemeContext = createContext<{ theme: string; toggle: () => void }>({ theme: 'light', toggle: () => {} });
-
 function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState(() => localStorage.getItem('me-theme') || 'light');
   useEffect(() => {
@@ -68,9 +72,14 @@ function NavBar() {
           <div className="nav-brand-icon"><TrendingUp size={18} /></div>
           <span className="nav-brand-text">MarketEdge</span>
         </NavLink>
-        <button className="btn btn-ghost" onClick={toggle} title="Toggle theme">
-          {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
-        </button>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <NavLink to="/admin" className="btn btn-ghost" title="Admin">
+            <Database size={18} />
+          </NavLink>
+          <button className="btn btn-ghost" onClick={toggle} title="Toggle theme">
+            {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
+          </button>
+        </div>
       </div>
     </header>
   );
@@ -88,8 +97,14 @@ function App() {
             <Route path="/:market/sectors" element={<SectorsPage />} />
             <Route path="/:market/sectors/:sectorId" element={<SectorDetail />} />
             <Route path="/:market/stocks" element={<StocksPage />} />
+            <Route path="/:market/lookup" element={<StockLookupPage />} />
+            <Route path="/:market/lookup/:symbol" element={<StockLookupPage />} />
             <Route path="/:market/analysis" element={<AnalysisPage />} />
+            <Route path="/:market/scanners" element={<ScannersPage />} />
+            <Route path="/:market/fundamentals" element={<FundamentalsPage />} />
+            <Route path="/:market/trades" element={<TradesPage />} />
             <Route path="/:market/jobs" element={<JobsPage />} />
+            <Route path="/admin" element={<AdminPage />} />
           </Routes>
         </div>
       </BrowserRouter>
@@ -147,7 +162,7 @@ function MarketMenu() {
           <div className="menu-card-icon stocks"><BarChart3 size={22} /></div>
           <div className="menu-card-text">
             <h3>Stocks</h3>
-            <p>Search, move, and manage stocks</p>
+            <p>Search, manage &amp; view chart, metrics and analyst data</p>
           </div>
           <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
         </div>
@@ -156,6 +171,30 @@ function MarketMenu() {
           <div className="menu-card-text">
             <h3>Stage 2 Analysis</h3>
             <p>RS, momentum &amp; sector rotation</p>
+          </div>
+          <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
+        </div>
+        <div className="menu-card" onClick={() => navigate(`/${m}/scanners`)}>
+          <div className="menu-card-icon analysis"><Radar size={22} /></div>
+          <div className="menu-card-text">
+            <h3>Technical Scanners</h3>
+            <p>Screen the universe for technical setups</p>
+          </div>
+          <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
+        </div>
+        <div className="menu-card" onClick={() => navigate(`/${m}/fundamentals`)}>
+          <div className="menu-card-icon analysis"><LineChart size={22} /></div>
+          <div className="menu-card-text">
+            <h3>Fundamental Scanners</h3>
+            <p>Earnings, margins &amp; growth from reported results</p>
+          </div>
+          <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
+        </div>
+        <div className="menu-card" onClick={() => navigate(`/${m}/trades`)}>
+          <div className="menu-card-icon analysis"><TrendingUp size={22} /></div>
+          <div className="menu-card-text">
+            <h3>Scores &amp; Trades</h3>
+            <p>Swing/positional scores &amp; the paper-trade blotter</p>
           </div>
           <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
         </div>
@@ -311,6 +350,7 @@ function SectorDetail() {
   const { market, sectorId } = useParams<{ market: string; sectorId: string }>();
   const m = market as Market;
   const sid = Number(sectorId);
+  const [lookupSymbol, setLookupSymbol] = useState<string | null>(null);
 
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -421,13 +461,15 @@ function SectorDetail() {
             </thead>
             <tbody>
               {stocks.map(st => (
-                <tr key={st.id}>
-                  <td><input type="checkbox" className="checkbox" checked={selected.has(st.id)} onChange={() => toggleSelect(st.id)} /></td>
-                  <td className="cell-symbol">{st.symbol}</td>
+                <tr key={st.id} className="row-clickable" onClick={() => setLookupSymbol(st.symbol)}>
+                  <td onClick={e => e.stopPropagation()}><input type="checkbox" className="checkbox" checked={selected.has(st.id)} onChange={() => toggleSelect(st.id)} /></td>
+                  <td className="cell-symbol">
+                    <button className="stock-link" onClick={e => { e.stopPropagation(); setLookupSymbol(st.symbol); }}>{st.symbol}</button>
+                  </td>
                   <td>{st.companyName}</td>
                   <td style={{ textAlign: 'right' }}>{formatMarketCap(st.marketCap, m)}</td>
                   <td className="cell-center">{st.isFno ? <span className="badge badge-count">F&amp;O</span> : <span className="cell-muted">-</span>}</td>
-                  <td className="cell-actions">
+                  <td className="cell-actions" onClick={e => e.stopPropagation()}>
                     <button className="btn btn-ghost btn-sm" onClick={() => { setSelected(new Set([st.id])); setShowMove(true); }}>
                       <ArrowRightLeft size={14} />
                     </button>
@@ -468,6 +510,10 @@ function SectorDetail() {
         </div>
       </Modal>
 
+      {lookupSymbol && (
+        <StockLookupModal market={m} symbol={lookupSymbol} onClose={() => setLookupSymbol(null)} />
+      )}
+
       {toastEl}
     </div>
   );
@@ -476,6 +522,7 @@ function SectorDetail() {
 function StocksPage() {
   const { market } = useParams<{ market: string }>();
   const m = market as Market;
+  const [lookupSymbol, setLookupSymbol] = useState<string | null>(null);
 
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -592,14 +639,16 @@ function StocksPage() {
             </thead>
             <tbody>
               {stocks.map(st => (
-                <tr key={st.id}>
-                  <td><input type="checkbox" className="checkbox" checked={selected.has(st.id)} onChange={() => toggleSelect(st.id)} /></td>
-                  <td className="cell-symbol">{st.symbol}</td>
+                <tr key={st.id} className="row-clickable" onClick={() => setLookupSymbol(st.symbol)}>
+                  <td onClick={e => e.stopPropagation()}><input type="checkbox" className="checkbox" checked={selected.has(st.id)} onChange={() => toggleSelect(st.id)} /></td>
+                  <td className="cell-symbol">
+                    <button className="stock-link" onClick={e => { e.stopPropagation(); setLookupSymbol(st.symbol); }}>{st.symbol}</button>
+                  </td>
                   <td>{st.companyName}</td>
                   <td className="cell-muted">{st.sectorName || '-'}</td>
                   <td style={{ textAlign: 'right' }}>{formatMarketCap(st.marketCap, m)}</td>
                   <td className="cell-center">{st.isFno ? <span className="badge badge-count">F&amp;O</span> : <span className="cell-muted">-</span>}</td>
-                  <td className="cell-actions">
+                  <td className="cell-actions" onClick={e => e.stopPropagation()}>
                     <button className="btn btn-ghost btn-sm" onClick={() => { setSelected(new Set([st.id])); setShowMove(true); }}>
                       <ArrowRightLeft size={14} />
                     </button>
@@ -639,6 +688,10 @@ function StocksPage() {
           </select>
         </div>
       </Modal>
+
+      {lookupSymbol && (
+        <StockLookupModal market={m} symbol={lookupSymbol} onClose={() => setLookupSymbol(null)} />
+      )}
 
       {toastEl}
     </div>

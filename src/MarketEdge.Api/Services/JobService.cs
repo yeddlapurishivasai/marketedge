@@ -17,6 +17,8 @@ public interface IJobService
     Task<List<SectorRotationDto>> GetSectorRotationAsync(int runId);
     Task<List<Stage2HistoryDto>> GetStage2HistoryAsync(string market, int maxRuns = 10);
     Task<List<SectorRotationHistoryDto>> GetSectorRotationHistoryAsync(string market, int maxRuns = 12);
+    Task<JobScheduleDto> GetStage2ScheduleAsync(string market);
+    Task<JobScheduleDto> UpdateStage2ScheduleAsync(string market, UpdateJobScheduleRequest request);
 }
 
 public class JobService : IJobService
@@ -50,6 +52,46 @@ public class JobService : IJobService
     {
         var job = await _db.JobRuns.FindAsync(id);
         return job == null ? null : MapJobRun(job);
+    }
+
+    public async Task<JobScheduleDto> GetStage2ScheduleAsync(string market)
+    {
+        var s = await _db.Stage2Schedules.FirstOrDefaultAsync(x => x.Market == market);
+        if (s == null)
+        {
+            s = new Stage2Schedule { Market = market, Enabled = true, HourLocal = 20, UpdatedAt = DateTime.UtcNow };
+            _db.Stage2Schedules.Add(s);
+            await _db.SaveChangesAsync();
+        }
+        return new JobScheduleDto(s.Market, s.Enabled, s.HourLocal, s.LastEnqueuedAt, s.UpdatedAt,
+            await Stage2LastRunAtAsync(market));
+    }
+
+    public async Task<JobScheduleDto> UpdateStage2ScheduleAsync(string market, UpdateJobScheduleRequest request)
+    {
+        var s = await _db.Stage2Schedules.FirstOrDefaultAsync(x => x.Market == market);
+        if (s == null)
+        {
+            s = new Stage2Schedule { Market = market };
+            _db.Stage2Schedules.Add(s);
+        }
+        s.Enabled = request.Enabled;
+        if (request.HourLocal is int h && h is >= 0 and <= 23) s.HourLocal = h;
+        s.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return new JobScheduleDto(s.Market, s.Enabled, s.HourLocal, s.LastEnqueuedAt, s.UpdatedAt,
+            await Stage2LastRunAtAsync(market));
+    }
+
+    private async Task<DateTime?> Stage2LastRunAtAsync(string market)
+    {
+        var job = await _db.JobRuns
+            .Where(j => j.JobType == "stage2_analysis" && j.Market == market)
+            .OrderByDescending(j => j.Id)
+            .Select(j => new { j.CompletedAt, j.StartedAt, j.CreatedAt })
+            .FirstOrDefaultAsync();
+        if (job == null) return null;
+        return job.CompletedAt ?? job.StartedAt ?? job.CreatedAt;
     }
 
     public async Task<int> TriggerStageAnalysisAsync(string market, TriggerAnalysisRequest? request)
@@ -226,6 +268,8 @@ public class JobService : IJobService
                 .ToList()
         };
 
+        await PopulateRsRatingsAsync(market, summary.Top25);
+
         return summary;
     }
 
@@ -254,11 +298,13 @@ public class JobService : IJobService
         if (sectorId.HasValue)
             query = query.Where(r => r.SectorId == sectorId.Value);
 
-        return await query
+        var dtos = await query
             .OrderByDescending(r => r.RSScore)
             .ThenByDescending(r => r.MomentumScore)
             .Select(r => MapResult(r))
             .ToListAsync();
+        await PopulateRsRatingsAsync(job.Market, dtos);
+        return dtos;
     }
 
     public async Task<List<SectorRotationDto>> GetSectorRotationAsync(int runId)
@@ -406,6 +452,35 @@ public class JobService : IJobService
                 ? (j.CompletedAt.Value - j.StartedAt.Value).TotalSeconds
                 : null
         };
+    }
+
+    private async Task PopulateRsRatingsAsync(string market, List<StageAnalysisResultDto> dtos)
+    {
+        if (dtos.Count == 0) return;
+        var symbols = dtos.Select(d => d.Symbol).Distinct().ToList();
+
+        Dictionary<string, int?> map;
+        if (market == "india")
+        {
+            var techs = await _db.IndianTickerTechnical
+                .Where(t => symbols.Contains(t.Ticker) && t.Rs != null)
+                .Select(t => new { t.Ticker, t.AsOfDate, t.Rs })
+                .ToListAsync();
+            map = techs.GroupBy(t => t.Ticker)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.AsOfDate).First().Rs);
+        }
+        else
+        {
+            var techs = await _db.USTickerTechnical
+                .Where(t => symbols.Contains(t.Ticker) && t.Rs != null)
+                .Select(t => new { t.Ticker, t.AsOfDate, t.Rs })
+                .ToListAsync();
+            map = techs.GroupBy(t => t.Ticker)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.AsOfDate).First().Rs);
+        }
+
+        foreach (var d in dtos)
+            if (map.TryGetValue(d.Symbol, out var rs)) d.RsRating = rs;
     }
 
     private static StageAnalysisResultDto MapResult(StageAnalysisResultBase r)

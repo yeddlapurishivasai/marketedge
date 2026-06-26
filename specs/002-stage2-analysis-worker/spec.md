@@ -4,28 +4,39 @@
 
 **Created**: 2026-06-24
 
-**Status**: Backtracked (documents existing behavior)
+**Status**: Updated (base-data source change)
 
 **Input**: Reverse-engineered from the existing Python worker
 (`src/MarketEdge.Worker`): `worker.py`, `stage_analysis.py`, `db.py`, `app.py`,
 `config.py`, `test_e2e_worker.py`, plus the shared schema in
 `src/MarketEdge.Database`.
 
+> **Base-data change (depends on `specs/005-data-ingestion/`)**: The worker no longer
+> fetches price/benchmark/market-cap **live from yfinance**. It now reads the locally
+> **ingested** base data — daily OHLCV from `{Indian|US}Bars1D` (including the
+> benchmark, ingested as a ticker) and market cap from `{Indian|US}TickerTechnical` —
+> and resamples daily bars to weekly in-process. All Stage 2 / sector-rotation
+> formulas, thresholds, and persistence are unchanged; only the data source moves from
+> the network to SQL Server. Sections below reflect this source.
+
 > **Scope note (UI EXPLICITLY EXCLUDED)**: This specification covers ONLY the
-> Python worker: queue consumption, market-data fetching, the Stage 2 detection
+> Python worker: queue consumption, base-data reading, the Stage 2 detection
 > algorithm, result persistence, and the week-level post-processing. The React SPA
 > and any visual presentation are **out of scope**. The API is specified separately
 > (`specs/001-stage2-analysis-api/`); here it is referenced only as the producer of
-> queue messages and the consumer of the rows the worker writes.
+> queue messages and the consumer of the rows the worker writes. The base-data tables
+> and the pipeline that populates them are specified in `specs/005-data-ingestion/`.
 
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Consume a queued job and run weekly Stage 2 analysis (Priority: P1)
 
 The worker continuously listens to the Azure Storage Queue. On a message it decodes
-the job, resolves the target week, fetches weekly price + benchmark + market-cap
-data from yfinance for the selected stock universe, computes Stage 2 metrics per
-stock, and upserts one result row per `(WeekNumber, Symbol)`.
+the job, resolves the target week, reads weekly price + benchmark + market-cap data
+from the locally **ingested base-data tables** (`{Indian|US}Bars1D` resampled to
+weekly, plus `{Indian|US}TickerTechnical` for market cap) for the selected stock
+universe, computes Stage 2 metrics per stock, and upserts one result row per
+`(WeekNumber, Symbol)`.
 
 **Why this priority**: This is the worker's entire reason to exist — turning a
 queued job into persisted analysis results.
@@ -43,9 +54,10 @@ and marks the `JobRuns` row `completed` with progress 100.
    filters, and resolves `weekNumber` (from the message or `JobRuns`).
 2. **Given** the run is already `completed`/`cancelled`, **When** processing
    starts, **Then** the worker skips it (idempotent) without re-analyzing.
-3. **Given** the target week is fully in the past, **When** fetching prices,
-   **Then** all fetches are bounded to that week's close (point-in-time); for the
-   current/ongoing week, fetches run live through today.
+3. **Given** the target week is fully in the past, **When** reading prices,
+   **Then** all reads are bounded to that week's close (`BarDate <=` week end,
+   point-in-time) from the ingested daily bars; for the current/ongoing week, reads
+   include all ingested bars through today.
 4. **Given** stocks for the market, **When** analysis runs per stock, **Then** each
    analyzed stock yields a result dict that is immediately upserted by
    `(WeekNumber, Symbol)`, and `JobRuns.Progress`/`Metrics` update after each
@@ -124,20 +136,22 @@ values and that the worker writes them back across the week's rows.
 
 ### User Story 4 - Resilience: retries, throttling, cancellation, timeout (Priority: P2)
 
-The worker tolerates flaky market data and long runtimes, honors user cancellation,
-and never deadlocks the queue.
+The worker tolerates missing/incomplete base data and long runtimes, honors user
+cancellation, and never deadlocks the queue.
 
 **Independent Test**: Cancel a run mid-flight (set `JobRuns.Status=cancelled`) and
-confirm the worker stops gracefully at the next sector boundary; simulate fetch
-failures and confirm retries with backoff.
+confirm the worker stops gracefully at the next sector boundary; remove a ticker's
+ingested bars and confirm the symbol is skipped (counted) without crashing.
 
 **Acceptance Scenarios**:
 
-1. **Given** a yfinance fetch failure, **When** fetching prices/market caps,
-   **Then** the worker retries up to `YFINANCE_MAX_RETRIES` with exponential
-   backoff and skips the symbol/batch if still failing (no crash).
-2. **Given** throttling settings, **Then** the worker sleeps between stocks and
-   (longer) between sectors to respect rate limits.
+1. **Given** a ticker has insufficient or missing ingested bars, **When** reading
+   prices/market caps from SQL Server, **Then** the worker skips that symbol (counted
+   in `skipped_stocks`) without crashing; transient SQL errors are retried with
+   backoff.
+2. **Given** base data is read from local SQL Server, **Then** inter-stock /
+   inter-sector yfinance rate-limit throttling is no longer required; any remaining
+   pacing only bounds DB load and does not gate on network rate limits.
 3. **Given** the run is cancelled in the DB, **When** the next sector/cancellation
    check runs, **Then** processing stops gracefully and the listener returns to
    idle without marking failure.
@@ -170,16 +184,18 @@ week, and restricting to the local test-sample universe for fast runs.
 
 ### Edge Cases
 
-- yfinance returns `MultiIndex` columns even for single tickers; the worker
-  flattens/deduplicates columns before computing metrics.
+- Weekly bars are derived in-process by resampling the ingested daily bars
+  (`{Indian|US}Bars1D`) to weekly; columns are already normalized at ingestion time,
+  so no `MultiIndex` flattening is needed in the worker.
 - NaN/inf metric values are converted to `NULL` before persistence
   (SQL compatibility).
-- A symbol with <30 bars or an analysis exception is skipped (counted in
+- A symbol with <30 weekly bars or an analysis exception is skipped (counted in
   `skipped_stocks`) rather than failing the run.
-- Market-cap filter: stocks with unknown market cap are skipped when any
-  `min/max` cap filter is active.
-- The benchmark is fetched once per run (`^NSEI` for India, `^GSPC` for US);
-  failure to fetch the benchmark fails the run.
+- Market-cap filter: stocks with unknown market cap (no `{Indian|US}TickerTechnical`
+  row) are skipped when any `min/max` cap filter is active.
+- The benchmark series is read once per run from the ingested daily bars of the
+  benchmark ticker (`^NSEI` for India, `^GSPC` for US); a missing/empty benchmark
+  series fails the run.
 - Health/status: the Flask `/health` and `/status` endpoints reflect the
   background listener's state without performing analysis.
 
@@ -201,16 +217,19 @@ week, and restricting to the local test-sample universe for fast runs.
   `cancelled`; resolve `weekNumber` from `JobRuns` when absent and error if none. A
   `failed` run is NOT in the skip set, so if its queue message is redelivered (the
   message is not deleted on failure) the run is re-processed.
-- **FR-005**: For a fully-past week the worker MUST bound all price/benchmark
-  fetches to the week's exclusive end (point-in-time); for the current week it MUST
-  fetch live through today.
+- **FR-005**: For a fully-past week the worker MUST bound all price/benchmark reads
+  to the week's exclusive end (`BarDate <` week-exclusive-end, point-in-time) against
+  the ingested daily bars; for the current week it MUST include all ingested bars
+  through today.
 - **FR-006**: The worker MUST select the stock universe via `get_stocks` honoring
   `sectorIds`, `limit`, `testSampleOnly`, and (in `retryFailedOnly` mode) exclude
   symbols already persisted for the week.
-- **FR-007**: The worker MUST fetch weekly OHLCV from yfinance (`1wk`, ~2y / 760d
-  window, last 60 bars), the market benchmark once (`^NSEI`/`^GSPC`), and per-stock
-  market cap via `fast_info`, with retries + exponential backoff and inter-stock /
-  inter-sector throttling.
+- **FR-007**: The worker MUST source weekly OHLCV by reading daily bars from
+  `{Indian|US}Bars1D` (per stock and for the benchmark ticker `^NSEI`/`^GSPC`) and
+  resampling to weekly (last 60 weekly bars), and MUST read per-stock market cap from
+  the most recent `{Indian|US}TickerTechnical` row at/before the week end. It MUST NOT
+  call yfinance directly; transient SQL read errors are retried with backoff. The
+  base data is produced by the ingestion pipeline (`specs/005-data-ingestion/`).
 - **FR-008**: `calculate_stage2` MUST return `None` for <30 weekly bars; otherwise
   compute `ClosePrice, MA10, MA30, RSScore, RS1w–RS3w, RSDelta1w–3w, MomentumScore,
   ROC1w–3w, Quadrant, ADRatio, ADClassification, is_stage2` per the algorithm in
@@ -219,8 +238,9 @@ week, and restricting to the local test-sample universe for fast runs.
   ∧ MA10>MA30 ∧ RSScore present ∧ RSScore>0.
 - **FR-010**: Each analyzed stock MUST be upserted immediately into the market's
   results table keyed by `(WeekNumber, Symbol)` via a MERGE, stamping the latest
-  `RunId`; NaN/inf MUST be stored as `NULL`. Freshly fetched market caps MUST be
-  upserted into the market's fundamentals table.
+  `RunId`; NaN/inf MUST be stored as `NULL`. Market caps read from
+  `{Indian|US}TickerTechnical` MAY be mirrored into the market's fundamentals table
+  during the transition, but are no longer freshly fetched from yfinance.
 - **FR-011**: After all stocks, the worker MUST post-process the FULL week snapshot:
   set `Classification` (`new`/`continuing`/`reentry`/`removed`) via
   `classify_stocks` using previous-week and ever-before Stage 2 sets; set `RSRank`
@@ -255,8 +275,11 @@ week, and restricting to the local test-sample universe for fast runs.
   `processedStocks`, `priceDataCount`, `skippedStocks`, min/max cap, plus
   `resultCount`, `newCount`, `reentryCount`, `continuingCount`, `removedCount`),
   `ErrorMessage`, `StartedAt`, `CompletedAt`.
-- **Benchmark series**: weekly Close of `^NSEI` (India) / `^GSPC` (US), fetched
-  once per run, optionally point-in-time.
+- **Ingested base data** (read inputs, from `specs/005-data-ingestion/`): daily OHLCV
+  in `{Indian|US}Bars1D` per ticker (and the benchmark ticker), resampled to weekly;
+  market cap in `{Indian|US}TickerTechnical` (latest row at/before week end).
+- **Benchmark series**: weekly Close derived from the ingested daily bars of `^NSEI`
+  (India) / `^GSPC` (US), read once per run, optionally point-in-time.
 
 ## Success Criteria *(mandatory)*
 
@@ -280,8 +303,10 @@ week, and restricting to the local test-sample universe for fast runs.
 
 - A seeded SQL Server (sectors, stocks, `IsTestSample` flags) and a reachable
   Azure Storage Queue (Azurite locally via `UseDevelopmentStorage=true`) exist.
-- yfinance is reachable and its weekly bars/benchmark symbols
-  (`.NS` suffix for India, `^NSEI`/`^GSPC`) behave as the code expects.
+- The base-data tables (`{Indian|US}Bars1D`, `{Indian|US}TickerTechnical`, and the
+  benchmark ticker) are populated by the ingestion pipeline
+  (`specs/005-data-ingestion/`) before a run; the worker reads them and makes no
+  direct yfinance calls.
 - ISO week strings use the `YYYY-Www` format produced by the API; the worker's
   `week_exclusive_end` interprets them via `date.fromisocalendar`.
 - The React SPA is out of scope; the worker has no UI responsibilities.

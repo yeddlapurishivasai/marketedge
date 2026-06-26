@@ -61,3 +61,6 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+
+# Local dev runtime state (scripts/run-local.ps1)
+.local/

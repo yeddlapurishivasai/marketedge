@@ -17,6 +17,114 @@ WEEKLY_INTERVAL = "1wk"
 WEEKLY_LOOKBACK_DAYS = 760
 MAX_MARKET_CAP_WORKERS = 5
 
+# Database-backed Stage 2 inputs (feature 010). Stage 2 reads ingested daily bars and
+# fundamentals instead of re-downloading them per stock from yfinance.
+_BARS_TABLES = {"india": "IndianBars1D", "us": "USBars1D"}
+_TECH_TABLES = {"india": "IndianTickerTechnical", "us": "USTickerTechnical"}
+# Weekly resample rule shared by the DB stock loader and the benchmark loader so their
+# weekly indices use identical (Friday) labels and align on an inner join.
+_WEEKLY_RULE = "W-FRI"
+
+
+def _resample_weekly(daily: pd.DataFrame) -> pd.DataFrame:
+    """Resample a daily OHLCV frame to weekly bars (week ending Friday)."""
+    if daily is None or daily.empty:
+        return pd.DataFrame()
+    weekly = daily.resample(_WEEKLY_RULE).agg(
+        {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+    )
+    return weekly.dropna(subset=["Close"])
+
+
+def load_weekly_price_from_db(conn, market: str, symbol: str, end_date: date | None = None) -> pd.DataFrame:
+    """Load a symbol's ingested daily bars from ``{Market}Bars1D`` and resample to weekly.
+
+    When ``end_date`` is provided the history is bounded (``BarDate < end_date``) so a past
+    week is analysed point-in-time. Returns an empty frame when the symbol has no bars.
+    """
+    bars_table = _BARS_TABLES.get(market.lower())
+    if bars_table is None:
+        raise ValueError(f"Unsupported market: {market}")
+
+    where = ["Ticker = ?"]
+    params: list = [symbol]
+    if end_date is not None:
+        where.append("BarDate < ?")
+        params.append(end_date)
+
+    sql = (
+        f"SELECT BarDate, [Open], [High], [Low], [Close], [Volume] "
+        f"FROM dbo.{bars_table} WHERE {' AND '.join(where)} ORDER BY BarDate"
+    )
+    rows = conn.cursor().execute(sql, params).fetchall()
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(
+        [
+            (
+                pd.Timestamp(r.BarDate),
+                float(r.Open) if r.Open is not None else None,
+                float(r.High) if r.High is not None else None,
+                float(r.Low) if r.Low is not None else None,
+                float(r.Close) if r.Close is not None else None,
+                float(r.Volume) if r.Volume is not None else 0.0,
+            )
+            for r in rows
+        ],
+        columns=["Date", "Open", "High", "Low", "Close", "Volume"],
+    ).set_index("Date")
+    return _resample_weekly(df)
+
+
+def load_market_cap_from_db(conn, market: str, symbol: str) -> int | None:
+    """Latest non-null market cap for a symbol from ``{Market}TickerTechnical``."""
+    tech_table = _TECH_TABLES.get(market.lower())
+    if tech_table is None:
+        return None
+    sql = (
+        f"SELECT TOP 1 MarketCap FROM dbo.{tech_table} "
+        f"WHERE Ticker = ? AND MarketCap IS NOT NULL ORDER BY AsOfDate DESC"
+    )
+    row = conn.cursor().execute(sql, [symbol]).fetchone()
+    return int(row.MarketCap) if row and row.MarketCap is not None else None
+
+
+def fetch_benchmark_weekly_from_daily(market: str, end_date: date | None = None) -> pd.DataFrame:
+    """Fetch the market index once per run as daily bars and resample to weekly.
+
+    The index (^NSEI / ^GSPC) is not part of the ingested stock universe, so this is the only
+    remaining yfinance call in the DB-backed Stage 2 path — one download per run, not per stock.
+    Resampled with the same weekly rule as ``load_weekly_price_from_db`` so the indices align.
+    """
+    benchmark_symbol = "^NSEI" if market.lower() == "india" else "^GSPC"
+    logger.info(
+        "Fetching benchmark daily data for %s using %s%s",
+        market, benchmark_symbol, f" as of {end_date}" if end_date else "",
+    )
+    if end_date is not None:
+        start_date = end_date - timedelta(days=WEEKLY_LOOKBACK_DAYS)
+        raw = yf.download(
+            tickers=benchmark_symbol, start=start_date.isoformat(), end=end_date.isoformat(),
+            interval="1d", auto_adjust=False, progress=False, threads=False,
+        )
+    else:
+        raw = yf.download(
+            tickers=benchmark_symbol, period=WEEKLY_LOOKBACK_PERIOD,
+            interval="1d", auto_adjust=False, progress=False, threads=False,
+        )
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw = raw.droplevel("Ticker", axis=1) if "Ticker" in raw.columns.names else raw.droplevel(0, axis=1)
+    raw = raw.dropna(how="all")
+    if raw.empty or "Close" not in raw.columns:
+        raise ValueError(f"Unable to fetch benchmark data for market {market}")
+
+    weekly = _resample_weekly(raw)
+    if weekly.empty:
+        raise ValueError(f"Unable to fetch benchmark data for market {market}")
+    return weekly.tail(60)
+
 
 def week_exclusive_end(week_number: str) -> date | None:
     """Return the exclusive end date (the Monday AFTER the ISO week) for 'YYYY-Www'.

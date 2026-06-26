@@ -39,6 +39,14 @@ function formatJobType(type: string): string {
   return type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
+const JOB_TYPES = [
+  { value: '', label: 'All types' },
+  { value: 'data_ingestion', label: 'Data Ingestion' },
+  { value: 'stage2_analysis', label: 'Stage 2 Analysis' },
+  { value: 'scanner', label: 'Scanner' },
+  { value: 'stock_refresh', label: 'Stock Refresh' },
+];
+
 export default function JobsPage() {
   const { market } = useParams<{ market: string }>();
   const navigate = useNavigate();
@@ -48,14 +56,15 @@ export default function JobsPage() {
   const [loading, setLoading] = useState(true);
   const [selectedRun, setSelectedRun] = useState<JobRun | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [jobType, setJobType] = useState('');
 
   const load = useCallback(async () => {
     try {
-      const data = await fetchJobRuns({ market: m, pageSize: 50 });
+      const data = await fetchJobRuns({ market: m, jobType: jobType || undefined, pageSize: 50 });
       setRuns(data);
     } catch { /* ignore */ }
     setLoading(false);
-  }, [m]);
+  }, [m, jobType]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -65,7 +74,7 @@ export default function JobsPage() {
     const hasActive = runs.some(r => r.status === 'running' || r.status === 'queued');
     if (!hasActive) return;
     const interval = setInterval(async () => {
-      const data = await fetchJobRuns({ market: m, pageSize: 50 });
+      const data = await fetchJobRuns({ market: m, jobType: jobType || undefined, pageSize: 50 });
       setRuns(data);
       if (selectedRun && (selectedRun.status === 'running' || selectedRun.status === 'queued')) {
         const updated = await fetchJobRun(selectedRun.id);
@@ -73,7 +82,7 @@ export default function JobsPage() {
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [autoRefresh, runs, m, selectedRun]);
+  }, [autoRefresh, runs, m, selectedRun, jobType]);
 
   const handleRowClick = async (run: JobRun) => {
     try {
@@ -110,6 +119,16 @@ export default function JobsPage() {
         </h1>
         <span className="page-subtitle">{market === 'india' ? '🇮🇳 India' : '🇺🇸 US'}</span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <select
+            className="select-input"
+            value={jobType}
+            onChange={e => setJobType(e.target.value)}
+            title="Filter by job type"
+          >
+            {JOB_TYPES.map(t => (
+              <option key={t.value} value={t.value}>{t.label}</option>
+            ))}
+          </select>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
             <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} />
             Auto-refresh

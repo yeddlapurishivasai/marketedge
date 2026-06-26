@@ -93,11 +93,40 @@ description: "Validation/documentation tasks for the backtracked Stage 2 Analysi
   with internet access; confirm rows are written and the documented fields are
   populated for at least one Stage 2 and one non-Stage 2 stock (SC-001..SC-002).
 
-## Dependencies
+## Phase 8: Migrate to Ingested Base Data (US1) — base-data source change
+
+> Implements the data-source change in `spec.md` / `contracts/algorithm.md`: replace
+> live yfinance fetching with reads from the ingested tables (depends on
+> `specs/005-data-ingestion/`). Validation tasks above documented the prior
+> fetch-based behavior; these tasks change it.
+
+- [ ] T023 [US1] Add `db.py` readers for base data: `get_daily_bars(market, symbol,
+  end_exclusive=None)` and `get_benchmark_daily_bars(market, end_exclusive=None)`
+  selecting from `{Indian|US}Bars1D`, and `get_market_cap(market, symbol, as_of)`
+  selecting the latest `{Indian|US}TickerTechnical` row at/before the week end
+  (FR-005, FR-007).
+- [ ] T024 [US1] In `stage_analysis.py`, replace the yfinance fetch functions with a
+  daily→weekly resample (W-FRI) of the rows from T023, trimmed to the last 60 weekly
+  bars, preserving point-in-time bounding via `week_exclusive_end` (FR-005, FR-007).
+- [ ] T025 [US1] Remove the per-stock `fast_info` market-cap fetch and source market
+  cap from `get_market_cap`; keep the `min/max` cap filter behavior and the optional
+  mirror into `{Indian|US}StockFundamentals` (FR-010).
+- [ ] T026 [US4] Update resilience: drop yfinance retry/backoff + rate-limit
+  throttling; on missing/insufficient ingested bars skip-and-count the symbol; retry
+  only transient SQL read errors (updated US4 scenarios 1–2).
+- [ ] T027 Retire `YFINANCE_*` settings from `config.py` and remove `yfinance` from
+  the worker's dependencies; confirm `import app` still succeeds (FR-001).
+- [ ] T028 Update `test_e2e_worker.py` to seed a small ingested-bars fixture (incl.
+  the benchmark) and run the pipeline with **zero** network calls; assert at least one
+  Stage 2 and one non-Stage 2 stock are produced (SC-001..SC-003 of `005`).
+
+
 
 - T001 precedes all validation tasks.
 - Phase 3 (algorithm) before Phase 4 (post-processing depends on per-stock fields).
 - T022 (E2E) depends on Phases 2–6.
+- Phase 8 (T023–T028) depends on `specs/005-data-ingestion/` (base-data tables
+  populated) and supersedes the fetch behavior validated in T005/T006/T016/T022.
 
 ## Out of Scope (do NOT create tasks for)
 
