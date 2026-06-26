@@ -82,9 +82,7 @@ def _load_bars(
     sample_clause = ""
     if test_sample_only:
         sample_clause = (
-            f" AND b.Ticker IN (SELECT Symbol FROM dbo.{stocks_table} WHERE IsTestSample = 1)"
-            if symbols
-            else f"b.Ticker IN (SELECT Symbol FROM dbo.{stocks_table} WHERE IsTestSample = 1)"
+            f"b.Ticker IN (SELECT Symbol FROM dbo.{stocks_table} WHERE IsTestSample = 1)"
         )
 
     cursor = conn.cursor()
@@ -105,10 +103,16 @@ def _load_bars(
         for start in range(0, len(symbols), batch_size):
             chunk = symbols[start:start + batch_size]
             placeholders = ",".join("?" * len(chunk))
-            where_sql = f"WHERE b.Ticker IN ({placeholders}){sample_clause}"
+            # Skip partial/placeholder bars with no close so offset-0 snapshots
+            # use the latest *valid* close rather than breaking on a NULL.
+            where_sql = f"WHERE b.[Close] IS NOT NULL AND b.Ticker IN ({placeholders})"
+            if sample_clause:
+                where_sql += f" AND {sample_clause}"
             _run(where_sql, list(chunk))
     else:
-        where_sql = f"WHERE {sample_clause}" if sample_clause else ""
+        where_sql = "WHERE b.[Close] IS NOT NULL"
+        if sample_clause:
+            where_sql += f" AND {sample_clause}"
         _run(where_sql, [])
 
     if not rows:

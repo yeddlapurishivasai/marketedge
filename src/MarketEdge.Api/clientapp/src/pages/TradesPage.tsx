@@ -103,6 +103,7 @@ function ConfidenceRationale({ trade }: { trade: Trade }) {
           its profile weight: <code>100 × Σ(weight × score) / Σ(weight)</code> over the available components.
         </span>
       </div>
+      <div className="table-scroll">
       <table className="table" style={{ fontSize: '0.82rem' }}>
         <thead>
           <tr>
@@ -131,6 +132,7 @@ function ConfidenceRationale({ trade }: { trade: Trade }) {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -212,6 +214,7 @@ function ScoreBreakdown({ comp, profile }: { comp: ScoreComponents; profile: Tra
           </div>
         </div>
       )}
+      <div className="table-scroll">
       <table className="table" style={{ fontSize: '0.82rem' }}>
         <thead>
           <tr>
@@ -237,6 +240,7 @@ function ScoreBreakdown({ comp, profile }: { comp: ScoreComponents; profile: Tra
           )}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

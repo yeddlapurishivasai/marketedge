@@ -294,9 +294,9 @@ export default function ScannersPage() {
       {loading ? (
         <div className="loading"><div className="spinner" />Loading scanners...</div>
       ) : (
-        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+        <div className="split-layout" style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
           {/* Side panel */}
-          <div className="card" style={{ width: 260, flexShrink: 0, padding: 8, maxHeight: '70vh', overflowY: 'auto' }}>
+          <div className="card split-side" style={{ width: 260, flexShrink: 0, padding: 8, maxHeight: '70vh', overflowY: 'auto' }}>
             {Object.entries(groups).map(([family, items]) => (
               <div key={family} style={{ marginBottom: 8 }}>
                 <div style={{ fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', padding: '6px 10px 2px' }}>

@@ -340,9 +340,9 @@ export default function FundamentalsPage() {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+      <div className="split-layout" style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
         {/* Filters */}
-        <div className="card" style={{ width: 240, flexShrink: 0, padding: 8 }}>
+        <div className="card split-side" style={{ width: 240, flexShrink: 0, padding: 8 }}>
           <div style={{ fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', padding: '6px 10px 4px' }}>
             Filters
           </div>

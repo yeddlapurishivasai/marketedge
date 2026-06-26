@@ -30,14 +30,14 @@ function ThemeProvider({ children }: { children: React.ReactNode }) {
 }
 
 // Modal component
-function Modal({ open, title, onClose, children, footer }: {
+function Modal({ open, title, onClose, children, footer, className }: {
   open: boolean; title: string; onClose: () => void;
-  children: React.ReactNode; footer?: React.ReactNode;
+  children: React.ReactNode; footer?: React.ReactNode; className?: string;
 }) {
   if (!open) return null;
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={e => e.stopPropagation()}>
+      <div className={`modal${className ? ` ${className}` : ''}`} onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <h3 className="modal-title">{title}</h3>
           <button className="modal-close" onClick={onClose}><X size={18} /></button>
@@ -211,6 +211,67 @@ function MarketMenu() {
   );
 }
 
+function SectorStocksModal({ market, sector, onClose, onPickSymbol }: {
+  market: Market; sector: Sector; onClose: () => void; onPickSymbol: (symbol: string) => void;
+}) {
+  const [stocks, setStocks] = useState<Stock[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    fetchStocks(market, { sectorId: sector.id, pageSize: 2000 })
+      .then(r => { if (active) setStocks(r.items); })
+      .catch(() => { if (active) setStocks([]); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [market, sector.id]);
+
+  const filtered = stocks.filter(s =>
+    s.symbol.toLowerCase().includes(search.toLowerCase()) ||
+    s.companyName.toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <Modal open className="modal-list"
+      title={`${sector.sectorName} — ${sector.stockCount} stock${sector.stockCount === 1 ? '' : 's'}`}
+      onClose={onClose}>
+      {loading ? (
+        <div className="loading"><div className="spinner" /> Loading stocks...</div>
+      ) : (
+        <>
+          <input className="search-input" style={{ marginBottom: 12 }} placeholder="Filter stocks..."
+            value={search} onChange={e => setSearch(e.target.value)} autoFocus />
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Company Name</th>
+                  <th style={{ textAlign: 'right' }}>Market Cap</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(s => (
+                  <tr key={s.id}>
+                    <td className="cell-symbol">
+                      <button className="stock-link" onClick={() => onPickSymbol(s.symbol)}>{s.symbol}</button>
+                    </td>
+                    <td>{s.companyName}</td>
+                    <td style={{ textAlign: 'right' }} className="cell-muted">{formatMarketCap(s.marketCap, market)}</td>
+                  </tr>
+                ))}
+                {filtered.length === 0 && (
+                  <tr><td colSpan={3} className="cell-muted">No stocks found.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
 function SectorsPage() {
   const { market } = useParams<{ market: string }>();
   const m = market as Market;
@@ -221,6 +282,8 @@ function SectorsPage() {
   const [newName, setNewName] = useState('');
   const [renaming, setRenaming] = useState<Sector | null>(null);
   const [renameVal, setRenameVal] = useState('');
+  const [stocksFor, setStocksFor] = useState<Sector | null>(null);
+  const [lookupSymbol, setLookupSymbol] = useState<string | null>(null);
   const { show, el: toastEl } = useToast();
 
   const load = useCallback(async () => {
@@ -302,7 +365,14 @@ function SectorsPage() {
                       {s.sectorName}
                     </NavLink>
                   </td>
-                  <td className="cell-center"><span className="badge badge-count">{s.stockCount}</span></td>
+                  <td className="cell-center">
+                    <button className="badge badge-count badge-button"
+                      onClick={() => setStocksFor(s)}
+                      disabled={s.stockCount === 0}
+                      title={s.stockCount === 0 ? 'No stocks' : 'View stocks'}>
+                      {s.stockCount}
+                    </button>
+                  </td>
                   <td className="cell-actions">
                     <button className="btn btn-ghost btn-sm" onClick={() => { setRenaming(s); setRenameVal(s.sectorName); }}>
                       <Pencil size={14} />
@@ -340,6 +410,18 @@ function SectorsPage() {
             autoFocus onKeyDown={e => e.key === 'Enter' && handleRename()} />
         </div>
       </Modal>
+
+      {/* Sector stocks popup */}
+      {stocksFor && (
+        <SectorStocksModal market={m} sector={stocksFor}
+          onClose={() => setStocksFor(null)}
+          onPickSymbol={sym => { setStocksFor(null); setLookupSymbol(sym); }} />
+      )}
+
+      {/* Stock lookup popup */}
+      {lookupSymbol && (
+        <StockLookupModal market={m} symbol={lookupSymbol} onClose={() => setLookupSymbol(null)} />
+      )}
 
       {toastEl}
     </div>

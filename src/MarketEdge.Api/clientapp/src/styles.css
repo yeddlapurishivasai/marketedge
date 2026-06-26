@@ -451,8 +451,16 @@ body {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  overflow: hidden;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   box-shadow: var(--shadow-sm);
+}
+
+/* Horizontal scroll wrapper for standalone tables (no .table-container) */
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .card {
@@ -564,6 +572,27 @@ body {
   background: var(--border-light);
   color: var(--text-secondary);
 }
+
+/* Clickable count badge (opens a popup) */
+.badge-button {
+  border: none;
+  font-family: inherit;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.badge-button:hover:not(:disabled) {
+  background: var(--primary);
+  color: #fff;
+}
+
+.badge-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* Wider modal for list popups */
+.modal-list { max-width: 680px; }
 
 /* Pagination */
 .pagination {
@@ -1299,3 +1328,51 @@ body {
 .lookup-modal { max-width: 1100px; width: 92vw; }
 .lookup-modal .modal-body { max-height: 82vh; overflow-y: auto; }
 .lookup-modal .lookup-body { padding-top: 4px; }
+
+/* ───────────────────────── Responsive: tablet & mobile ───────────────────────── */
+
+/* Tablet and below — stack side-by-side panel layouts */
+@media (max-width: 1024px) {
+  .jobs-layout { flex-direction: column; }
+  .run-detail-panel { width: 100%; position: static; top: auto; }
+  .split-layout { flex-direction: column; }
+  .split-side { width: 100% !important; max-height: none !important; }
+}
+
+/* Allow flex children of split layouts to shrink so inner tables can scroll */
+.split-layout > * { min-width: 0; }
+
+/* Tablet / small laptop */
+@media (max-width: 768px) {
+  .page { padding: 20px 16px; }
+  .nav-header { padding: 12px 16px; }
+  .page-header { margin-bottom: 20px; gap: 12px; }
+  .page-title { font-size: 1.4rem; }
+  .home-hero { padding: 32px 16px; }
+  .home-title { font-size: 1.75rem; }
+  .home-desc { font-size: 1rem; margin-bottom: 32px; }
+  .market-cards { grid-template-columns: 1fr; }
+  .menu-grid { grid-template-columns: 1fr; }
+  .stats-row { flex-direction: column; }
+  .analysis-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; }
+  .analysis-tab { white-space: nowrap; }
+  .lookup-header-bar { flex-direction: column; align-items: stretch; }
+  .lookup-search { flex-wrap: wrap; }
+  .lookup-search-input { flex: 1; }
+  .lookup-search-input input { width: 100%; }
+  .prop-grid { grid-template-columns: 1fr; }
+  .modal { max-width: calc(100% - 24px); }
+}
+
+/* Mobile */
+@media (max-width: 480px) {
+  .page { padding: 16px 12px; }
+  .toolbar { flex-direction: column; }
+  .search-input, .select-input { width: 100%; min-width: 0; }
+  .metric-grid { grid-template-columns: repeat(2, 1fr); }
+  .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+  .table th, .table td { padding: 10px 12px; }
+  .home-title { font-size: 1.5rem; }
+  .lookup-symbol { font-size: 1.4rem; }
+  .lookup-company { font-size: 1rem; }
+}
