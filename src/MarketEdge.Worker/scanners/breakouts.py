@@ -1,8 +1,8 @@
-"""Paper-trade engine driven by scanner breakouts.
+"""Paper-breakout engine driven by scanner breakouts.
 
 Runs as part of every scanner job (the 15-minute scheduled run). On each run it:
 
-1. **Manages** every open paper trade against the latest daily bar:
+1. **Manages** every open paper breakout against the latest daily bar:
    * updates ``LastPrice`` / ``PnLPct`` and the MFE/MAE excursions,
    * for **swing** trades: once price moves ``+1R`` the stop jumps to breakeven and
      thereafter trails the 10-period SMA,
@@ -40,7 +40,7 @@ from . import weights as wmod
 
 logger = logging.getLogger(__name__)
 
-_TRADES = {"india": "IndianTrades", "us": "USTrades"}
+_BREAKOUTS = {"india": "IndianBreakouts", "us": "USBreakouts"}
 
 _SWING_STOP_PCT = 0.06      # initial swing stop
 _POS_STOP_FALLBACK = 0.10   # positional floor: trade always gets >= this much room
@@ -67,7 +67,7 @@ _SHORT_SCANNERS = {"NSE_CSS"}
 
 
 def _t(market: str) -> str:
-    t = _TRADES.get(market.lower())
+    t = _BREAKOUTS.get(market.lower())
     if t is None:
         raise ValueError(f"Unsupported market: {market}")
     return t
@@ -115,16 +115,28 @@ def _volume_confirmed(series, idx: int) -> bool:
 
     If volume history is missing/insufficient we don't block the entry.
     """
+    rv = _breakout_rel_vol(series, idx)
+    return True if rv is None else rv >= _VOL_MULT
+
+
+def _breakout_rel_vol(series, idx: int | None = None) -> float | None:
+    """Relative volume (bar volume / 20-day average volume) at ``idx`` (default latest).
+
+    ``None`` when there isn't enough history or the data is unusable -- the breakout
+    volume score then drops out of the breakout-confidence blend.
+    """
     if series is None or series.n < _VOL_AVG:
-        return True
+        return None
+    if idx is None:
+        idx = series.last
     try:
         avg = float(series.avg_vol(_VOL_AVG)[idx])
         vol = float(series.volume[idx])
     except (IndexError, ValueError, TypeError):
-        return True
+        return None
     if math.isnan(avg) or avg <= 0 or math.isnan(vol):
-        return True
-    return vol >= avg * _VOL_MULT
+        return None
+    return vol / avg
 
 
 def _series_metrics(series) -> dict[str, float | None]:
@@ -247,12 +259,8 @@ def _manage_trade(conn, market: str, t: dict, series, flagged_now: list[str]) ->
         logger.info("Closed %s %s %s @ %.2f pnl=%.2f%% (%s)",
                     market, t["trade_type"], t["ticker"], last, pnl, exit_reason)
         conn.commit()
-        # Self-adjusting feedback: nudge the triggering scanner's pattern weight
-        # toward this realised outcome (skips manually-overridden weights).
-        try:
-            wmod.adapt_pattern_weight(conn, market, t.get("entry_scanner"), won=pnl > 0)
-        except Exception:  # noqa: BLE001 - weight adaptation must never abort trade mgmt
-            logger.exception("Pattern-weight adaptation failed for %s", t.get("ticker"))
+        # No weight nudging: a scanner's reliability is its Wilson lower bound over the
+        # paper-breakout record, recomputed every run -- this closed trade now feeds it.
         return
     else:
         cur.execute(
@@ -267,7 +275,8 @@ def _manage_trade(conn, market: str, t: dict, series, flagged_now: list[str]) ->
 
 def _open_trade(conn, market: str, ticker: str, company: str | None, trade_type: str,
                 direction: str, entry: float, series, scanners: list[str],
-                weights: dict[str, Any] | None = None) -> dict:
+                weights: dict[str, Any] | None = None,
+                reliability: dict[str, Any] | None = None) -> dict:
     table = _t(market)
     m = _series_metrics(series)
 
@@ -296,18 +305,20 @@ def _open_trade(conn, market: str, ticker: str, company: str | None, trade_type:
     qty = max(1, int(_NOTIONAL.get(market.lower(), 100_000.0) // entry)) if entry > 0 else 0
     entry_scanner = scanners[0] if scanners else None
 
-    # Trade-confidence: blend the triggering pattern's adaptive weight with the
-    # symbol's fundamentals and EPS upside per the profile's mix weights.
+    # Breakout-confidence: blend the setup reliability (Wilson LB of the flagging
+    # scanners, noisy-OR'd), the symbol's direction-aware fundamentals, and the
+    # breakout bar's volume strength, per the profile's mix weights.
     confidence = None
     rationale_json = None
     if weights is not None:
         try:
-            fund_score, eps_upside = wmod.symbol_fundamentals(conn, market, ticker)
-            confidence, rationale = wmod.trade_confidence(
-                weights, trade_type, entry_scanner, fund_score, eps_upside)
+            fund_score = wmod.symbol_fundamentals(conn, market, ticker)
+            vol_score = wmod.breakout_volume_score(_breakout_rel_vol(series))
+            confidence, rationale = wmod.breakout_confidence(
+                weights, trade_type, direction, scanners, reliability, fund_score, vol_score)
             rationale_json = json.dumps(rationale, default=str)
         except Exception:  # noqa: BLE001 - confidence is advisory, never block an entry
-            logger.exception("Trade-confidence computation failed for %s", ticker)
+            logger.exception("Breakout-confidence computation failed for %s", ticker)
 
     row = conn.cursor().execute(
         f"""INSERT INTO dbo.{table}
@@ -333,7 +344,7 @@ def _open_trade(conn, market: str, ticker: str, company: str | None, trade_type:
     }
 
 
-def run_trade_engine(conn, market: str, scan_date: date,
+def run_breakout_engine(conn, market: str, scan_date: date,
                      flagged: dict[str, dict], series_cache: dict[str, Any]) -> dict[str, int]:
     """Manage open trades and open new ones for this run's breakouts.
 
@@ -344,11 +355,10 @@ def run_trade_engine(conn, market: str, scan_date: date,
     # tickers that were active at the START of this run -> never re-enter same (ticker, type) this run
     active_keys = {(t["ticker"], t["trade_type"]) for t in active}
 
-    # Ensure a pattern weight exists for every defined scanner, then load the
-    # current (adapted/edited) weights once for this run's confidence scoring.
+    # Seed the editable per-profile blend weights, then load them + the per-scanner
+    # reliability (Wilson LB of each scanner's paper-breakout record) once for this run.
     try:
-        from .definitions import scanners_for
-        wmod.seed_weights(conn, market, [d.name for d in scanners_for(market)])
+        wmod.seed_weights(conn, market)
     except Exception:  # noqa: BLE001 - seeding must never abort the run
         logger.exception("Weight seeding failed for %s", market)
     try:
@@ -356,6 +366,12 @@ def run_trade_engine(conn, market: str, scan_date: date,
     except Exception:  # noqa: BLE001
         logger.exception("Weight load failed for %s", market)
         weights = None
+    try:
+        from .scoring import _scanner_reliability
+        reliability = _scanner_reliability(conn, market)
+    except Exception:  # noqa: BLE001 - reliability is advisory for confidence only
+        logger.exception("Scanner reliability load failed for %s", market)
+        reliability = None
 
     def _series_for(sym: str):
         s = series_cache.get(sym)
@@ -407,7 +423,7 @@ def run_trade_engine(conn, market: str, scan_date: date,
                 setups += 1  # flagged but no confirmed break yet -> wait
                 continue
             _open_trade(conn, market, sym, info.get("company"), trade_type, direction,
-                        entry, series, scanners, weights=weights)
+                        entry, series, scanners, weights=weights, reliability=reliability)
             opened += 1
 
     return {

@@ -6,12 +6,13 @@ import {
 } from 'lightweight-charts';
 import type {
   Market, StockLookupDetail, LookupBar, LookupCandidate, LookupEpsForecast,
-  UpsideProjection, UpsideCase
+  LookupAnalyst, RecommendationPeriod
 } from '../api';
 import {
   searchLookup, fetchLookupDetail, fetchLookupBars, refreshStockData
 } from '../api';
 import { formatMarketCap, formatPrice, currencySymbol } from '../format';
+import { FundamentalsSection } from '../components/FundamentalsSection';
 import { ChevronLeft, Search, RefreshCw, Loader2, ExternalLink, X } from 'lucide-react';
 import { ThemeContext } from '../theme';
 
@@ -155,81 +156,217 @@ function fmtPeriod(d: string): string {
   return dt.toLocaleString('en-US', { month: 'short', year: 'numeric' });
 }
 
-// Best/base/worst upside scenarios from multiple sources: deterministic EPS at constant P/E
-// (per quarter / per year), analyst 12-month price targets, and an AI placeholder. Each case
-// shows the implied % price move and the implied stock price.
-function UpsideCases(
-  { year, quarter, analyst, ai, market }:
-  { year?: UpsideProjection | null; quarter?: UpsideProjection | null;
-    analyst?: UpsideProjection | null; ai?: UpsideProjection | null; market: Market }
-) {
-  const sym = currencySymbol(market);
-  const has = (p?: UpsideProjection | null): p is UpsideProjection => !!p && !!(p.bear || p.base || p.bull);
-  if (!has(year) && !has(quarter) && !has(analyst) && !ai) return null;
+// ─── Analyst Insights ────────────────────────────────────────────────────────
+// Reimagined analyst section: price targets, recommendation distribution and the
+// latest rating action. Renders gracefully when a stock has partial or no data.
 
-  const caseCell = (c?: UpsideCase | null) => {
-    if (!c || c.upsidePct == null) return <span className="muted-note">—</span>;
-    const up = c.upsidePct;
-    return (
-      <div className="upside-case">
-        <span className={`upside-value-sm ${up >= 0 ? 'rev-up' : 'rev-down'}`}>{up >= 0 ? '+' : ''}{up.toFixed(1)}%</span>
-        {c.impliedPrice != null && <span className="upside-price">{sym}{c.impliedPrice.toFixed(2)}</span>}
-      </div>
-    );
+const REC_BUCKETS = [
+  { key: 'strongBuy', label: 'Strong Buy', color: '#15803d' },
+  { key: 'buy', label: 'Buy', color: '#4ade80' },
+  { key: 'hold', label: 'Hold', color: '#eab308' },
+  { key: 'sell', label: 'Underperform', color: '#f97316' },
+  { key: 'strongSell', label: 'Sell', color: '#dc2626' },
+] as const;
+
+// Map yfinance recommendationKey (e.g. "strong_buy") to a display label + color.
+function consensusLabel(key?: string | null): { label: string; color: string } | null {
+  if (!key) return null;
+  const k = key.toLowerCase().replace(/[\s-]/g, '_');
+  const map: Record<string, { label: string; color: string }> = {
+    strong_buy: { label: 'Strong Buy', color: '#15803d' },
+    buy: { label: 'Buy', color: '#16a34a' },
+    outperform: { label: 'Outperform', color: '#16a34a' },
+    overweight: { label: 'Overweight', color: '#16a34a' },
+    hold: { label: 'Hold', color: '#ca8a04' },
+    neutral: { label: 'Neutral', color: '#ca8a04' },
+    underperform: { label: 'Underperform', color: '#ea580c' },
+    underweight: { label: 'Underperform', color: '#ea580c' },
+    sell: { label: 'Sell', color: '#dc2626' },
+    strong_sell: { label: 'Strong Sell', color: '#b91c1c' },
   };
+  return map[k] ?? { label: key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), color: 'var(--text-muted)' };
+}
 
-  const row = (label: string, sub: string, p?: UpsideProjection | null) => has(p) ? (
-    <tr>
-      <td style={{ fontWeight: 600 }}>{label}<div className="muted-note" style={{ fontWeight: 400 }}>{sub}</div></td>
-      <td className="cell-center">{caseCell(p.bear)}</td>
-      <td className="cell-center">{caseCell(p.base)}</td>
-      <td className="cell-center">{caseCell(p.bull)}</td>
-    </tr>
-  ) : null;
+// Resolve yfinance's relative period label ('0m', '-1m'…) to a short month name.
+function periodMonthLabel(period: string): string {
+  const m = /^(-?\d+)m$/.exec(period.trim());
+  if (!m) return period;
+  const d = new Date();
+  d.setMonth(d.getMonth() + parseInt(m[1], 10));
+  return d.toLocaleString('en-US', { month: 'short' });
+}
 
-  // The AI row always renders as a placeholder until a prediction model is wired in.
-  const aiRow = ai ? (
-    <tr className="upside-row-ai">
-      <td style={{ fontWeight: 600 }}>
-        AI <span className="pill" style={{ marginLeft: 6 }}>AI</span>
-        <div className="muted-note" style={{ fontWeight: 400 }}>model prediction</div>
-      </td>
-      {has(ai)
-        ? (<>
-            <td className="cell-center">{caseCell(ai.bear)}</td>
-            <td className="cell-center">{caseCell(ai.base)}</td>
-            <td className="cell-center">{caseCell(ai.bull)}</td>
-          </>)
-        : <td className="cell-center" colSpan={3}><span className="muted-note">Coming soon</span></td>}
-    </tr>
-  ) : null;
+// yfinance abbreviates the rating action; expand to a readable label.
+function actionLabel(action?: string | null): string | null {
+  if (!action) return null;
+  const map: Record<string, string> = {
+    main: 'Maintains', up: 'Upgrade', down: 'Downgrade',
+    init: 'Initiated', reit: 'Reiterates',
+  };
+  return map[action.toLowerCase()] ?? action.replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function PriceTargetsCard({ analyst, currentPrice, market }:
+  { analyst: LookupAnalyst; currentPrice?: number | null; market: Market }) {
+  const sym = currencySymbol(market);
+  const low = analyst.targetLowPrice ?? null;
+  const mean = analyst.targetMeanPrice ?? null;
+  const high = analyst.targetHighPrice ?? null;
+  const hasTargets = low != null || mean != null || high != null;
+
+  const fmt = (v?: number | null) => v == null ? '—' : `${sym}${v.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  const pct = (mean != null && currentPrice && currentPrice > 0)
+    ? (mean / currentPrice - 1) * 100 : null;
+
+  // Position a value on the low→high track (0–100%).
+  const span = (low != null && high != null && high > low) ? high - low : null;
+  const posOf = (v?: number | null) => (span != null && low != null && v != null)
+    ? Math.min(100, Math.max(0, ((v - low) / span) * 100)) : null;
 
   return (
-    <div className="upside-callout">
-      <span className="upside-title">Potential upside scenarios</span>
-      <div className="table-scroll">
-      <table className="table" style={{ marginTop: 8 }}>
-        <thead>
-          <tr>
-            <th>Source</th>
-            <th style={{ textAlign: 'center' }}>Bear</th>
-            <th style={{ textAlign: 'center' }}>Base</th>
-            <th style={{ textAlign: 'center' }}>Bull</th>
-          </tr>
-        </thead>
-        <tbody>
-          {row('EPS @ const P/E', 'per quarter', quarter)}
-          {row('EPS @ const P/E', 'per year', year)}
-          {row('Analyst targets', '12-month price target', analyst)}
-          {aiRow}
-        </tbody>
-      </table>
+    <div className="analyst-card">
+      <div className="analyst-card-title">Analyst Price Targets</div>
+      {!hasTargets ? (
+        <p className="muted-note">No price target data available.</p>
+      ) : (
+        <>
+          <div className="pt-avg">
+            <span className="pt-avg-value">{fmt(mean)}</span>
+            <span className="muted-note"> average target</span>
+            {pct != null && (
+              <span className={pct >= 0 ? 'rev-up' : 'rev-down'} style={{ marginLeft: 8 }}>
+                {pct >= 0 ? '+' : ''}{pct.toFixed(1)}% vs current
+              </span>
+            )}
+          </div>
+          {span != null ? (
+            <div className="pt-track">
+              {posOf(currentPrice) != null && (
+                <div className="pt-marker pt-marker-current" style={{ left: `${posOf(currentPrice)}%` }} title={`Current ${fmt(currentPrice)}`} />
+              )}
+              {posOf(mean) != null && (
+                <div className="pt-marker pt-marker-avg" style={{ left: `${posOf(mean)}%` }} title={`Average ${fmt(mean)}`} />
+              )}
+            </div>
+          ) : <div className="pt-track pt-track-flat" />}
+          <div className="pt-scale">
+            <div><div className="pt-scale-label">Low</div><div className="pt-scale-val">{fmt(low)}</div></div>
+            <div style={{ textAlign: 'center' }}>
+              <div className="pt-scale-label">Current</div>
+              <div className="pt-scale-val">{fmt(currentPrice)}</div>
+            </div>
+            <div style={{ textAlign: 'right' }}><div className="pt-scale-label">High</div><div className="pt-scale-val">{fmt(high)}</div></div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function RecommendationsCard({ recommendations }: { recommendations: RecommendationPeriod[] }) {
+  const periods = (recommendations ?? []).filter(p =>
+    (p.strongBuy + p.buy + p.hold + p.sell + p.strongSell) > 0);
+  // Oldest → newest so the trend reads left-to-right like a timeline.
+  const ordered = [...periods].reverse();
+
+  return (
+    <div className="analyst-card">
+      <div className="analyst-card-title">Analyst Recommendations</div>
+      {ordered.length === 0 ? (
+        <p className="muted-note">No recommendation data available.</p>
+      ) : (
+        <>
+          <div className="rec-bars">
+            {ordered.map((p, i) => {
+              const total = p.strongBuy + p.buy + p.hold + p.sell + p.strongSell;
+              return (
+                <div className="rec-bar-col" key={i}>
+                  <div className="rec-bar-total">{total}</div>
+                  <div className="rec-bar">
+                    {REC_BUCKETS.map(b => {
+                      const v = p[b.key] as number;
+                      if (!v) return null;
+                      return <div key={b.key} style={{ height: `${(v / total) * 100}%`, background: b.color }} title={`${b.label}: ${v}`} />;
+                    })}
+                  </div>
+                  <div className="rec-bar-label">{periodMonthLabel(p.period)}</div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="rec-legend">
+            {REC_BUCKETS.map(b => (
+              <span key={b.key} className="rec-legend-item">
+                <span className="rec-dot" style={{ background: b.color }} />{b.label}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function LatestRatingCard({ analyst }: { analyst: LookupAnalyst }) {
+  const consensus = consensusLabel(analyst.consensusRating);
+  const grade = analyst.latestRatingGrade;
+  const hasAny = consensus || grade || analyst.numAnalysts != null;
+
+  return (
+    <div className="analyst-card">
+      <div className="analyst-card-title">What Analysts Are Saying</div>
+      {!hasAny ? (
+        <p className="muted-note">No rating data available.</p>
+      ) : (
+        <div className="prop-grid" style={{ marginTop: 4 }}>
+          {consensus && (
+            <div className="prop-row">
+              <span className="prop-label">Consensus</span>
+              <span className="prop-value">
+                <span className="rating-badge" style={{ background: consensus.color }}>{consensus.label}</span>
+              </span>
+            </div>
+          )}
+          {analyst.numAnalysts != null && (
+            <div className="prop-row"><span className="prop-label">Analysts covering</span><span className="prop-value">{analyst.numAnalysts}</span></div>
+          )}
+          {grade && (
+            <div className="prop-row">
+              <span className="prop-label">Latest rating</span>
+              <span className="prop-value">
+                <span className="rating-badge" style={{ background: consensusLabel(grade)?.color ?? 'var(--text-muted)' }}>{grade}</span>
+              </span>
+            </div>
+          )}
+          {analyst.latestRatingFirm && (
+            <div className="prop-row"><span className="prop-label">Firm</span><span className="prop-value">{analyst.latestRatingFirm}</span></div>
+          )}
+          {analyst.latestRatingAction && (
+            <div className="prop-row"><span className="prop-label">Action</span><span className="prop-value">{actionLabel(analyst.latestRatingAction)}</span></div>
+          )}
+          {analyst.latestRatingDate && (
+            <div className="prop-row"><span className="prop-label">Rating date</span><span className="prop-value">{fmtDate(analyst.latestRatingDate)}</span></div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AnalystInsights({ detail, market }: { detail: StockLookupDetail; market: Market }) {
+  const a = detail.analyst;
+  if (!a) return null;
+  return (
+    <div className="lookup-section">
+      <h2 className="section-title">
+        Analyst Insights
+        {a.asOfDate && <span className="pill">As of {fmtDate(a.asOfDate)}</span>}
+      </h2>
+      <div className="analyst-grid">
+        <PriceTargetsCard analyst={a} currentPrice={detail.technical?.close} market={market} />
+        <RecommendationsCard recommendations={a.recommendations} />
+        <LatestRatingCard analyst={a} />
       </div>
-      <p className="muted-note">
-        EPS rows hold the current P/E and move price with the Low / Consensus / High EPS estimate.
-        Analyst targets are yfinance 12-month Low / Mean / High price targets. Each cell shows the
-        implied % move and price.
-      </p>
     </div>
   );
 }
@@ -339,11 +476,11 @@ export function StockDetailView({ market, symbol }: { market: Market; symbol: st
 
         <div className="analyst-refresh">
           <div>
-            <div className="section-title" style={{ margin: 0 }}>Refresh &amp; Rescore</div>
+            <div className="section-title" style={{ margin: 0 }}>Refresh</div>
             <p className="muted-note">Re-ingest bars, technical and fundamentals for this symbol, then recompute its score. Runs as a worker job.</p>
           </div>
           <button className="btn btn-primary" onClick={refresh} disabled={refreshing}>
-            {refreshing ? <Loader2 size={16} className="spin-icon" /> : <RefreshCw size={16} />} {refreshing ? 'Refreshing…' : 'Refresh & Rescore'}
+            {refreshing ? <Loader2 size={16} className="spin-icon" /> : <RefreshCw size={16} />} {refreshing ? 'Refreshing…' : 'Refresh'}
           </button>
         </div>
       </div>
@@ -408,31 +545,11 @@ export function StockDetailView({ market, symbol }: { market: Market; symbol: st
         <Prop label="Last Scanner Hit" value={t?.lastScannerHit ? fmtDate(t.lastScannerHit) : '—'} />
       </div>
 
-      {/* Analyst snapshot */}
-      {a && (
-        <div className="lookup-section">
-          <h2 className="section-title">Analyst Snapshot</h2>
-          {a.asOfDate && <span className="pill">As Of {fmtDate(a.asOfDate)}</span>}
-          <div className="table-scroll">
-          <table className="table">
-            <thead>
-              <tr><th>Consensus</th><th>Current Quarter EPS</th><th>Next Quarter EPS</th><th>Current Year EPS</th><th>Next Year EPS</th></tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td style={{ fontWeight: 700 }}>{a.consensusRating ?? '—'}</td>
-                <td>{a.currentQuarterEps?.toFixed(2) ?? '—'}</td>
-                <td>{a.nextQuarterEps?.toFixed(2) ?? '—'}</td>
-                <td>{a.currentYearEps?.toFixed(2) ?? '—'}</td>
-                <td>{a.nextYearEps?.toFixed(2) ?? '—'}</td>
-              </tr>
-            </tbody>
-          </table>
-          </div>
-          <UpsideCases year={detail.yearUpside} quarter={detail.quarterUpside} analyst={detail.analystUpside} ai={detail.aiUpside} market={market} />
-          {a.numAnalysts != null && <p className="muted-note">Based on {a.numAnalysts} analysts offering recommendations for '{detail.symbol}'.</p>}
-        </div>
-      )}
+      {/* Reported fundamentals + reported-EPS history + AI signals/note. */}
+      <FundamentalsSection market={market} symbol={detail.symbol} />
+
+      {/* Analyst insights: price targets, recommendations, latest rating. */}
+      <AnalystInsights detail={detail} market={market} />
 
       <div className="lookup-section">
         <h2 className="section-title">Quarterly EPS Forecasts <span className="pill">{detail.quarterlyEps.length} rows</span></h2>

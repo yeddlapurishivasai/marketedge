@@ -13,34 +13,27 @@ public record LookupAnalystDto(
     DateOnly? AsOfDate, string? ConsensusRating, int? NumAnalysts,
     decimal? CurrentQuarterEps, decimal? NextQuarterEps,
     decimal? CurrentYearEps, decimal? NextYearEps,
-    decimal? TargetLowPrice, decimal? TargetMeanPrice, decimal? TargetHighPrice);
+    decimal? TargetLowPrice, decimal? TargetMeanPrice, decimal? TargetHighPrice,
+    IReadOnlyList<RecommendationPeriod> Recommendations,
+    string? LatestRatingFirm, string? LatestRatingGrade,
+    string? LatestRatingAction, DateOnly? LatestRatingDate);
+
+// One month's analyst recommendation distribution. Period is yfinance's relative label
+// ("0m" = current month, "-1m" = one month ago, ...).
+public record RecommendationPeriod(
+    string Period, int StrongBuy, int Buy, int Hold, int Sell, int StrongSell);
 
 public record LookupEpsForecastDto(
     string PeriodType, DateOnly PeriodEndDate,
     decimal? ConsensusEps, decimal? HighEps, decimal? LowEps,
     int? NumEstimates, int RevisionsUp, int RevisionsDown);
 
-// One scenario of an EPS-driven upside at constant P/E: the projected EPS, the implied
-// % price move vs the base EPS, and the implied stock price.
-public record UpsideCaseDto(decimal? Eps, decimal? UpsidePct, decimal? ImpliedPrice);
-
-// Best/base/worst upside for a horizon. Source distinguishes the method:
-//   "deterministic" – EPS at constant P/E (horizon quarter/year)
-//   "analyst"       – yfinance analyst 12-month price targets (low/mean/high)
-//   "ai"            – AI-predicted scenarios (placeholder until a model is wired in)
-public record UpsideProjectionDto(
-    string Horizon, string Source,
-    decimal? CurrentPrice, decimal? BaseEps,
-    UpsideCaseDto? Bear, UpsideCaseDto? Base, UpsideCaseDto? Bull);
-
 public record StockLookupDetail(
     string Symbol, string CompanyName, string? BroadSector, string? Industry, string Market,
     string? Exchange, bool Active, bool IsFno, int? BarsAvailable,
     LookupTechnicalDto? Technical, LookupAnalystDto? Analyst,
     IReadOnlyList<LookupEpsForecastDto> QuarterlyEps,
-    IReadOnlyList<LookupEpsForecastDto> YearlyEps,
-    UpsideProjectionDto? QuarterUpside, UpsideProjectionDto? YearUpside,
-    UpsideProjectionDto? AnalystUpside, UpsideProjectionDto? AiUpside);
+    IReadOnlyList<LookupEpsForecastDto> YearlyEps);
 
 public record LookupBarDto(
     DateOnly Date, decimal? Open, decimal? High, decimal? Low, decimal? Close, long? Volume);

@@ -35,6 +35,11 @@ param(
 
     [switch]$SeedData,
 
+    # Optional SQL script run AGAINST THE TARGET *before* the dacpac publish.
+    # Used for data-preserving schema migrations (e.g. table renames) so the
+    # publish does not have to drop/recreate tables. Safe to leave unset.
+    [string]$PreMigrationScript,
+
     [string]$Configuration = "Release"
 )
 
@@ -78,6 +83,26 @@ if (-not $sqlpackage) {
     }
 }
 
+# Run pre-deployment migration (data-preserving schema changes) if requested
+if ($PreMigrationScript) {
+    if (-not (Test-Path $PreMigrationScript)) {
+        throw "PreMigrationScript not found: $PreMigrationScript"
+    }
+    Write-Host "`nRunning pre-deployment migration: $PreMigrationScript" -ForegroundColor Cyan
+
+    $sqlcmdPre = Get-Command sqlcmd -ErrorAction SilentlyContinue
+    if (-not $sqlcmdPre) {
+        $sqlcmdPre = "C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\180\Tools\Binn\SQLCMD.EXE"
+        if (-not (Test-Path $sqlcmdPre)) {
+            throw "sqlcmd not found. Install SQL Server command line tools."
+        }
+    }
+
+    & $sqlcmdPre -S $SqlServer -d $DatabaseName -U $SqlUser -P $PlainPassword -C -b -i $PreMigrationScript
+    if ($LASTEXITCODE -ne 0) { throw "Pre-deployment migration failed" }
+    Write-Host "Pre-deployment migration complete." -ForegroundColor Green
+}
+
 # Deploy dacpac
 Write-Host "`nPublishing dacpac to $SqlServer/$DatabaseName..." -ForegroundColor Cyan
 & $sqlpackage /Action:Publish `
@@ -86,7 +111,8 @@ Write-Host "`nPublishing dacpac to $SqlServer/$DatabaseName..." -ForegroundColor
     /TargetDatabaseName:$DatabaseName `
     /TargetUser:$SqlUser `
     /TargetPassword:$PlainPassword `
-    /TargetTrustServerCertificate:True
+    /TargetTrustServerCertificate:True `
+    /p:BlockOnPossibleDataLoss=True
 
 if ($LASTEXITCODE -ne 0) { throw "dacpac deployment failed" }
 Write-Host "Schema deployed successfully." -ForegroundColor Green

@@ -19,6 +19,14 @@ public class FundamentalsController : ControllerBase
         return Ok(rows);
     }
 
+    [HttpGet("ideas")]
+    public async Task<IActionResult> Ideas(string market, [FromQuery] string? side)
+    {
+        if (!IsValidMarket(market)) return BadRequest("Market must be 'india' or 'us'");
+        var rows = await _fundamentals.ListIdeasAsync(market, side);
+        return Ok(rows);
+    }
+
     [HttpGet("{symbol}")]
     public async Task<IActionResult> Get(string market, string symbol)
     {

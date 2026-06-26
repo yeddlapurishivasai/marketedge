@@ -94,7 +94,7 @@ def run_steps_inline(market: str, symbols: list[str] | None, steps: list[str]) -
 
     Used by other jobs that need to reuse ingestion logic mid-run — e.g. the pre-close scan
     refreshing the ``TickerTechnical`` snapshot (prices/52W + market cap) for the scanned
-    universe so scoring and lookups see today's data. Returns ``(failed, output_tail)``.
+    universe so breakout confidence and lookups see today's data. Returns ``(failed, output_tail)``.
     """
     cli = _resolve_cli()
     cli_dir = os.path.dirname(cli)
@@ -213,11 +213,11 @@ def _run_steps(conn, run_id: int, market: str, steps: list[str], payload: dict,
 
 
 def run_stock_refresh_job(payload: dict) -> None:
-    """Re-ingest all pipeline steps for a single symbol, then recompute its score.
+    """Re-ingest all pipeline steps for a single symbol.
 
-    Backs the Stock Lookup "Refresh & Rescore" button: runs ``ingest bars`` ->
-    ``ingest technical`` -> ``ingest fundamentals`` scoped to one symbol, then scores that
-    symbol into ``{Market}StockScores`` so the lookup reflects fresh data and a fresh score.
+    Backs the Stock Lookup refresh action: runs ``ingest bars`` ->
+    ``ingest technical`` -> ``ingest fundamentals`` scoped to one symbol so lookup data
+    reflects the latest ingestion outputs.
     """
     market = str(payload["market"]).lower()
     run_id = int(payload["runId"])
@@ -243,9 +243,9 @@ def run_stock_refresh_job(payload: dict) -> None:
         logger.info("Stock refresh run %s: market=%s symbol=%s steps=%s",
                     run_id, market, symbol, steps)
 
-        # Phase 1: ingest the symbol's data (reserve the last 20% for scoring).
+        # Ingest the symbol's data.
         failed = _run_steps(conn, run_id, market, steps, payload, cli, cli_dir, output,
-                            progress_ceiling=80)
+                            progress_ceiling=100)
 
         full = "\n".join(output)
         tail = full[-_OUTPUT_TAIL:] if len(full) > _OUTPUT_TAIL else full
@@ -254,24 +254,8 @@ def run_stock_refresh_job(payload: dict) -> None:
             logger.error("Stock refresh run %s failed during ingestion", run_id)
             return
 
-        # Phase 2: recompute the symbol's score from the freshly ingested data.
-        scored = 0
-        try:
-            from datetime import date
-            from scanners.scoring import score_universe
-            from scanners.indicators import load_bars
-            scan_date = date.today()
-            series = load_bars(conn, market, symbol, 520, end_date=scan_date)
-            series_cache = {symbol: series} if series is not None else {}
-            scored = score_universe(conn, market, [symbol], scan_date, series_cache)
-            logger.info("Stock refresh run %s: scored %s (symbol=%s)", run_id, scored, symbol)
-        except Exception:  # noqa: BLE001 - scoring failure shouldn't drop the ingested data
-            logger.exception("Stock refresh run %s: scoring failed", run_id)
-            output.append("[scoring failed — see worker log]")
-            tail = ("\n".join(output))[-_OUTPUT_TAIL:]
-
         metrics = {"market": market, "symbol": symbol, "steps": steps,
-                   "scored": scored, "output": tail}
+                   "output": tail}
         update_job_status(conn, run_id, "completed", progress=100,
                           metrics=metrics, completed_at=_now())
         logger.info("Stock refresh run %s completed (symbol=%s)", run_id, symbol)

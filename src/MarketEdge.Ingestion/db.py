@@ -6,11 +6,12 @@ upserts (MERGE) on the natural key.
 """
 import logging
 import math
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import pyodbc
 
+import confidence
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,9 @@ MARKET_TABLES = {
         "earnings": "IndianEarningsFundamentals",
         "note": "IndianStockNote",
         "signals": "IndianStockSignals",
+        "ideas": "IndianFundamentalIdeas",
+        "trades": "IndianBreakouts",
+        "scanner_results": "IndianTechnicalScannerResults",
         "ticker_len": 30,
     },
     "us": {
@@ -39,6 +43,9 @@ MARKET_TABLES = {
         "earnings": "USEarningsFundamentals",
         "note": "USStockNote",
         "signals": "USStockSignals",
+        "ideas": "USFundamentalIdeas",
+        "trades": "USBreakouts",
+        "scanner_results": "USTechnicalScannerResults",
         "ticker_len": 20,
     },
 }
@@ -136,6 +143,33 @@ def get_present_tickers(conn: pyodbc.Connection, market: str, kind: str) -> set[
     else:
         raise ValueError(f"Unsupported kind: {kind}")
     rows = conn.cursor().execute(query).fetchall()
+    return {r[0].upper() for r in rows if r[0]}
+
+
+def get_due_earnings_tickers(
+    conn: pyodbc.Connection, market: str, today: date, window_days: int
+) -> set[str]:
+    """Tickers (upper-cased) whose fundamentals are 'due' for the optimized daily run.
+
+    A ticker is due when it has no earnings-fundamentals row yet, OR its NextEarningsDate
+    is unknown (NULL), OR NextEarningsDate falls within +/- ``window_days`` of ``today``.
+    This lets the daily run skip the bulk of stocks that are nowhere near reporting while
+    still capturing each name just before it reports (refreshed estimates) and just after
+    (reported actuals), plus backfilling anything not yet captured.
+    """
+    t = tables_for(market)
+    lo = today - timedelta(days=window_days)
+    hi = today + timedelta(days=window_days)
+    # Universe master rows missing an earnings snapshot, or whose snapshot is due.
+    query = f"""
+        SELECT m.Ticker
+        FROM dbo.{t['tickers']} AS m
+        LEFT JOIN dbo.{t['earnings']} AS e ON e.Ticker = m.Ticker
+        WHERE e.Ticker IS NULL
+           OR e.NextEarningsDate IS NULL
+           OR e.NextEarningsDate BETWEEN ? AND ?
+    """
+    rows = conn.cursor().execute(query, (lo, hi)).fetchall()
     return {r[0].upper() for r in rows if r[0]}
 
 
@@ -283,12 +317,19 @@ def upsert_analyst_snapshot(conn: pyodbc.Connection, market: str, row: dict[str,
             ConsensusRating = ?, NumAnalysts = ?, CurrentQuarterEps = ?,
             NextQuarterEps = ?, CurrentYearEps = ?, NextYearEps = ?,
             TargetLowPrice = ?, TargetMeanPrice = ?, TargetHighPrice = ?,
+            RecommendationsJson = COALESCE(?, tgt.RecommendationsJson),
+            LatestRatingFirm = COALESCE(?, tgt.LatestRatingFirm),
+            LatestRatingGrade = COALESCE(?, tgt.LatestRatingGrade),
+            LatestRatingAction = COALESCE(?, tgt.LatestRatingAction),
+            LatestRatingDate = COALESCE(?, tgt.LatestRatingDate),
             UpdatedAt = GETUTCDATE()
         WHEN NOT MATCHED THEN INSERT
             (Ticker, AsOfDate, ConsensusRating, NumAnalysts, CurrentQuarterEps,
              NextQuarterEps, CurrentYearEps, NextYearEps,
-             TargetLowPrice, TargetMeanPrice, TargetHighPrice)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+             TargetLowPrice, TargetMeanPrice, TargetHighPrice,
+             RecommendationsJson, LatestRatingFirm, LatestRatingGrade,
+             LatestRatingAction, LatestRatingDate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """
     common = (
         row.get("consensus_rating"), _clean(row.get("num_analysts")),
@@ -296,6 +337,9 @@ def upsert_analyst_snapshot(conn: pyodbc.Connection, market: str, row: dict[str,
         _clean(row.get("current_year_eps")), _clean(row.get("next_year_eps")),
         _clean(row.get("target_low_price")), _clean(row.get("target_mean_price")),
         _clean(row.get("target_high_price")),
+        row.get("recommendations_json"), row.get("latest_rating_firm"),
+        row.get("latest_rating_grade"), row.get("latest_rating_action"),
+        _clean(row.get("latest_rating_date")),
     )
     params = [row["ticker"], row["as_of_date"], *common, row["ticker"], row["as_of_date"], *common]
     cursor = conn.cursor()
@@ -344,7 +388,12 @@ def upsert_earnings_fundamentals(conn: pyodbc.Connection, market: str, row: dict
         "NetProfit", "NetProfitPrevQ", "NetProfitYoyQ", "NetMarginPct",
         "EarningsGrowthYoyPct", "EarningsGrowthQoqPct",
         "EarningsIncreasing", "OperatingProfitTrend", "OpmTrend",
-        "LastEarningsDate", "PrevEarningsDate", "LastReportedEps", "LastEpsSurprisePct",
+        "LastEarningsDate", "PrevEarningsDate", "NextEarningsDate", "LastReportedEps", "LastEpsSurprisePct",
+        "EpsQ1Date", "EpsQ1Estimate", "EpsQ1Actual", "EpsQ1SurprisePct",
+        "EpsQ2Date", "EpsQ2Estimate", "EpsQ2Actual", "EpsQ2SurprisePct",
+        "EpsQ3Date", "EpsQ3Estimate", "EpsQ3Actual", "EpsQ3SurprisePct",
+        "EpsQ4Date", "EpsQ4Estimate", "EpsQ4Actual", "EpsQ4SurprisePct",
+        "TrailingPe", "ForwardPe",
     )
     keys = (
         "as_of_date", "latest_quarter_end",
@@ -354,9 +403,30 @@ def upsert_earnings_fundamentals(conn: pyodbc.Connection, market: str, row: dict
         "net_profit", "net_profit_prev_q", "net_profit_yoy_q", "net_margin_pct",
         "earnings_growth_yoy_pct", "earnings_growth_qoq_pct",
         "earnings_increasing", "operating_profit_trend", "opm_trend",
-        "last_earnings_date", "prev_earnings_date", "last_reported_eps", "last_eps_surprise_pct",
+        "last_earnings_date", "prev_earnings_date", "next_earnings_date", "last_reported_eps", "last_eps_surprise_pct",
+        "eps_q1_date", "eps_q1_estimate", "eps_q1_actual", "eps_q1_surprise_pct",
+        "eps_q2_date", "eps_q2_estimate", "eps_q2_actual", "eps_q2_surprise_pct",
+        "eps_q3_date", "eps_q3_estimate", "eps_q3_actual", "eps_q3_surprise_pct",
+        "eps_q4_date", "eps_q4_estimate", "eps_q4_actual", "eps_q4_surprise_pct",
+        "trailing_pe", "forward_pe",
     )
-    set_clause = ", ".join(f"{c} = ?" for c in cols) + ", UpdatedAt = GETUTCDATE()"
+    # Earnings-announcement dates and reported-EPS history come from yfinance's flaky,
+    # rate-limited get_earnings_dates endpoint (separate from quarterly_income_stmt). On a
+    # run where it returns nothing, these incoming values are NULL while the income-statement
+    # financials still write — so we must NOT clobber previously-captured values with NULL.
+    # Preserve the existing column value when the incoming value is NULL (COALESCE-on-null).
+    preserve_on_null = {
+        "LastEarningsDate", "PrevEarningsDate", "NextEarningsDate", "LastReportedEps", "LastEpsSurprisePct",
+        "EpsQ1Date", "EpsQ1Estimate", "EpsQ1Actual", "EpsQ1SurprisePct",
+        "EpsQ2Date", "EpsQ2Estimate", "EpsQ2Actual", "EpsQ2SurprisePct",
+        "EpsQ3Date", "EpsQ3Estimate", "EpsQ3Actual", "EpsQ3SurprisePct",
+        "EpsQ4Date", "EpsQ4Estimate", "EpsQ4Actual", "EpsQ4SurprisePct",
+        "TrailingPe", "ForwardPe",
+    }
+    set_clause = ", ".join(
+        f"{c} = COALESCE(?, tgt.{c})" if c in preserve_on_null else f"{c} = ?"
+        for c in cols
+    ) + ", UpdatedAt = GETUTCDATE()"
     insert_cols = "Ticker, " + ", ".join(cols)
     insert_ph = "?, " + ", ".join("?" for _ in cols)
     merge = f"""
@@ -370,6 +440,219 @@ def upsert_earnings_fundamentals(conn: pyodbc.Connection, market: str, row: dict
     params = [row["ticker"], *vals, row["ticker"], *vals]
     cursor = conn.cursor()
     cursor.execute(merge, params)
+    conn.commit()
+
+
+def refresh_fundamental_idea(conn: pyodbc.Connection, market: str, ticker: str) -> None:
+    """Recompute the screener 'idea' for a ticker from its earnings + analyst snapshots.
+
+    An idea is keyed by (Ticker, EarningsDate = LastEarningsDate). Earnings-based metrics
+    (EPS beat %, YoY OPM/operating-profit expansion) are stamped to the reported result;
+    analyst fields (latest upgrade/downgrade + price targets) are refreshed from the most
+    recent analyst snapshot on every run (daily detection). When a newer result lands, the
+    EarningsDate advances -> a new row is inserted and older rows for the ticker are flagged
+    IsStale = 1 so the UI hides them (a future purge job deletes them).
+    """
+    t = tables_for(market)
+    ideas, earnings, analyst = t["ideas"], t["earnings"], t["analyst"]
+    merge = f"""
+        MERGE dbo.{ideas} AS tgt
+        USING (
+            SELECT
+                e.Ticker,
+                e.LastEarningsDate AS EarningsDate,
+                e.LastEpsSurprisePct AS EpsBeatPct,
+                CASE WHEN e.Opm IS NOT NULL AND e.OpmYoyQ IS NOT NULL
+                     THEN e.Opm - e.OpmYoyQ END AS OpmExpansionYoyPct,
+                CASE WHEN e.OperatingProfitYoyQ IS NOT NULL AND e.OperatingProfitYoyQ <> 0
+                     THEN (e.OperatingProfit - e.OperatingProfitYoyQ)
+                          / ABS(e.OperatingProfitYoyQ) * 100 END AS OperatingProfitExpansionYoyPct,
+                a.LatestRatingFirm, a.LatestRatingGrade, a.LatestRatingAction, a.LatestRatingDate,
+                a.TargetLowPrice, a.TargetMeanPrice, a.TargetHighPrice
+            FROM dbo.{earnings} e
+            OUTER APPLY (
+                SELECT TOP 1 LatestRatingFirm, LatestRatingGrade, LatestRatingAction, LatestRatingDate,
+                       TargetLowPrice, TargetMeanPrice, TargetHighPrice
+                FROM dbo.{analyst} s
+                WHERE s.Ticker = e.Ticker
+                ORDER BY s.AsOfDate DESC
+            ) a
+            WHERE e.Ticker = ? AND e.LastEarningsDate IS NOT NULL
+        ) AS src
+        ON tgt.Ticker = src.Ticker AND tgt.EarningsDate = src.EarningsDate
+        WHEN MATCHED THEN UPDATE SET
+            EpsBeatPct = src.EpsBeatPct,
+            OpmExpansionYoyPct = src.OpmExpansionYoyPct,
+            OperatingProfitExpansionYoyPct = src.OperatingProfitExpansionYoyPct,
+            LatestRatingFirm = src.LatestRatingFirm,
+            LatestRatingGrade = src.LatestRatingGrade,
+            LatestRatingAction = src.LatestRatingAction,
+            LatestRatingDate = src.LatestRatingDate,
+            TargetLowPrice = src.TargetLowPrice,
+            TargetMeanPrice = src.TargetMeanPrice,
+            TargetHighPrice = src.TargetHighPrice,
+            IsStale = 0,
+            UpdatedAt = GETUTCDATE()
+        WHEN NOT MATCHED THEN INSERT (
+            Ticker, EarningsDate, EpsBeatPct, OpmExpansionYoyPct, OperatingProfitExpansionYoyPct,
+            LatestRatingFirm, LatestRatingGrade, LatestRatingAction, LatestRatingDate,
+            TargetLowPrice, TargetMeanPrice, TargetHighPrice
+        ) VALUES (
+            src.Ticker, src.EarningsDate, src.EpsBeatPct, src.OpmExpansionYoyPct,
+            src.OperatingProfitExpansionYoyPct, src.LatestRatingFirm, src.LatestRatingGrade,
+            src.LatestRatingAction, src.LatestRatingDate, src.TargetLowPrice, src.TargetMeanPrice,
+            src.TargetHighPrice
+        );
+    """
+    stale = f"""
+        UPDATE i SET IsStale = 1, UpdatedAt = GETUTCDATE()
+        FROM dbo.{ideas} i
+        JOIN dbo.{earnings} e ON e.Ticker = i.Ticker
+        WHERE i.Ticker = ? AND i.IsStale = 0
+          AND e.LastEarningsDate IS NOT NULL
+          AND i.EarningsDate < e.LastEarningsDate;
+    """
+    cursor = conn.cursor()
+    cursor.execute(merge, [ticker])
+    cursor.execute(stale, [ticker])
+    conn.commit()
+
+    _refresh_idea_confidence(conn, market, ticker)
+
+
+def _fnum(x: Any) -> float | None:
+    if x is None:
+        return None
+    try:
+        f = float(x)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(f) or math.isinf(f) else f
+
+
+def _refresh_idea_confidence(conn: pyodbc.Connection, market: str, ticker: str) -> None:
+    """Score the ticker's active idea (per-metric + fundamental + technical + overall).
+
+    Reads the just-written idea metrics, the latest close (for target upside) and the
+    realised paper-trade record, computes the confidence blend (see ``confidence.py``)
+    and stamps the scores + rationale JSON onto the idea row.
+    """
+    t = tables_for(market)
+    ideas, technical, trades, results = (
+        t["ideas"], t["technical"], t["trades"], t["scanner_results"],
+    )
+    cur = conn.cursor()
+
+    idea = cur.execute(
+        f"""SELECT EarningsDate, EpsBeatPct, OpmExpansionYoyPct, OperatingProfitExpansionYoyPct,
+                   LatestRatingGrade, LatestRatingDate, TargetMeanPrice
+            FROM dbo.{ideas} WHERE Ticker = ? AND IsStale = 0""",
+        [ticker],
+    ).fetchone()
+    if idea is None:
+        return
+
+    today = date.today()
+    earnings_date = idea.EarningsDate
+    rating_date = idea.LatestRatingDate
+    days_since_earnings = (today - earnings_date).days if earnings_date else None
+    days_since_rating = (today - rating_date).days if rating_date else None
+
+    close_row = cur.execute(
+        f"""SELECT TOP 1 [Close] FROM dbo.{technical}
+            WHERE Ticker = ? AND [Close] IS NOT NULL ORDER BY AsOfDate DESC""",
+        [ticker],
+    ).fetchone()
+    close = _fnum(close_row[0]) if close_row else None
+
+    # Realised trade record for this stock (success = closed at a profit).
+    tr = cur.execute(
+        f"""SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN PnLPct > 0 THEN 1 ELSE 0 END) AS wins
+            FROM dbo.{trades} WHERE Ticker = ? AND Status = 'closed'""",
+        [ticker],
+    ).fetchone()
+    own_total = int(tr.total or 0)
+    own_wins = int(tr.wins or 0)
+
+    # Triggering scanner: most recent trade's entry scanner, else latest scanner hit.
+    scanner = cur.execute(
+        f"""SELECT TOP 1 EntryScanner FROM dbo.{trades}
+            WHERE Ticker = ? AND EntryScanner IS NOT NULL ORDER BY EntryAt DESC""",
+        [ticker],
+    ).fetchone()
+    scanner_name = scanner[0] if scanner else None
+    if not scanner_name:
+        sc = cur.execute(
+            f"""SELECT TOP 1 ScannerName FROM dbo.{results}
+                WHERE Symbol = ? ORDER BY ScanDate DESC""",
+            [ticker],
+        ).fetchone()
+        scanner_name = sc[0] if sc else None
+
+    scanner_wins = scanner_total = 0
+    if scanner_name:
+        sw = cur.execute(
+            f"""SELECT
+                    SUM(CASE WHEN (Status='closed' AND PnLPct > 0)
+                              OR (Status='active' AND PnLPct > 0) THEN 1 ELSE 0 END) AS Wins,
+                    SUM(CASE WHEN Status='closed' OR (Status='active' AND PnLPct IS NOT NULL)
+                             THEN 1 ELSE 0 END) AS Total
+                FROM dbo.{trades}
+                WHERE EntryScanner = ?""",
+            [scanner_name],
+        ).fetchone()
+        if sw is not None:
+            scanner_wins = int(sw.Wins or 0)
+            scanner_total = int(sw.Total or 0)
+
+    technical_conf, technical_detail = confidence.technical_confidence(
+        own_wins, own_total, scanner_wins, scanner_total, scanner_name,
+    )
+
+    scores = confidence.compute_confidence(
+        eps_beat_pct=_fnum(idea.EpsBeatPct),
+        opm_expansion_pp=_fnum(idea.OpmExpansionYoyPct),
+        op_expansion_pct=_fnum(idea.OperatingProfitExpansionYoyPct),
+        rating_grade=idea.LatestRatingGrade,
+        target_mean=_fnum(idea.TargetMeanPrice),
+        close=close,
+        days_since_earnings=days_since_earnings,
+        days_since_rating=days_since_rating,
+        technical=technical_conf,
+        technical_detail=technical_detail,
+    )
+
+    cur.execute(
+        f"""UPDATE dbo.{ideas} SET
+                EpsBeatConfidence = ?,
+                OpmExpansionConfidence = ?,
+                OperatingProfitExpansionConfidence = ?,
+                AnalystRatingConfidence = ?,
+                TargetUpsideConfidence = ?,
+                FundamentalConfidence = ?,
+                TechnicalConfidence = ?,
+                OverallConfidence = ?,
+                DaysSinceEarnings = ?,
+                DaysSinceRating = ?,
+                ConfidenceRationaleJson = ?,
+                UpdatedAt = GETUTCDATE()
+            WHERE Ticker = ? AND IsStale = 0""",
+        [
+            scores["eps_beat_confidence"],
+            scores["opm_expansion_confidence"],
+            scores["operating_profit_expansion_confidence"],
+            scores["analyst_rating_confidence"],
+            scores["target_upside_confidence"],
+            scores["fundamental_confidence"],
+            scores["technical_confidence"],
+            scores["overall_confidence"],
+            days_since_earnings,
+            days_since_rating,
+            scores["rationale_json"],
+            ticker,
+        ],
+    )
     conn.commit()
 
 

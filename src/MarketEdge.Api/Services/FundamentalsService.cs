@@ -7,6 +7,7 @@ namespace MarketEdge.Api.Services;
 public interface IFundamentalsService
 {
     Task<IReadOnlyList<FundamentalRow>> ListAsync(string market, string? scanner);
+    Task<IReadOnlyList<FundamentalIdeaRow>> ListIdeasAsync(string market, string? side = null);
     Task<FundamentalDetail?> GetAsync(string market, string symbol);
     Task<bool> SaveNoteAsync(string market, string symbol, string? noteText);
 }
@@ -45,6 +46,110 @@ public class FundamentalsService : IFundamentalsService
         return result;
     }
 
+    public async Task<IReadOnlyList<FundamentalIdeaRow>> ListIdeasAsync(string market, string? side = null)
+    {
+        List<FundamentalIdeaBase> rows = IsUs(market)
+            ? (await _db.USFundamentalIdeas.Where(i => !i.IsStale).ToListAsync())
+                .Cast<FundamentalIdeaBase>().ToList()
+            : (await _db.IndianFundamentalIdeas.Where(i => !i.IsStale).ToListAsync())
+                .Cast<FundamentalIdeaBase>().ToList();
+
+        var catalog = await LoadCatalogAsync(market);
+        var stage2 = await LoadStage2Async(market);
+        var want = string.IsNullOrWhiteSpace(side) ? null : side.Trim().ToLowerInvariant();
+
+        var mapped = rows
+            .Select(r =>
+            {
+                catalog.TryGetValue(r.Ticker.ToUpperInvariant(), out var meta);
+                var sym = meta?.Symbol ?? r.Ticker;
+                bool? isStage2 = stage2.TryGetValue(sym.ToUpperInvariant(), out var s2) ? s2 : (bool?)null;
+
+                // Signed direction + side, computed server-side so every consumer gets the bucket.
+                var dir = IdeaDirection.Score(
+                    (double?)r.EpsBeatPct, (double?)r.OpmExpansionYoyPct,
+                    (double?)r.OperatingProfitExpansionYoyPct, r.LatestRatingGrade);
+                var rowSide = IdeaDirection.Side(dir);
+
+                // Mirrored bearish confidence for every score. The stored *Confidence fields
+                // are the long (bullish) set; this is the matching short (bearish) set, so a
+                // view can show whichever side is relevant without the number changing meaning.
+                var sc = IdeaDirection.ComputeShortConfidence(
+                    (double?)r.EpsBeatPct, (double?)r.OpmExpansionYoyPct,
+                    (double?)r.OperatingProfitExpansionYoyPct, r.LatestRatingGrade,
+                    r.DaysSinceEarnings, r.DaysSinceRating);
+
+                return new FundamentalIdeaRow(
+                    meta?.Symbol ?? r.Ticker,
+                    meta?.CompanyName ?? r.Ticker,
+                    meta?.BroadSector,
+                    meta?.Industry,
+                    r.EarningsDate,
+                    r.EpsBeatPct,
+                    r.OpmExpansionYoyPct,
+                    r.OperatingProfitExpansionYoyPct,
+                    r.LatestRatingFirm,
+                    r.LatestRatingGrade,
+                    r.LatestRatingAction,
+                    r.LatestRatingDate,
+                    r.TargetLowPrice,
+                    r.TargetMeanPrice,
+                    r.TargetHighPrice,
+                    r.EpsBeatConfidence,
+                    r.OpmExpansionConfidence,
+                    r.OperatingProfitExpansionConfidence,
+                    r.AnalystRatingConfidence,
+                    r.TargetUpsideConfidence,
+                    r.FundamentalConfidence,
+                    r.TechnicalConfidence,
+                    r.OverallConfidence,
+                    r.DaysSinceEarnings,
+                    r.DaysSinceRating,
+                    r.ConfidenceRationaleJson,
+                    isStage2,
+                    dir,
+                    rowSide,
+                    sc.EpsBeat,
+                    sc.OpmExpansion,
+                    sc.OpExpansion,
+                    sc.Rating,
+                    sc.Fundamental,
+                    sc.Overall,
+                    sc.RationaleJson,
+                    r.UpdatedAt);
+            })
+            .Where(r => want is null || want == "all" || r.Side == want)
+            .OrderByDescending(r => r.EarningsDate)
+            .ThenBy(r => r.Symbol)
+            .ToList();
+
+        return mapped;
+    }
+
+    // Latest-run Stage-2 flag per symbol, used to tag fundamental ideas for the Long
+    // (Stage-2) filter. Keyed by the catalog symbol (upper-cased).
+    private async Task<Dictionary<string, bool>> LoadStage2Async(string market)
+    {
+        if (IsUs(market))
+        {
+            var maxRun = await _db.USStageAnalysisResults.MaxAsync(s => (int?)s.RunId);
+            if (maxRun == null) return new();
+            var rows = await _db.USStageAnalysisResults.Where(s => s.RunId == maxRun)
+                .Select(s => new { s.Symbol, s.IsStage2 }).ToListAsync();
+            return rows.GroupBy(s => s.Symbol.ToUpperInvariant())
+                       .ToDictionary(g => g.Key, g => g.Any(x => x.IsStage2));
+        }
+        else
+        {
+            var maxRun = await _db.IndianStageAnalysisResults.MaxAsync(s => (int?)s.RunId);
+            if (maxRun == null) return new();
+            var rows = await _db.IndianStageAnalysisResults.Where(s => s.RunId == maxRun)
+                .Select(s => new { s.Symbol, s.IsStage2 }).ToListAsync();
+            return rows.GroupBy(s => s.Symbol.ToUpperInvariant())
+                       .ToDictionary(g => g.Key, g => g.Any(x => x.IsStage2));
+        }
+    }
+
     public async Task<FundamentalDetail?> GetAsync(string market, string symbol)
     {
         var upper = symbol.Trim().ToUpperInvariant();
@@ -73,7 +178,7 @@ public class FundamentalsService : IFundamentalsService
             : new FundamentalRow(
                 meta!.Symbol, meta.CompanyName, meta.BroadSector, meta.Industry,
                 today, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, false);
+                null, null, null, null, null, null, null, null, null, null, false, Array.Empty<EpsQuarter>());
 
         return new FundamentalDetail(dtoRow, note?.NoteText, ToSignals(signalsRow));
     }
@@ -188,6 +293,18 @@ public class FundamentalsService : IFundamentalsService
     private static FundamentalRow ToRow(EarningsFundamentalsBase r, StockMeta? meta, DateOnly today)
     {
         var announcedRecent = r.LastEarningsDate != null && r.LastEarningsDate >= today.AddDays(-7);
+
+        var epsHistory = new List<EpsQuarter>();
+        void AddQuarter(DateOnly? date, decimal? est, decimal? act, decimal? surprise)
+        {
+            if (date != null || act != null || est != null)
+                epsHistory.Add(new EpsQuarter(date, est, act, surprise));
+        }
+        AddQuarter(r.EpsQ1Date, r.EpsQ1Estimate, r.EpsQ1Actual, r.EpsQ1SurprisePct);
+        AddQuarter(r.EpsQ2Date, r.EpsQ2Estimate, r.EpsQ2Actual, r.EpsQ2SurprisePct);
+        AddQuarter(r.EpsQ3Date, r.EpsQ3Estimate, r.EpsQ3Actual, r.EpsQ3SurprisePct);
+        AddQuarter(r.EpsQ4Date, r.EpsQ4Estimate, r.EpsQ4Actual, r.EpsQ4SurprisePct);
+
         return new FundamentalRow(
             meta?.Symbol ?? r.Ticker,
             meta?.CompanyName ?? r.Ticker,
@@ -210,9 +327,13 @@ public class FundamentalsService : IFundamentalsService
             r.OperatingProfitTrend,
             r.LastEarningsDate,
             r.PrevEarningsDate,
+            r.NextEarningsDate,
             r.LastReportedEps,
             r.LastEpsSurprisePct,
-            announcedRecent);
+            r.TrailingPe,
+            r.ForwardPe,
+            announcedRecent,
+            epsHistory);
     }
 
     private record StockMeta(string Symbol, string CompanyName, string? BroadSector, string Industry);

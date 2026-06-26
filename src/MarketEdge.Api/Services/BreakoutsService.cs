@@ -5,85 +5,45 @@ using Microsoft.EntityFrameworkCore;
 
 namespace MarketEdge.Api.Services;
 
-public interface IScoresService
+public interface IBreakoutsService
 {
-    Task<List<StockScoreDto>> GetScoresAsync(string market, string profile, string? side, int take);
-    Task<StockScoreDto?> GetScoreAsync(string market, string ticker);
-    Task<List<TradeDto>> GetTradesAsync(string market, string? status, string? tradeType);
-    Task<TradeStatsDto> GetTradeStatsAsync(string market);
-    Task<TradePnlSummaryDto> GetTradePnlAsync(string market, DateTime from, DateTime to, string? tradeType);
-    Task<TradeDayDto> GetTradesByDayAsync(string market, DateTime date, string? tradeType);
+    Task<List<BreakoutDto>> GetBreakoutsAsync(string market, string? status, string? tradeType);
+    Task<BreakoutStatsDto> GetBreakoutStatsAsync(string market);
+    Task<BreakoutPnlSummaryDto> GetBreakoutPnlAsync(string market, DateTime from, DateTime to, string? tradeType);
+    Task<BreakoutDayDto> GetBreakoutsByDayAsync(string market, DateTime date, string? tradeType);
     Task<List<ScannerPerformanceDto>> GetScannerPerformanceAsync(string market);
     Task<List<ScoringWeightDto>> GetScoringWeightsAsync(string market);
     Task<ScoringWeightDto?> UpdateScoringWeightAsync(string market, int id, ScoringWeightUpdateDto update);
 }
 
-public class ScoresService : IScoresService
+public class BreakoutsService : IBreakoutsService
 {
     private readonly MarketEdgeDbContext _db;
 
-    public ScoresService(MarketEdgeDbContext db) => _db = db;
+    public BreakoutsService(MarketEdgeDbContext db) => _db = db;
+    private IQueryable<T> BreakoutSet<T>() where T : BreakoutBase
+        => typeof(T) == typeof(IndianBreakout)
+            ? (IQueryable<T>)_db.IndianBreakouts
+            : (IQueryable<T>)_db.USBreakouts;
 
-    private IQueryable<T> ScoreSet<T>() where T : StockScoresBase
-        => typeof(T) == typeof(IndianStockScores)
-            ? (IQueryable<T>)_db.IndianStockScores
-            : (IQueryable<T>)_db.USStockScores;
+    public Task<List<BreakoutDto>> GetBreakoutsAsync(string market, string? status, string? tradeType)
+        => market == "india" ? GetBreakouts<IndianBreakout>(status, tradeType) : GetBreakouts<USBreakout>(status, tradeType);
 
-    private IQueryable<T> TradeSet<T>() where T : TradeBase
-        => typeof(T) == typeof(IndianTrade)
-            ? (IQueryable<T>)_db.IndianTrades
-            : (IQueryable<T>)_db.USTrades;
-
-    public Task<List<StockScoreDto>> GetScoresAsync(string market, string profile, string? side, int take)
-        => market == "india"
-            ? GetScores<IndianStockScores>(profile, side, take)
-            : GetScores<USStockScores>(profile, side, take);
-
-    private async Task<List<StockScoreDto>> GetScores<T>(string profile, string? side, int take) where T : StockScoresBase
+    private async Task<List<BreakoutDto>> GetBreakouts<T>(string? status, string? tradeType) where T : BreakoutBase
     {
-        var q = ScoreSet<T>().AsQueryable();
-        var positional = profile == "positional";
-
-        if (!string.IsNullOrWhiteSpace(side))
-        {
-            q = positional ? q.Where(s => s.PositionalSide == side) : q.Where(s => s.SwingSide == side);
-        }
-
-        q = positional
-            ? q.OrderByDescending(s => s.PositionalScore)
-            : q.OrderByDescending(s => s.SwingScore);
-
-        var rows = await q.Take(Math.Clamp(take, 1, 1000)).ToListAsync();
-        return rows.Select(ToDto).ToList();
-    }
-
-    public Task<StockScoreDto?> GetScoreAsync(string market, string ticker)
-        => market == "india" ? GetScore<IndianStockScores>(ticker) : GetScore<USStockScores>(ticker);
-
-    private async Task<StockScoreDto?> GetScore<T>(string ticker) where T : StockScoresBase
-    {
-        var row = await ScoreSet<T>().FirstOrDefaultAsync(s => s.Ticker == ticker);
-        return row == null ? null : ToDto(row);
-    }
-
-    public Task<List<TradeDto>> GetTradesAsync(string market, string? status, string? tradeType)
-        => market == "india" ? GetTrades<IndianTrade>(status, tradeType) : GetTrades<USTrade>(status, tradeType);
-
-    private async Task<List<TradeDto>> GetTrades<T>(string? status, string? tradeType) where T : TradeBase
-    {
-        var q = TradeSet<T>().AsQueryable();
+        var q = BreakoutSet<T>().AsQueryable();
         if (!string.IsNullOrWhiteSpace(status)) q = q.Where(t => t.Status == status);
         if (!string.IsNullOrWhiteSpace(tradeType)) q = q.Where(t => t.TradeType == tradeType);
         var rows = await q.OrderByDescending(t => t.UpdatedAt).Take(500).ToListAsync();
-        return rows.Select(ToTradeDto).ToList();
+        return rows.Select(ToBreakoutDto).ToList();
     }
 
-    public Task<TradeStatsDto> GetTradeStatsAsync(string market)
-        => market == "india" ? GetStats<IndianTrade>() : GetStats<USTrade>();
+    public Task<BreakoutStatsDto> GetBreakoutStatsAsync(string market)
+        => market == "india" ? GetStats<IndianBreakout>() : GetStats<USBreakout>();
 
-    private async Task<TradeStatsDto> GetStats<T>() where T : TradeBase
+    private async Task<BreakoutStatsDto> GetStats<T>() where T : BreakoutBase
     {
-        var rows = await TradeSet<T>()
+        var rows = await BreakoutSet<T>()
             .Select(t => new { t.Status, t.TradeType, t.PnLPct, t.PnLAmount })
             .ToListAsync();
         var active = rows.Count(r => r.Status == "active");
@@ -98,20 +58,20 @@ public class ScoresService : IScoresService
             rows.Where(r => r.Status == status && (type == null || r.TradeType == type) && r.PnLAmount.HasValue)
                 .Select(r => r.PnLAmount!.Value).DefaultIfEmpty(0).Sum(), 2);
 
-        return new TradeStatsDto(active, closed.Count, wins, losses, winRate, avgPnl,
+        return new BreakoutStatsDto(active, closed.Count, wins, losses, winRate, avgPnl,
             Sum("closed", null), Sum("active", null),
             Sum("active", "swing"), Sum("closed", "swing"),
             Sum("active", "positional"), Sum("closed", "positional"));
     }
 
-    public Task<TradePnlSummaryDto> GetTradePnlAsync(string market, DateTime from, DateTime to, string? tradeType)
+    public Task<BreakoutPnlSummaryDto> GetBreakoutPnlAsync(string market, DateTime from, DateTime to, string? tradeType)
         => market == "india"
-            ? GetTradePnl<IndianTrade>(from, to, tradeType)
-            : GetTradePnl<USTrade>(from, to, tradeType);
+            ? GetBreakoutPnl<IndianBreakout>(from, to, tradeType)
+            : GetBreakoutPnl<USBreakout>(from, to, tradeType);
 
-    private async Task<TradePnlSummaryDto> GetTradePnl<T>(DateTime from, DateTime to, string? tradeType) where T : TradeBase
+    private async Task<BreakoutPnlSummaryDto> GetBreakoutPnl<T>(DateTime from, DateTime to, string? tradeType) where T : BreakoutBase
     {
-        var q = TradeSet<T>().AsQueryable();
+        var q = BreakoutSet<T>().AsQueryable();
         if (!string.IsNullOrWhiteSpace(tradeType)) q = q.Where(t => t.TradeType == tradeType);
 
         // Realized: closed trades whose exit falls in [from, to)
@@ -129,20 +89,20 @@ public class ScoresService : IScoresService
         var open = await q.Where(t => t.Status == "active").Select(t => t.PnLAmount).ToListAsync();
         var openPnl = Math.Round(open.Where(v => v.HasValue).Select(v => v!.Value).DefaultIfEmpty(0).Sum(), 2);
 
-        return new TradePnlSummaryDto(from, to, tradeType, realized.Count, wins, losses, winRate,
+        return new BreakoutPnlSummaryDto(from, to, tradeType, realized.Count, wins, losses, winRate,
             realizedPnl, avgPct, open.Count, openPnl);
     }
 
-    public Task<TradeDayDto> GetTradesByDayAsync(string market, DateTime date, string? tradeType)
+    public Task<BreakoutDayDto> GetBreakoutsByDayAsync(string market, DateTime date, string? tradeType)
         => market == "india"
-            ? GetTradesByDay<IndianTrade>(date, tradeType)
-            : GetTradesByDay<USTrade>(date, tradeType);
+            ? GetBreakoutsByDay<IndianBreakout>(date, tradeType)
+            : GetBreakoutsByDay<USBreakout>(date, tradeType);
 
-    private async Task<TradeDayDto> GetTradesByDay<T>(DateTime date, string? tradeType) where T : TradeBase
+    private async Task<BreakoutDayDto> GetBreakoutsByDay<T>(DateTime date, string? tradeType) where T : BreakoutBase
     {
         var dayStart = date.Date;
         var dayEnd = dayStart.AddDays(1);
-        var q = TradeSet<T>().AsQueryable();
+        var q = BreakoutSet<T>().AsQueryable();
         if (!string.IsNullOrWhiteSpace(tradeType)) q = q.Where(t => t.TradeType == tradeType);
 
         var entries = await q.Where(t => t.EntryAt >= dayStart && t.EntryAt < dayEnd)
@@ -150,12 +110,12 @@ public class ScoresService : IScoresService
         var exits = await q.Where(t => t.ExitAt >= dayStart && t.ExitAt < dayEnd)
             .OrderByDescending(t => t.ExitAt).ToListAsync();
 
-        return new TradeDayDto(dayStart, tradeType,
-            entries.Select(ToTradeDto).ToList(), exits.Select(ToTradeDto).ToList());
+        return new BreakoutDayDto(dayStart, tradeType,
+            entries.Select(ToBreakoutDto).ToList(), exits.Select(ToBreakoutDto).ToList());
     }
 
     public Task<List<ScannerPerformanceDto>> GetScannerPerformanceAsync(string market)
-        => market == "india" ? GetScannerPerf<IndianTrade>() : GetScannerPerf<USTrade>();
+        => market == "india" ? GetScannerPerf<IndianBreakout>() : GetScannerPerf<USBreakout>();
 
     // Wilson lower bound (z=1.28, matching the worker scoring engine) of the realised win rate.
     private static decimal WilsonLb(int wins, int total)
@@ -169,9 +129,9 @@ public class ScoresService : IScoresService
         return (decimal)Math.Max(0.0, (centre - margin) / denom);
     }
 
-    private async Task<List<ScannerPerformanceDto>> GetScannerPerf<T>() where T : TradeBase
+    private async Task<List<ScannerPerformanceDto>> GetScannerPerf<T>() where T : BreakoutBase
     {
-        var rows = await TradeSet<T>()
+        var rows = await BreakoutSet<T>()
             .Where(t => t.EntryScanner != null)
             .Select(t => new { t.EntryScanner, t.Status, t.PnLPct, t.PnLAmount })
             .ToListAsync();
@@ -201,15 +161,7 @@ public class ScoresService : IScoresService
             .ThenByDescending(d => d.Trades)
             .ToList();
     }
-
-    private static StockScoreDto ToDto(StockScoresBase s) => new(
-        s.Ticker, s.AsOfDate, s.UpsideEpsPct, s.UpsideAnalystPct, s.TargetPrice,
-        s.AiUpsidePct, s.AiDownsidePct, s.AiRationale,
-        s.SwingScore, s.SwingSide, s.SwingBull, s.SwingBear,
-        s.PositionalScore, s.PositionalSide, s.PositionalBull, s.PositionalBear,
-        s.FundFreshnessDecay, s.DaysSinceEarnings, s.ScannerHits, s.IsFno, s.ComponentsJson, s.ScoredAt);
-
-    private static TradeDto ToTradeDto(TradeBase t)
+    private static BreakoutDto ToBreakoutDto(BreakoutBase t)
     {
         List<string> flagged;
         try
@@ -220,7 +172,7 @@ public class ScoresService : IScoresService
         }
         catch { flagged = new List<string>(); }
 
-        return new TradeDto(
+        return new BreakoutDto(
             t.Id, t.Ticker, t.CompanyName, t.TradeType, t.Direction, t.Status,
             t.EntryScanner, flagged, t.ScannerHitCount, t.EntryAt, t.EntryPrice, t.Qty,
             t.InitialStop, t.CurrentStop, t.StopBasis, t.RiskPerShare, t.MovedToBe,

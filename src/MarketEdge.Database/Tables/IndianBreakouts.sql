@@ -1,4 +1,4 @@
-CREATE TABLE [dbo].[IndianTrades]
+CREATE TABLE [dbo].[IndianBreakouts]
 (
     [Id]                  INT IDENTITY(1,1) NOT NULL,
     [Ticker]              NVARCHAR(30)  NOT NULL,
@@ -8,10 +8,10 @@ CREATE TABLE [dbo].[IndianTrades]
     [Direction]           NVARCHAR(6)   NOT NULL,   -- long / short
     [Status]              NVARCHAR(10)  NOT NULL,   -- active / closed
 
-    -- Which scanner opened the trade, and every scanner that has flagged it since (JSON list)
+    -- Which scanner opened the breakout, and every scanner that has flagged it since (JSON list)
     [EntryScanner]        NVARCHAR(50)  NULL,
     [FlaggedScannersJson] NVARCHAR(MAX) NULL,
-    [ScannerHitCount]     INT           NOT NULL CONSTRAINT [DF_IndianTrades_ScannerHitCount] DEFAULT (0),
+    [ScannerHitCount]     INT           NOT NULL CONSTRAINT [DF_IndianBreakouts_ScannerHitCount] DEFAULT (0),
 
     [EntryAt]             DATETIME2     NOT NULL,
     [EntryPrice]          DECIMAL(18,4) NOT NULL,
@@ -22,7 +22,7 @@ CREATE TABLE [dbo].[IndianTrades]
     [CurrentStop]         DECIMAL(18,4) NULL,
     [StopBasis]           NVARCHAR(16)  NULL,        -- pct6 / ema20 / breakeven / trail10
     [RiskPerShare]        DECIMAL(18,4) NULL,        -- R = |entry - initialStop|
-    [MovedToBe]           BIT           NOT NULL CONSTRAINT [DF_IndianTrades_MovedToBe] DEFAULT (0),
+    [MovedToBe]           BIT           NOT NULL CONSTRAINT [DF_IndianBreakouts_MovedToBe] DEFAULT (0),
 
     -- Live tracking
     [LastPrice]           DECIMAL(18,4) NULL,
@@ -36,17 +36,17 @@ CREATE TABLE [dbo].[IndianTrades]
     [ExitPrice]           DECIMAL(18,4) NULL,
     [ExitReason]          NVARCHAR(16)  NULL,        -- sl_hit / ema_close / trail
 
-    -- Trade-confidence score (0..100) computed at entry from the weighted blend of
-    -- the triggering pattern, fundamentals, EPS upside and AI inputs, plus the JSON
+    -- Breakout-confidence score (0..100) computed at entry from the weighted blend of
+    -- the triggering scanner setup, fundamentals and breakout volume, plus the JSON
     -- rationale describing each component's contribution.
     [ConfidenceScore]        DECIMAL(5,2)  NULL,
     [ConfidenceRationaleJson] NVARCHAR(MAX) NULL,
 
-    [CreatedAt]           DATETIME2     NOT NULL CONSTRAINT [DF_IndianTrades_CreatedAt] DEFAULT GETUTCDATE(),
-    [UpdatedAt]           DATETIME2     NOT NULL CONSTRAINT [DF_IndianTrades_UpdatedAt] DEFAULT GETUTCDATE(),
+    [CreatedAt]           DATETIME2     NOT NULL CONSTRAINT [DF_IndianBreakouts_CreatedAt] DEFAULT GETUTCDATE(),
+    [UpdatedAt]           DATETIME2     NOT NULL CONSTRAINT [DF_IndianBreakouts_UpdatedAt] DEFAULT GETUTCDATE(),
 
-    CONSTRAINT [PK_IndianTrades] PRIMARY KEY CLUSTERED ([Id]),
-    CONSTRAINT [FK_IndianTrades_IndianTickers] FOREIGN KEY ([Ticker]) REFERENCES [dbo].[IndianTickers]([Ticker]),
-    INDEX [IX_IndianTrades_Ticker_Type_Status] NONCLUSTERED ([Ticker], [TradeType], [Status]),
-    INDEX [IX_IndianTrades_Status] NONCLUSTERED ([Status])
+    CONSTRAINT [PK_IndianBreakouts] PRIMARY KEY CLUSTERED ([Id]),
+    CONSTRAINT [FK_IndianBreakouts_IndianTickers] FOREIGN KEY ([Ticker]) REFERENCES [dbo].[IndianTickers]([Ticker]),
+    INDEX [IX_IndianBreakouts_Ticker_Type_Status] NONCLUSTERED ([Ticker], [TradeType], [Status]),
+    INDEX [IX_IndianBreakouts_Status] NONCLUSTERED ([Status])
 );

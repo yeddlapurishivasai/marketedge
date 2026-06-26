@@ -1,4 +1,4 @@
-CREATE TABLE [dbo].[USTrades]
+CREATE TABLE [dbo].[USBreakouts]
 (
     [Id]                  INT IDENTITY(1,1) NOT NULL,
     [Ticker]              NVARCHAR(20)  NOT NULL,
@@ -8,10 +8,10 @@ CREATE TABLE [dbo].[USTrades]
     [Direction]           NVARCHAR(6)   NOT NULL,   -- long / short
     [Status]              NVARCHAR(10)  NOT NULL,   -- active / closed
 
-    -- Which scanner opened the trade, and every scanner that has flagged it since (JSON list)
+    -- Which scanner opened the breakout, and every scanner that has flagged it since (JSON list)
     [EntryScanner]        NVARCHAR(50)  NULL,
     [FlaggedScannersJson] NVARCHAR(MAX) NULL,
-    [ScannerHitCount]     INT           NOT NULL CONSTRAINT [DF_USTrades_ScannerHitCount] DEFAULT (0),
+    [ScannerHitCount]     INT           NOT NULL CONSTRAINT [DF_USBreakouts_ScannerHitCount] DEFAULT (0),
 
     [EntryAt]             DATETIME2     NOT NULL,
     [EntryPrice]          DECIMAL(18,4) NOT NULL,
@@ -22,7 +22,7 @@ CREATE TABLE [dbo].[USTrades]
     [CurrentStop]         DECIMAL(18,4) NULL,
     [StopBasis]           NVARCHAR(16)  NULL,        -- pct6 / ema20 / breakeven / trail10
     [RiskPerShare]        DECIMAL(18,4) NULL,        -- R = |entry - initialStop|
-    [MovedToBe]           BIT           NOT NULL CONSTRAINT [DF_USTrades_MovedToBe] DEFAULT (0),
+    [MovedToBe]           BIT           NOT NULL CONSTRAINT [DF_USBreakouts_MovedToBe] DEFAULT (0),
 
     -- Live tracking
     [LastPrice]           DECIMAL(18,4) NULL,
@@ -36,17 +36,17 @@ CREATE TABLE [dbo].[USTrades]
     [ExitPrice]           DECIMAL(18,4) NULL,
     [ExitReason]          NVARCHAR(16)  NULL,        -- sl_hit / ema_close / trail
 
-    -- Trade-confidence score (0..100) computed at entry from the weighted blend of
-    -- the triggering pattern, fundamentals, EPS upside and AI inputs, plus the JSON
+    -- Breakout-confidence score (0..100) computed at entry from the weighted blend of
+    -- the triggering scanner setup, fundamentals and breakout volume, plus the JSON
     -- rationale describing each component's contribution.
     [ConfidenceScore]        DECIMAL(5,2)  NULL,
     [ConfidenceRationaleJson] NVARCHAR(MAX) NULL,
 
-    [CreatedAt]           DATETIME2     NOT NULL CONSTRAINT [DF_USTrades_CreatedAt] DEFAULT GETUTCDATE(),
-    [UpdatedAt]           DATETIME2     NOT NULL CONSTRAINT [DF_USTrades_UpdatedAt] DEFAULT GETUTCDATE(),
+    [CreatedAt]           DATETIME2     NOT NULL CONSTRAINT [DF_USBreakouts_CreatedAt] DEFAULT GETUTCDATE(),
+    [UpdatedAt]           DATETIME2     NOT NULL CONSTRAINT [DF_USBreakouts_UpdatedAt] DEFAULT GETUTCDATE(),
 
-    CONSTRAINT [PK_USTrades] PRIMARY KEY CLUSTERED ([Id]),
-    CONSTRAINT [FK_USTrades_USTickers] FOREIGN KEY ([Ticker]) REFERENCES [dbo].[USTickers]([Ticker]),
-    INDEX [IX_USTrades_Ticker_Type_Status] NONCLUSTERED ([Ticker], [TradeType], [Status]),
-    INDEX [IX_USTrades_Status] NONCLUSTERED ([Status])
+    CONSTRAINT [PK_USBreakouts] PRIMARY KEY CLUSTERED ([Id]),
+    CONSTRAINT [FK_USBreakouts_USTickers] FOREIGN KEY ([Ticker]) REFERENCES [dbo].[USTickers]([Ticker]),
+    INDEX [IX_USBreakouts_Ticker_Type_Status] NONCLUSTERED ([Ticker], [TradeType], [Status]),
+    INDEX [IX_USBreakouts_Status] NONCLUSTERED ([Status])
 );

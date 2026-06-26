@@ -26,7 +26,7 @@ import math
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from queue import Queue
 
 import pandas as pd
@@ -129,13 +129,39 @@ def _resolve_universe(conn, args) -> list[dict]:
 
 def _apply_missing_filter(conn, args, universe: list[dict], kind: str) -> list[dict]:
     """Drop tickers that already have ``kind`` output when --missing is set."""
-    if not getattr(args, "missing", False):
+    if getattr(args, "force", False) or not getattr(args, "missing", False):
         return universe
     present = db.get_present_tickers(conn, args.market, kind)
     filtered = [u for u in universe if u["symbol"].upper() not in present]
     logger.info(
         "Missing-only (%s): %s of %s tickers lack data and will be processed.",
         kind, len(filtered), len(universe),
+    )
+    return filtered
+
+
+def _apply_earnings_window_filter(conn, args, universe: list[dict]) -> list[dict]:
+    """Restrict the run to tickers 'due' for refresh based on NextEarningsDate.
+
+    Enabled by ``--earnings-window-days N`` (the optimized daily run). Bypassed entirely by
+    ``--force`` or when an explicit ``--symbols`` list is given. A ticker is kept when it has
+    no NextEarningsDate yet or is reporting within +/- N days, so the daily job touches only
+    names near an earnings event instead of the whole universe.
+    """
+    window = getattr(args, "earnings_window_days", None)
+    if window is None:
+        return universe
+    if getattr(args, "force", False):
+        logger.info("Force mode: ignoring --earnings-window-days; processing all %s tickers.",
+                    len(universe))
+        return universe
+    if _parse_symbols(getattr(args, "symbols", None)):
+        return universe
+    due = db.get_due_earnings_tickers(conn, args.market, date.today(), int(window))
+    filtered = [u for u in universe if u["symbol"].upper() in due]
+    logger.info(
+        "Earnings window (+/-%sd): %s of %s tickers are due and will be processed.",
+        window, len(filtered), len(universe),
     )
     return filtered
 
@@ -380,6 +406,12 @@ def _process_symbol_fundamentals(conn, market, symbol, yf, today, market_caps) -
         logger.warning("Catalyst signals failed for %s: %s", symbol, exc)
         c["signals_skipped"] += 1
 
+    # Recompute the screener idea from the freshly-written earnings + analyst snapshots.
+    try:
+        db.refresh_fundamental_idea(conn, market, symbol)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Fundamental idea refresh failed for %s: %s", symbol, exc)
+
     if Config.YFINANCE_TICKER_DELAY > 0:
         time.sleep(Config.YFINANCE_TICKER_DELAY)
     return c
@@ -415,6 +447,7 @@ def cmd_ingest_fundamentals(args) -> int:
     try:
         universe = _resolve_universe(conn, args)
         universe = _apply_missing_filter(conn, args, universe, "earnings")
+        universe = _apply_earnings_window_filter(conn, args, universe)
         symbols = [u["symbol"] for u in universe]
         counts["tickers"] = len(symbols)
         today = date.today()
@@ -527,8 +560,22 @@ def _try_analyst_snapshot(conn, market, symbol, ticker, as_of) -> bool:
     target_low = _safe_num(info.get("targetLowPrice"))
     target_mean = _safe_num(info.get("targetMeanPrice"))
     target_high = _safe_num(info.get("targetHighPrice"))
+
+    # Recommendation distribution trend (Strong Buy / Buy / Hold / Underperform / Sell), most
+    # recent period first. From yfinance ``recommendations`` (rows: 0m/-1m/-2m/-3m).
+    recommendations = _fetch_recommendations(symbol, ticker)
+    recommendations_json = json.dumps(recommendations) if recommendations else None
+
+    # Latest analyst rating action with research-firm terminology (Overweight / Outperform /
+    # Neutral / etc.) from yfinance ``upgrades_downgrades``.
+    rating_firm = rating_grade = rating_action = rating_date = None
+    latest = _fetch_latest_rating(symbol, ticker)
+    if latest is not None:
+        rating_firm, rating_grade, rating_action, rating_date = latest
+
     if (rating is None and num is None and trailing_eps is None and forward_eps is None
-            and target_low is None and target_mean is None and target_high is None):
+            and target_low is None and target_mean is None and target_high is None
+            and recommendations_json is None and rating_grade is None):
         return False
     try:
         db.upsert_analyst_snapshot(
@@ -545,12 +592,86 @@ def _try_analyst_snapshot(conn, market, symbol, ticker, as_of) -> bool:
                 "target_low_price": target_low,
                 "target_mean_price": target_mean,
                 "target_high_price": target_high,
+                "recommendations_json": recommendations_json,
+                "latest_rating_firm": rating_firm,
+                "latest_rating_grade": rating_grade,
+                "latest_rating_action": rating_action,
+                "latest_rating_date": rating_date,
             },
         )
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed analyst snapshot for %s: %s", symbol, exc)
         return False
+
+
+def _fetch_recommendations(symbol, ticker) -> list[dict]:
+    """Monthly recommendation distribution from yfinance, most recent period first.
+
+    Returns a list of ``{period, strongBuy, buy, hold, sell, strongSell}`` dicts. Empty on
+    failure or when the (flaky) endpoint returns nothing.
+    """
+    try:
+        rec = ticker.recommendations
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("No recommendations for %s: %s", symbol, exc)
+        return []
+    if rec is None or not hasattr(rec, "iterrows") or rec.empty:
+        return []
+
+    def _int(value):
+        n = _safe_num(value)
+        return int(n) if n is not None else 0
+
+    out = []
+    for _, rrow in rec.iterrows():
+        period = rrow.get("period")
+        out.append({
+            "period": str(period) if period is not None else "",
+            "strongBuy": _int(rrow.get("strongBuy")),
+            "buy": _int(rrow.get("buy")),
+            "hold": _int(rrow.get("hold")),
+            "sell": _int(rrow.get("sell")),
+            "strongSell": _int(rrow.get("strongSell")),
+        })
+    return out
+
+
+def _fetch_latest_rating(symbol, ticker):
+    """Most recent analyst rating action: (firm, grade, action, date) or None.
+
+    Sourced from yfinance ``upgrades_downgrades`` (indexed by GradeDate; columns Firm,
+    ToGrade, FromGrade, Action). Grade carries the firm-specific terminology such as
+    "Overweight" / "Outperform" / "Neutral".
+    """
+    try:
+        ud = ticker.upgrades_downgrades
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("No upgrades/downgrades for %s: %s", symbol, exc)
+        return None
+    if ud is None or not hasattr(ud, "iterrows") or ud.empty:
+        return None
+    try:
+        ud = ud.sort_index(ascending=False)
+    except Exception:  # noqa: BLE001
+        pass
+    for idx, urow in ud.iterrows():
+        grade = urow.get("ToGrade")
+        if grade is None or (isinstance(grade, float) and math.isnan(grade)) or str(grade).strip() == "":
+            continue
+        firm = urow.get("Firm")
+        action = urow.get("Action")
+        try:
+            gdate = idx.date()
+        except Exception:  # noqa: BLE001
+            gdate = None
+        return (
+            str(firm).strip() if firm is not None else None,
+            str(grade).strip(),
+            str(action).strip() if action is not None else None,
+            gdate,
+        )
+    return None
 
 
 _PERIOD_MAP = {"0q": ("Q", 0), "+1q": ("Q", 1), "0y": ("Y", 0), "+1y": ("Y", 1)}
@@ -631,6 +752,45 @@ def _trend(cur, prev):
     return "flat"
 
 
+def _epoch_to_date(ts):
+    """Convert a Unix epoch (seconds) to a UTC date; None on bad/empty input."""
+    if ts is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(ts), timezone.utc).date()
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
+def _calendar_next_earnings(ticker, as_of):
+    """Earliest upcoming earnings date from ticker.calendar, else None."""
+    try:
+        cal = ticker.calendar
+    except Exception:  # noqa: BLE001
+        return None
+    raw = None
+    if isinstance(cal, dict):
+        raw = cal.get("Earnings Date")
+    elif cal is not None and hasattr(cal, "loc"):
+        try:
+            raw = cal.loc["Earnings Date"]
+        except Exception:  # noqa: BLE001
+            raw = None
+    if raw is None:
+        return None
+    values = list(raw) if isinstance(raw, (list, tuple)) else list(getattr(raw, "values", [raw]))
+    candidates = []
+    for v in values:
+        d = None
+        try:
+            d = v.date() if hasattr(v, "date") else (v if isinstance(v, date) else None)
+        except Exception:  # noqa: BLE001
+            d = None
+        if isinstance(d, date) and d >= as_of:
+            candidates.append(d)
+    return min(candidates) if candidates else None
+
+
 def _try_earnings_fundamentals(conn, market, symbol, ticker, as_of) -> bool:
     """Compute reported quarterly earnings fundamentals from yfinance and upsert.
 
@@ -668,8 +828,10 @@ def _try_earnings_fundamentals(conn, market, symbol, ticker, as_of) -> bool:
         except Exception:  # noqa: BLE001
             latest_q_end = None
 
-    # Earnings announcement dates (reported only).
-    last_date = prev_date = last_eps = last_surprise = None
+    # Earnings announcement dates + reported-EPS history (reported quarters only).
+    last_date = prev_date = last_eps = last_surprise = next_date = None
+    eps_quarters = []  # (date, estimate, actual, surprise_pct), most recent first
+    future_dates = []  # upcoming (unreported) earnings dates
     try:
         ed = ticker.get_earnings_dates(limit=12)
     except Exception as exc:  # noqa: BLE001
@@ -683,17 +845,72 @@ def _try_earnings_fundamentals(conn, market, symbol, ticker, as_of) -> bool:
                 idate = idx.date()
             except Exception:  # noqa: BLE001
                 continue
-            if rep is not None and not (isinstance(rep, float) and math.isnan(rep)) \
-                    and idate <= as_of:
-                reported.append((idate, _safe_num(rep), _safe_num(erow.get("Surprise(%)"))))
+            has_rep = rep is not None and not (isinstance(rep, float) and math.isnan(rep))
+            if has_rep and idate <= as_of:
+                reported.append((idate, _safe_num(erow.get("EPS Estimate")),
+                                 _safe_num(rep), _safe_num(erow.get("Surprise(%)"))))
+            elif idate > as_of:
+                future_dates.append(idate)
         reported.sort(key=lambda r: r[0], reverse=True)
+        eps_quarters = reported[:4]
         if reported:
-            last_date, last_eps, last_surprise = reported[0]
+            last_date, last_eps, last_surprise = reported[0][0], reported[0][2], reported[0][3]
         if len(reported) > 1:
             prev_date = reported[1][0]
+        if future_dates:
+            next_date = min(future_dates)
+
+    # Flatten up to 4 most-recent reported quarters into fixed Q1..Q4 column slots.
+    eps_hist = {}
+    for i in range(4):
+        n = i + 1
+        qd, qest, qact, qsurp = eps_quarters[i] if i < len(eps_quarters) else (None, None, None, None)
+        eps_hist[f"eps_q{n}_date"] = qd
+        eps_hist[f"eps_q{n}_estimate"] = qest
+        eps_hist[f"eps_q{n}_actual"] = qact
+        eps_hist[f"eps_q{n}_surprise_pct"] = qsurp
+
+    # Valuation multiples from ticker.info (best-effort; flaky/rate-limited endpoint).
+    trailing_pe = forward_pe = None
+    try:
+        info = ticker.info
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("No info for %s: %s", symbol, exc)
+        info = None
+    if isinstance(info, dict):
+        trailing_pe = _safe_num(info.get("trailingPE"))
+        forward_pe = _safe_num(info.get("forwardPE"))
+        # yfinance's get_earnings_dates sometimes lags a full quarter behind the actual
+        # most-recent report (e.g. BHEL: table jumps Jan-19 -> Jul-30, skipping the Mar-31
+        # quarter reported on May 4). info.earningsTimestamp carries the true last
+        # announcement; when it's in the past and ~a quarter newer than the table's latest,
+        # a quarter was missed -> advance last/prev so the idea reflects the real result.
+        # The missed quarter's reported EPS isn't available from this endpoint; we leave the
+        # EPS fields untouched (preserve_on_null protects them against the flaky endpoint, so
+        # forcing them NULL here would risk wiping good data on a transient empty fetch).
+        info_last = _epoch_to_date(info.get("earningsTimestamp"))
+        if info_last is not None and info_last <= as_of and (
+            last_date is None or (info_last - last_date).days >= 45
+        ):
+            if last_date is not None:
+                prev_date = last_date
+            last_date = info_last
+        # Fallback for next earnings date when get_earnings_dates lacks future rows,
+        # so (almost) every stock gets a NextEarningsDate to drive daily-run scheduling.
+        if next_date is None:
+            for key in ("earningsTimestampStart", "earningsTimestamp", "earningsTimestampEnd"):
+                ts = info.get(key)
+                cand = _epoch_to_date(ts)
+                if cand is not None and cand >= as_of:
+                    next_date = cand
+                    break
+
+    # Second fallback: ticker.calendar (only when still unknown; extra network call).
+    if next_date is None:
+        next_date = _calendar_next_earnings(ticker, as_of)
 
     # Nothing usable at all -> skip.
-    if revenue is None and net_profit is None and last_date is None:
+    if revenue is None and net_profit is None and last_date is None and next_date is None:
         return False
 
     opm = _margin(op_profit, revenue)
@@ -722,7 +939,10 @@ def _try_earnings_fundamentals(conn, market, symbol, ticker, as_of) -> bool:
         "operating_profit_trend": _trend(op_profit, op_profit_pq),
         "opm_trend": _trend(opm, opm_pq),
         "last_earnings_date": last_date, "prev_earnings_date": prev_date,
+        "next_earnings_date": next_date,
         "last_reported_eps": last_eps, "last_eps_surprise_pct": last_surprise,
+        "trailing_pe": trailing_pe, "forward_pe": forward_pe,
+        **eps_hist,
     }
     try:
         db.upsert_earnings_fundamentals(conn, market, row)
@@ -933,6 +1153,10 @@ def _add_universe_args(parser: argparse.ArgumentParser, allow_missing: bool = Fa
             "--missing", action="store_true",
             help="Only process tickers that are missing this step's output (gap-fill).",
         )
+        parser.add_argument(
+            "--force", action="store_true",
+            help="Force a full refresh: bypass --missing and earnings-window filters.",
+        )
 
 
 def _add_progress_args(parser: argparse.ArgumentParser) -> None:
@@ -974,6 +1198,11 @@ def build_parser() -> argparse.ArgumentParser:
         "fundamentals", help="Ingest analyst/EPS data (best-effort)."
     )
     _add_universe_args(fundamentals, allow_missing=True)
+    fundamentals.add_argument(
+        "--earnings-window-days", type=int, default=None,
+        help="Optimized daily run: only process tickers whose NextEarningsDate is within "
+             "+/- N days (or not yet captured). Bypassed by --force or --symbols.",
+    )
     _add_progress_args(fundamentals)
     fundamentals.set_defaults(func=cmd_ingest_fundamentals)
 

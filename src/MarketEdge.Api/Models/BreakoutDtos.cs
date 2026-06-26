@@ -1,32 +1,8 @@
 namespace MarketEdge.Api.Models;
 
-// Wire shapes for the scoring & paper-trade engine feature.
+// Wire shapes for the breakout and scoring-weight APIs.
 
-public record StockScoreDto(
-    string Ticker,
-    DateOnly? AsOfDate,
-    decimal? UpsideEpsPct,
-    decimal? UpsideAnalystPct,
-    decimal? TargetPrice,
-    decimal? AiUpsidePct,
-    decimal? AiDownsidePct,
-    string? AiRationale,
-    int? SwingScore,
-    string? SwingSide,
-    int? SwingBull,
-    int? SwingBear,
-    int? PositionalScore,
-    string? PositionalSide,
-    int? PositionalBull,
-    int? PositionalBear,
-    decimal? FundFreshnessDecay,
-    int? DaysSinceEarnings,
-    int? ScannerHits,
-    bool? IsFno,
-    string? ComponentsJson,
-    DateTime ScoredAt);
-
-public record TradeDto(
+public record BreakoutDto(
     int Id,
     string Ticker,
     string? CompanyName,
@@ -56,7 +32,7 @@ public record TradeDto(
     string? ConfidenceRationaleJson,
     DateTime UpdatedAt);
 
-public record TradeStatsDto(
+public record BreakoutStatsDto(
     int ActiveCount,
     int ClosedCount,
     int Wins,
@@ -70,9 +46,9 @@ public record TradeStatsDto(
     decimal? PositionalOpenPnLAmount,
     decimal? PositionalRealizedPnLAmount);
 
-// Realized PnL = trades closed (by ExitAt) within [From, To). Unrealized PnL = the live
+// Realized PnL = breakouts closed (by ExitAt) within [From, To). Unrealized PnL = the live
 // snapshot of all currently-open positions, which is period-independent.
-public record TradePnlSummaryDto(
+public record BreakoutPnlSummaryDto(
     DateTime From,
     DateTime To,
     string? TradeType,
@@ -85,11 +61,11 @@ public record TradePnlSummaryDto(
     int OpenCount,
     decimal OpenPnLAmount);
 
-public record TradeDayDto(
+public record BreakoutDayDto(
     DateTime Date,
     string? TradeType,
-    List<TradeDto> Entries,
-    List<TradeDto> Exits);
+    List<BreakoutDto> Entries,
+    List<BreakoutDto> Exits);
 
 public record ScannerPerformanceDto(
     string Scanner,

@@ -57,6 +57,11 @@ public abstract class AnalystSnapshotBase
     public decimal? TargetLowPrice { get; set; }
     public decimal? TargetMeanPrice { get; set; }
     public decimal? TargetHighPrice { get; set; }
+    public string? RecommendationsJson { get; set; }
+    public string? LatestRatingFirm { get; set; }
+    public string? LatestRatingGrade { get; set; }
+    public string? LatestRatingAction { get; set; }
+    public DateOnly? LatestRatingDate { get; set; }
 }
 
 [Table("IndianAnalystSnapshot")] public class IndianAnalystSnapshot : AnalystSnapshotBase { }

@@ -61,7 +61,10 @@ param(
     [switch]$SeedData,
     [switch]$SkipDatabase,
     [switch]$SkipApi,
-    [switch]$SkipWorker
+    [switch]$SkipWorker,
+
+    # Optional data-preserving SQL migration run before the dacpac publish.
+    [string]$PreMigrationScript
 )
 
 $ErrorActionPreference = "Stop"
@@ -84,6 +87,7 @@ if (-not $SkipDatabase) {
         SqlPassword   = $SqlPassword
     }
     if ($SeedData) { $dbArgs.SeedData = $true }
+    if ($PreMigrationScript) { $dbArgs.PreMigrationScript = $PreMigrationScript }
     & "$ScriptDir\deploy-database.ps1" @dbArgs
     Write-Host ""
 }
