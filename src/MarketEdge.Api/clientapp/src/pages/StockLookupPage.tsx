@@ -111,6 +111,7 @@ function EpsTable({ rows, market, periodLabel }: { rows: LookupEpsForecast[]; ma
   const base = rows[0]?.consensusEps;
   const hasBase = base != null && base > 0;
   return (
+    <div className="table-scroll">
     <table className="table eps-table">
       <thead>
         <tr><th>Period</th><th>Consensus EPS</th><th>Upside @ const P/E</th><th>High</th><th>Low</th><th>Estimates</th><th>Revisions</th></tr>
@@ -145,6 +146,7 @@ function EpsTable({ rows, market, periodLabel }: { rows: LookupEpsForecast[]; ma
         consensus EPS vs the current {periodLabel}.
       </caption>
     </table>
+    </div>
   );
 }
 
@@ -205,6 +207,7 @@ function UpsideCases(
   return (
     <div className="upside-callout">
       <span className="upside-title">Potential upside scenarios</span>
+      <div className="table-scroll">
       <table className="table" style={{ marginTop: 8 }}>
         <thead>
           <tr>
@@ -221,6 +224,7 @@ function UpsideCases(
           {aiRow}
         </tbody>
       </table>
+      </div>
       <p className="muted-note">
         EPS rows hold the current P/E and move price with the Low / Consensus / High EPS estimate.
         Analyst targets are yfinance 12-month Low / Mean / High price targets. Each cell shows the
@@ -409,6 +413,7 @@ export function StockDetailView({ market, symbol }: { market: Market; symbol: st
         <div className="lookup-section">
           <h2 className="section-title">Analyst Snapshot</h2>
           {a.asOfDate && <span className="pill">As Of {fmtDate(a.asOfDate)}</span>}
+          <div className="table-scroll">
           <table className="table">
             <thead>
               <tr><th>Consensus</th><th>Current Quarter EPS</th><th>Next Quarter EPS</th><th>Current Year EPS</th><th>Next Year EPS</th></tr>
@@ -423,6 +428,7 @@ export function StockDetailView({ market, symbol }: { market: Market; symbol: st
               </tr>
             </tbody>
           </table>
+          </div>
           <UpsideCases year={detail.yearUpside} quarter={detail.quarterUpside} analyst={detail.analystUpside} ai={detail.aiUpside} market={market} />
           {a.numAnalysts != null && <p className="muted-note">Based on {a.numAnalysts} analysts offering recommendations for '{detail.symbol}'.</p>}
         </div>
