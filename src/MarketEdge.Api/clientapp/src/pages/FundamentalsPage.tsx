@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { Market, FundamentalIdeaRow } from '../api';
-import { fetchFundamentalIdeas } from '../api';
+import { fetchFundamentalIdeas, triggerFundamentalsRefresh } from '../api';
 import { StockLookupModal } from './StockLookupPage';
-import { ChevronLeft, RefreshCw, LineChart, ArrowUpRight, ArrowDownRight, Info, X } from 'lucide-react';
+import { ChevronLeft, RefreshCw, LineChart, ArrowUpRight, ArrowDownRight, Info, X, PlayCircle, Loader2 } from 'lucide-react';
 
 function fmtPct(v?: number | null): string {
   if (v == null) return '—';
@@ -103,13 +103,13 @@ function RatingCell({ r }: { r: FundamentalIdeaRow }) {
   );
 }
 
-// Long/short/neutral bucketing + direction-aware confidence now come from the API
-// (FundamentalsService / IdeaDirection): r.side is the server-computed bucket and the
+// Long/short/neutral bucketing + direction-aware confidence are computed by the worker
+// (confidence.py) and surfaced by the API: r.side is the worker-computed bucket and the
 // confidence columns are already oriented to that side (mirrored for shorts).
 type IdeaSide = 'long' | 'short' | 'neutral';
 
 // --- Confidence breakdown modal ----------------------------------------------
-interface RationaleMetric { metric: string; phat: number; n: number; days: number | null; z: number; confidence: number; }
+interface RationaleMetric { metric: string; phat: number; n: number; days: number | null; recency: number; confidence: number; }
 interface Rationale {
   n: number;
   weights: Record<string, number>;
@@ -124,6 +124,8 @@ interface Rationale {
 
 const METRIC_LABEL: Record<string, string> = {
   epsBeat: 'EPS beat',
+  epsBeatRate: 'EPS beat rate',
+  epsForecast: 'EPS forecast growth',
   opmExpansion: 'OPM expansion',
   opExpansion: 'Operating-profit expansion',
   rating: 'Analyst rating',
@@ -150,22 +152,28 @@ function ConfidenceBreakdown({ row, side, onClose }: { row: FundamentalIdeaRow; 
           <button onClick={onClose} className="btn btn-sm btn-outline" style={{ marginLeft: 'auto' }}><X size={14} /></button>
         </div>
         <p className="cell-muted" style={{ fontSize: '0.82rem', marginTop: 0 }}>
-          Each metric's raw value is normalised to a 0–1 strength (p̂), then passed through a
-          Wilson lower bound over n={data?.n ?? '—'} available metrics. The z widens with the
-          signal's age (z = 1.28·(1 + days/30)), so confidence decays as the result/rating gets older.
+          Each metric's raw value is normalised to a 0–1 strength (p̂), then decayed by a
+          recency factor (30 / (30 + days)) so a fresh result/rating scores at full strength
+          and fades as it ages. Ratio metrics that can explode from a near-zero base (EPS beat,
+          EPS forecast, operating-profit expansion) use a diminishing-returns curve, so an
+          extreme low-quality beat converges toward — but never tops — a clean one instead of
+          dominating the blend. The <strong>EPS beat rate</strong> row is a different exception:
+          it's a true frequency (beats over the last N quarters), so it uses a Wilson lower bound
+          and doesn't age. Fundamental confidence is the weighted blend of the rows below.
         </p>
 
         {!data ? (
           <p className="cell-muted">No rationale stored for this idea yet — re-run a fundamentals refresh to populate it.</p>
         ) : (
           <>
-            <table className="table" style={{ width: '100%', fontSize: '0.84rem', marginBottom: 14 }}>
+            <div className="table-scroll">
+            <table className="table" style={{ width: '100%', fontSize: '0.84rem', marginBottom: 14, minWidth: 540 }}>
               <thead>
                 <tr>
                   <th style={{ textAlign: 'left' }}>Metric</th>
                   <th style={{ textAlign: 'right' }}>p̂</th>
                   <th style={{ textAlign: 'right' }}>age (d)</th>
-                  <th style={{ textAlign: 'right' }}>z</th>
+                  <th style={{ textAlign: 'right' }}>recency</th>
                   <th style={{ textAlign: 'right' }}>Confidence</th>
                   <th style={{ textAlign: 'right' }}>Weight</th>
                   <th style={{ textAlign: 'right' }}>Contribution</th>
@@ -177,7 +185,7 @@ function ConfidenceBreakdown({ row, side, onClose }: { row: FundamentalIdeaRow; 
                     <td>{METRIC_LABEL[p.metric] ?? p.metric}</td>
                     <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{p.phat.toFixed(3)}</td>
                     <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{p.days ?? '—'}</td>
-                    <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{p.z.toFixed(3)}</td>
+                    <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{p.recency.toFixed(3)}</td>
                     <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600, color: confColor(p.confidence) }}>{p.confidence.toFixed(2)}</td>
                     <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{(p.weight * 100).toFixed(0)}%</td>
                     <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{(p.contribution / (wsum || 1)).toFixed(2)}</td>
@@ -185,31 +193,12 @@ function ConfidenceBreakdown({ row, side, onClose }: { row: FundamentalIdeaRow; 
                 ))}
               </tbody>
             </table>
+            </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border)', paddingTop: 8 }}>
                 <span><strong>Fundamental confidence</strong> = weighted blend of the rows above</span>
-                <span style={{ fontWeight: 700, color: confColor(data.fundamental) }}>{data.fundamental?.toFixed(2) ?? '—'}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>
-                  <strong>Technical confidence</strong>{' '}
-                  {data.technical == null
-                    ? <span className="cell-muted">— no closed trades{data.technicalDetail?.scanner ? ` (scanner ${data.technicalDetail.scanner} has no win/loss record yet)` : ''}</span>
-                    : <span className="cell-muted">from {data.technicalDetail?.source === 'own' ? 'this stock\u2019s' : 'scanner'} {data.technicalDetail?.wins}/{data.technicalDetail?.total} wins</span>}
-                </span>
-                <span style={{ fontWeight: 700, color: confColor(data.technical) }}>{data.technical?.toFixed(2) ?? '—'}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border)', paddingTop: 8 }}>
-                <span>
-                  <strong>Overall</strong>{' '}
-                  <span className="cell-muted">
-                    {data.technical == null
-                      ? '= fundamental only (technical missing)'
-                      : `= ${(data.blend.fundamental * 100).toFixed(0)}% fundamental + ${(data.blend.technical * 100).toFixed(0)}% technical`}
-                  </span>
-                </span>
-                <span style={{ fontWeight: 800, fontSize: '1.05rem', color: confColor(data.overall) }}>{data.overall?.toFixed(2) ?? '—'}</span>
+                <span style={{ fontWeight: 800, fontSize: '1.05rem', color: confColor(data.fundamental) }}>{data.fundamental?.toFixed(2) ?? '—'}</span>
               </div>
             </div>
           </>
@@ -223,7 +212,7 @@ type SortKey =
   | 'symbol' | 'companyName' | 'earningsDate' | 'epsBeatPct' | 'opmExpansionYoyPct'
   | 'operatingProfitExpansionYoyPct' | 'latestRatingDate' | 'targetLowPrice'
   | 'targetMeanPrice' | 'targetHighPrice'
-  | 'overallConfidence' | 'fundamentalConfidence' | 'technicalConfidence'
+  | 'fundamentalConfidence'
   | 'epsBeatConfidence' | 'opmExpansionConfidence' | 'operatingProfitExpansionConfidence'
   | 'analystRatingConfidence' | 'targetUpsideConfidence';
 
@@ -236,13 +225,18 @@ export default function FundamentalsPage() {
   const [loading, setLoading] = useState(true);
   const [picked, setPicked] = useState<string | null>(null);
   const [explain, setExplain] = useState<FundamentalIdeaRow | null>(null);
-  const [sortKey, setSortKey] = useState<SortKey>('overallConfidence');
+  const [sortKey, setSortKey] = useState<SortKey>('fundamentalConfidence');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [quality, setQuality] = useState<IdeaSide>('long');
   const [stageOnly, setStageOnly] = useState(false);
   const [windowDays, setWindowDays] = useState(0); // 0 = any
   const [page, setPage] = useState(1);
   const pageSize = 25;
+  const [running, setRunning] = useState(false);
+  const [runMsg, setRunMsg] = useState<string | null>(null);
+  const [runScope, setRunScope] = useState<'stage2' | 'all'>('stage2');
+  const [missingOnly, setMissingOnly] = useState(false);
+  const [query, setQuery] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -254,10 +248,25 @@ export default function FundamentalsPage() {
     setLoading(false);
   }, [m]);
 
+  const runScreener = useCallback(async () => {
+    setRunning(true);
+    setRunMsg(null);
+    try {
+      // Missing-only gap-fills stocks with no fundamentals yet (force is bypassed server-side).
+      const { runId } = await triggerFundamentalsRefresh(m, { force: !missingOnly, universe: runScope, missingOnly });
+      const scopeLabel = runScope === 'all' ? 'all stocks' : 'stage-2 stocks';
+      const modeLabel = missingOnly ? 'missing fundamentals only' : 'a full refresh';
+      setRunMsg(`Started run #${runId} — ${modeLabel} for ${scopeLabel}. Refresh in a few minutes.`);
+    } catch (e) {
+      setRunMsg(e instanceof Error ? e.message : 'Failed to start the screener run.');
+    }
+    setRunning(false);
+  }, [m, runScope, missingOnly]);
+
   useEffect(() => { load(); }, [load]);
 
   // Reset to the first page whenever the market, sort, filters or dataset change.
-  useEffect(() => { setPage(1); }, [m, sortKey, sortDir, quality, stageOnly, windowDays, rows.length]);
+  useEffect(() => { setPage(1); }, [m, sortKey, sortDir, quality, stageOnly, windowDays, query, rows.length]);
 
   const toggleSort = (key: SortKey) => {
     if (key === sortKey) {
@@ -273,6 +282,11 @@ export default function FundamentalsPage() {
     if (r.side !== quality) return false;
     // Stage-2 sub-filter — not applicable to shorts (a short isn't a Stage-2 setup).
     if (stageOnly && quality !== 'short' && r.isStage2 !== true) return false;
+    // Symbol / company text search.
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      if (!r.symbol.toLowerCase().includes(q) && !(r.companyName ?? '').toLowerCase().includes(q)) return false;
+    }
     // "Results in last N days" window on the earnings date.
     if (windowDays > 0) {
       const ed = r.earningsDate ? new Date(r.earningsDate).getTime() : null;
@@ -285,7 +299,6 @@ export default function FundamentalsPage() {
   // shows the bearish (short) score; otherwise the bullish (long) score.
   const confSide: 'long' | 'short' = quality === 'short' ? 'short' : 'long';
   const SHORT_FIELD: Partial<Record<SortKey, keyof FundamentalIdeaRow>> = {
-    overallConfidence: 'overallConfidenceShort',
     fundamentalConfidence: 'fundamentalConfidenceShort',
     epsBeatConfidence: 'epsBeatConfidenceShort',
     opmExpansionConfidence: 'opmExpansionConfidenceShort',
@@ -294,7 +307,7 @@ export default function FundamentalsPage() {
     // targetUpsideConfidence has no bearish twin (target upside needs a live price)
   };
   const CONF_KEYS = new Set<SortKey>([
-    'overallConfidence', 'fundamentalConfidence', 'technicalConfidence',
+    'fundamentalConfidence',
     'epsBeatConfidence', 'opmExpansionConfidence', 'operatingProfitExpansionConfidence',
     'analystRatingConfidence', 'targetUpsideConfidence',
   ]);
@@ -360,12 +373,46 @@ export default function FundamentalsPage() {
           Fundamental Ideas
         </h1>
         <span className="page-subtitle">{m === 'india' ? '🇮🇳 India' : '🇺🇸 US'}</span>
-        <div style={{ marginLeft: 'auto' }}>
+        <div className="header-actions">
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.8rem' }}>
+            <span className="cell-muted">Scope:</span>
+            <select
+              value={runScope}
+              onChange={e => setRunScope(e.target.value as 'stage2' | 'all')}
+              className="btn btn-outline btn-sm"
+              style={{ padding: '4px 8px' }}
+              disabled={running}
+              title="Stage 2 = fast (only Stage-2 setups). All stocks = full universe (slow)."
+            >
+              <option value="stage2">Stage 2 only</option>
+              <option value="all">All stocks</option>
+            </select>
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.8rem' }}
+            title="Only fetch stocks that have no fundamentals yet (gap-fill). Skips a full refresh.">
+            <input
+              type="checkbox"
+              checked={missingOnly}
+              onChange={e => setMissingOnly(e.target.checked)}
+              disabled={running}
+            />
+            <span className="cell-muted">Missing only</span>
+          </label>
+          <button className="btn btn-primary btn-sm" onClick={runScreener} disabled={running}
+            title="Refresh fundamentals for the selected scope, then rebuild the screener ideas.">
+            {running ? <Loader2 size={14} className="spin" /> : <PlayCircle size={14} />} Run screener
+          </button>
           <button className="btn btn-outline btn-sm" onClick={() => load()}>
             <RefreshCw size={14} /> Refresh
           </button>
         </div>
       </div>
+
+      {runMsg && (
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+          {runMsg}
+        </div>
+      )}
 
       <div className="card" style={{ padding: 18, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -381,6 +428,15 @@ export default function FundamentalsPage() {
               : 'Mixed/flat fundamentals — neither a clear long nor short.'}
           </span>
           <div style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            {/* Symbol / company search */}
+            <input
+              type="search"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Search symbol or company…"
+              className="btn btn-outline btn-sm"
+              style={{ padding: '4px 8px', minWidth: 200, cursor: 'text' }}
+            />
             {/* Results window dropdown */}
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.8rem' }}>
               <span className="cell-muted">Results:</span>
@@ -459,14 +515,13 @@ export default function FundamentalsPage() {
               Showing <strong style={{ color: confSide === 'short' ? 'var(--danger, #d9534f)' : 'var(--success, #2e7d32)' }}>{confSide}</strong> confidence scores
               {confSide === 'short' && ' — higher = stronger conviction the stock falls'}
             </div>
-            <table className="table" style={{ tableLayout: 'fixed', width: '100%' }}>
+            <div className="table-scroll">
+            <table className="table" style={{ tableLayout: 'fixed', width: '100%', minWidth: 980 }}>
               <colgroup>
                 <col style={{ width: '5.5%' }} />{/* Symbol */}
                 <col style={{ width: '12%' }} />{/* Company */}
                 <col style={{ width: '7.5%' }} />{/* Earnings */}
-                <col style={{ width: '6.5%' }} />{/* Overall */}
-                <col style={{ width: '5.5%' }} />{/* Fund */}
-                <col style={{ width: '5%' }} />{/* Tech */}
+                <col style={{ width: '6.5%' }} />{/* Fund */}
                 <col style={{ width: '6%' }} />{/* EPS val */}
                 <col style={{ width: '5%' }} />{/* EPS conf */}
                 <col style={{ width: '6%' }} />{/* OPM val */}
@@ -483,9 +538,7 @@ export default function FundamentalsPage() {
                   {th('symbol', 'Symbol')}
                   {th('companyName', 'Company')}
                   {th('earningsDate', 'Earnings', true)}
-                  {th('overallConfidence', 'Overall', true)}
                   {th('fundamentalConfidence', 'Fund', true)}
-                  {th('technicalConfidence', 'Tech', true)}
                   {th('epsBeatPct', 'EPS beat', true)}
                   {confTh('epsBeatConfidence', 'EPS beat')}
                   {th('opmExpansionYoyPct', 'OPM exp', true)}
@@ -500,7 +553,7 @@ export default function FundamentalsPage() {
               </thead>
               <tbody>
                 {paged.length === 0 ? (
-                  <tr><td colSpan={16} style={{ textAlign: 'center', padding: 20, color: 'var(--text-muted)' }}>No ideas match this filter.</td></tr>
+                  <tr><td colSpan={14} style={{ textAlign: 'center', padding: 20, color: 'var(--text-muted)' }}>No ideas match this filter.</td></tr>
                 ) : paged.map(r => (
                   <tr key={r.symbol}>
                     <td style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -516,11 +569,9 @@ export default function FundamentalsPage() {
                         title="Explain this score"
                         style={{ display: 'inline-flex', alignItems: 'center', background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'inherit' }}
                       >
-                        <ConfBar v={confValue(r, 'overallConfidence')} strong />
+                        <ConfBar v={confValue(r, 'fundamentalConfidence')} strong />
                       </button>
                     </td>
-                    <td style={{ textAlign: 'right' }}><ConfBar v={confValue(r, 'fundamentalConfidence')} /></td>
-                    <td style={{ textAlign: 'right' }}><ConfBar v={r.technicalConfidence} /></td>
                     <td style={{ textAlign: 'right' }}><ValueCell value={r.epsBeatPct} kind="pct" /></td>
                     <td style={{ textAlign: 'right' }}><ConfNum v={confValue(r, 'epsBeatConfidence')} /></td>
                     <td style={{ textAlign: 'right' }}><ValueCell value={r.opmExpansionYoyPct} kind="pp" /></td>
@@ -539,6 +590,7 @@ export default function FundamentalsPage() {
                 ))}
               </tbody>
             </table>
+            </div>
 
             <div className="pagination">
               <button className="pagination-btn" onClick={() => setPage(1)} disabled={current <= 1}>« First</button>

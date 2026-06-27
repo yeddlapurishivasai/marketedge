@@ -316,7 +316,8 @@ def _open_trade(conn, market: str, ticker: str, company: str | None, trade_type:
             vol_score = wmod.breakout_volume_score(_breakout_rel_vol(series))
             confidence, rationale = wmod.breakout_confidence(
                 weights, trade_type, direction, scanners, reliability, fund_score, vol_score)
-            rationale_json = json.dumps(rationale, default=str)
+            # No canonical fundamental score -> no confidence at all (and no rationale shown).
+            rationale_json = json.dumps(rationale, default=str) if confidence is not None else None
         except Exception:  # noqa: BLE001 - confidence is advisory, never block an entry
             logger.exception("Breakout-confidence computation failed for %s", ticker)
 

@@ -1,6 +1,7 @@
 using MarketEdge.Api.Data;
 using MarketEdge.Api.Models;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 
 namespace MarketEdge.Api.Services;
 
@@ -65,19 +66,10 @@ public class FundamentalsService : IFundamentalsService
                 var sym = meta?.Symbol ?? r.Ticker;
                 bool? isStage2 = stage2.TryGetValue(sym.ToUpperInvariant(), out var s2) ? s2 : (bool?)null;
 
-                // Signed direction + side, computed server-side so every consumer gets the bucket.
-                var dir = IdeaDirection.Score(
-                    (double?)r.EpsBeatPct, (double?)r.OpmExpansionYoyPct,
-                    (double?)r.OperatingProfitExpansionYoyPct, r.LatestRatingGrade);
-                var rowSide = IdeaDirection.Side(dir);
-
-                // Mirrored bearish confidence for every score. The stored *Confidence fields
-                // are the long (bullish) set; this is the matching short (bearish) set, so a
-                // view can show whichever side is relevant without the number changing meaning.
-                var sc = IdeaDirection.ComputeShortConfidence(
-                    (double?)r.EpsBeatPct, (double?)r.OpmExpansionYoyPct,
-                    (double?)r.OperatingProfitExpansionYoyPct, r.LatestRatingGrade,
-                    r.DaysSinceEarnings, r.DaysSinceRating);
+                // Direction/side + the bearish short mirror are computed once by the worker
+                // (confidence.py) and embedded in ConfidenceRationaleJson; the API only reads
+                // them back here — no fundamental weights or scoring math live in C#.
+                var pj = ParseIdeaRationale(r.ConfidenceRationaleJson);
 
                 return new FundamentalIdeaRow(
                     meta?.Symbol ?? r.Ticker,
@@ -107,15 +99,15 @@ public class FundamentalsService : IFundamentalsService
                     r.DaysSinceRating,
                     r.ConfidenceRationaleJson,
                     isStage2,
-                    dir,
-                    rowSide,
-                    sc.EpsBeat,
-                    sc.OpmExpansion,
-                    sc.OpExpansion,
-                    sc.Rating,
-                    sc.Fundamental,
-                    sc.Overall,
-                    sc.RationaleJson,
+                    pj.Direction,
+                    pj.Side,
+                    pj.EpsBeatShort,
+                    pj.OpmExpansionShort,
+                    pj.OpExpansionShort,
+                    pj.RatingShort,
+                    pj.FundamentalShort,
+                    pj.OverallShort,
+                    pj.ShortJson,
                     r.UpdatedAt);
             })
             .Where(r => want is null || want == "all" || r.Side == want)
@@ -337,4 +329,43 @@ public class FundamentalsService : IFundamentalsService
     }
 
     private record StockMeta(string Symbol, string CompanyName, string? BroadSector, string Industry);
+
+    // Direction/side + bearish short-mirror scores read straight from the worker-produced
+    // rationale JSON (confidence.py). Old rows lacking these keys parse to all-null, which
+    // simply hides them from the long/short tabs until the next fundamentals refresh.
+    private readonly record struct IdeaRationale(
+        int? Direction, string? Side,
+        decimal? EpsBeatShort, decimal? OpmExpansionShort, decimal? OpExpansionShort,
+        decimal? RatingShort, decimal? FundamentalShort, decimal? OverallShort,
+        string? ShortJson);
+
+    private static IdeaRationale ParseIdeaRationale(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return default;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            int? dir = ReadInt(root, "direction");
+            string? side = root.TryGetProperty("side", out var s) && s.ValueKind == JsonValueKind.String
+                ? s.GetString() : null;
+            if (!root.TryGetProperty("short", out var sh) || sh.ValueKind != JsonValueKind.Object)
+                return new IdeaRationale(dir, side, null, null, null, null, null, null, null);
+            return new IdeaRationale(
+                dir, side,
+                ReadDec(sh, "epsBeat"), ReadDec(sh, "opmExpansion"), ReadDec(sh, "opExpansion"),
+                ReadDec(sh, "rating"), ReadDec(sh, "fundamental"), ReadDec(sh, "overall"),
+                sh.GetRawText());
+        }
+        catch (JsonException)
+        {
+            return default;
+        }
+    }
+
+    private static int? ReadInt(JsonElement el, string name) =>
+        el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : (int?)null;
+
+    private static decimal? ReadDec(JsonElement el, string name) =>
+        el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDecimal() : (decimal?)null;
 }

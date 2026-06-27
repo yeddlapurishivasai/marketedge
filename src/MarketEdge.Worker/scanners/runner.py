@@ -64,11 +64,16 @@ def load_universe(conn, market: str, universe: str) -> list[dict[str, Any]]:
     params: list[Any] = []
     if universe == "stage2":
         stage = _table(_STAGE, market)
+        # Resolve the stage2 set by the *latest run* (MAX RunId), identical to the API's
+        # FundamentalsService. RunId is monotonic, so this always picks the most recent
+        # stage analysis — unlike MAX(WeekNumber), which can select an older run when the
+        # newest run isn't the lexicographically-highest week (re-runs, partial current
+        # week, ISO year boundary). Keeps the stage2 universe consistent everywhere.
         where = f"""
             WHERE s.Symbol IN (
                 SELECT r.Symbol FROM dbo.{stage} r
                 WHERE r.IsStage2 = 1
-                  AND r.WeekNumber = (SELECT MAX(WeekNumber) FROM dbo.{stage} WHERE IsStage2 = 1)
+                  AND r.RunId = (SELECT MAX(RunId) FROM dbo.{stage})
             )
         """
 

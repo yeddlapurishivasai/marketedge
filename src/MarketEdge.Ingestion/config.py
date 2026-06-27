@@ -49,18 +49,24 @@ class Config:
     # yfinance fetch / throttle settings (carried over from the worker's config).
     YFINANCE_BATCH_SIZE = _get_int("YFINANCE_BATCH_SIZE", 50)
     YFINANCE_BATCH_DELAY = _get_float("YFINANCE_BATCH_DELAY", 2.0)
-    YFINANCE_MAX_RETRIES = _get_int("YFINANCE_MAX_RETRIES", 3)
+    YFINANCE_MAX_RETRIES = _get_int("YFINANCE_MAX_RETRIES", 4)
+
+    # Base delay (seconds) for exponential backoff when a per-ticker fundamentals call hits a
+    # Yahoo throttle ("Too Many Requests") or "Invalid Crumb" auth error. Attempt N sleeps
+    # roughly YFINANCE_RETRY_BASE_DELAY * 2**N (+ jitter) before retrying.
+    YFINANCE_RETRY_BASE_DELAY = _get_float("YFINANCE_RETRY_BASE_DELAY", 1.5)
 
     # Parallel threads used inside a single yfinance batch download / market-cap chunk.
     YFINANCE_THREADS = _get_int("YFINANCE_THREADS", 10)
 
     # Parallel worker threads for the per-symbol fundamentals loop (analyst / EPS / earnings
-    # / signals). Each worker uses its own DB connection. Tune down if Yahoo rate-limits the
-    # heavier per-symbol fundamentals calls; set 1 to force the old sequential behaviour.
-    FUNDAMENTALS_THREADS = _get_int("FUNDAMENTALS_THREADS", 8)
+    # / signals). Each worker uses its own DB connection. Kept low (4) so the per-IP request
+    # rate to Yahoo stays under its throttle; raise only if you stop seeing rate-limit errors,
+    # set 1 to force the old sequential behaviour.
+    FUNDAMENTALS_THREADS = _get_int("FUNDAMENTALS_THREADS", 4)
 
-    # Sleep (seconds) between per-ticker fundamentals/signals calls. Raise this if Yahoo
-    # starts rate-limiting the sequential fundamentals loop (default 0 = no extra pacing).
+    # Sleep (seconds) between per-ticker fundamentals/signals calls. Adds steady-state pacing
+    # on top of the backoff retries; raise if Yahoo still rate-limits the fundamentals loop.
     YFINANCE_TICKER_DELAY = _get_float("YFINANCE_TICKER_DELAY", 0.0)
 
     # Daily-bar history window fetched per ticker (yfinance period string).

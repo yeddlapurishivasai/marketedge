@@ -23,6 +23,7 @@ import argparse
 import json
 import logging
 import math
+import random
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -37,6 +38,74 @@ from config import Config
 from observability import configure_logging
 
 logger = logging.getLogger("ingestion")
+
+
+# --- yfinance throttle / crumb resilience ------------------------------------------------
+# Yahoo aggressively rate-limits ("Too Many Requests") and rotates the auth crumb
+# ("Invalid Crumb") on the per-ticker fundamentals endpoints. These helpers retry such
+# transient failures with exponential backoff + jitter and refresh the crumb on auth errors
+# so a flaky fetch recovers instead of silently dropping the ticker's data.
+_TRANSIENT_YF_MARKERS = (
+    "too many requests",
+    "rate limited",
+    "invalid crumb",
+    "unable to access this feature",
+    "429",
+    "curl",
+    "timed out",
+    "timeout",
+    "connection",
+)
+
+
+def _is_transient_yf_error(exc: Exception) -> bool:
+    """True when a yfinance error looks like a Yahoo throttle / crumb hiccup worth retrying."""
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _TRANSIENT_YF_MARKERS)
+
+
+def _reset_yf_crumb() -> None:
+    """Best-effort clear of yfinance's cached crumb/cookie so the next call re-handshakes."""
+    try:
+        from yfinance import data as _yfdata  # noqa: PLC0415 - optional internal
+        singleton = _yfdata.YfData()
+        for attr in ("_crumb", "_cookie"):
+            try:
+                setattr(singleton, attr, None)
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _yf_fetch(fn, *, symbol: str, what: str, default=None, log=None):
+    """Call a flaky yfinance accessor with exponential-backoff retry on Yahoo throttling.
+
+    Retries up to ``Config.YFINANCE_MAX_RETRIES`` times when the error looks like a rate
+    limit / invalid-crumb hiccup, sleeping ``YFINANCE_RETRY_BASE_DELAY * 2**attempt`` seconds
+    (plus jitter) between attempts and refreshing the crumb on auth failures. Returns
+    ``default`` if every attempt fails (or on a non-transient error), logging once via ``log``
+    (defaults to ``logger.debug``).
+    """
+    log = log or logger.debug
+    attempts = max(1, Config.YFINANCE_MAX_RETRIES)
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if not _is_transient_yf_error(exc) or attempt == attempts - 1:
+                break
+            low = str(exc).lower()
+            if "crumb" in low or "unable to access" in low:
+                _reset_yf_crumb()
+            delay = Config.YFINANCE_RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 0.75)
+            logger.debug("Retrying %s for %s in %.1fs (attempt %d/%d): %s",
+                         what, symbol, delay, attempt + 1, attempts, exc)
+            time.sleep(delay)
+    log("No %s for %s: %s", what, symbol, last_exc)
+    return default
 
 # How many tickers' worth of bars to MERGE per upsert round-trip.
 UPSERT_TICKER_BATCH = 50
@@ -446,7 +515,7 @@ def cmd_ingest_fundamentals(args) -> int:
     conn = db.get_connection()
     try:
         universe = _resolve_universe(conn, args)
-        universe = _apply_missing_filter(conn, args, universe, "earnings")
+        universe = _apply_missing_filter(conn, args, universe, "fundamentals")
         universe = _apply_earnings_window_filter(conn, args, universe)
         symbols = [u["symbol"] for u in universe]
         counts["tickers"] = len(symbols)
@@ -542,10 +611,9 @@ def _safe_num(value):
 
 
 def _try_analyst_snapshot(conn, market, symbol, ticker, as_of) -> bool:
-    try:
-        info = getattr(ticker, "info", {}) or {}
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("No analyst info for %s: %s", symbol, exc)
+    info = _yf_fetch(lambda: ticker.info, symbol=symbol, what="analyst info",
+                     default=None, log=logger.warning)
+    if not info:
         return False
     rating = info.get("recommendationKey")
     num = info.get("numberOfAnalystOpinions")
@@ -612,7 +680,7 @@ def _fetch_recommendations(symbol, ticker) -> list[dict]:
     failure or when the (flaky) endpoint returns nothing.
     """
     try:
-        rec = ticker.recommendations
+        rec = _yf_fetch(lambda: ticker.recommendations, symbol=symbol, what="recommendations")
     except Exception as exc:  # noqa: BLE001
         logger.debug("No recommendations for %s: %s", symbol, exc)
         return []
@@ -644,11 +712,8 @@ def _fetch_latest_rating(symbol, ticker):
     ToGrade, FromGrade, Action). Grade carries the firm-specific terminology such as
     "Overweight" / "Outperform" / "Neutral".
     """
-    try:
-        ud = ticker.upgrades_downgrades
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("No upgrades/downgrades for %s: %s", symbol, exc)
-        return None
+    ud = _yf_fetch(lambda: ticker.upgrades_downgrades, symbol=symbol,
+                   what="upgrades/downgrades")
     if ud is None or not hasattr(ud, "iterrows") or ud.empty:
         return None
     try:
@@ -678,11 +743,7 @@ _PERIOD_MAP = {"0q": ("Q", 0), "+1q": ("Q", 1), "0y": ("Y", 0), "+1y": ("Y", 1)}
 
 
 def _try_eps_forecasts(conn, market, symbol, ticker, as_of) -> int:
-    try:
-        est = ticker.earnings_estimate
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("No earnings estimate for %s: %s", symbol, exc)
-        return 0
+    est = _yf_fetch(lambda: ticker.earnings_estimate, symbol=symbol, what="earnings estimate")
     if est is None or not hasattr(est, "iterrows") or est.empty:
         return 0
 
@@ -730,6 +791,71 @@ def _row_value(stmt, labels, col_idx):
     return None
 
 
+def _earnings_history_quarters(ticker, symbol, as_of):
+    """Per-quarter EPS estimate/actual/surprise from yfinance ``earnings_history``.
+
+    Uses the quoteSummary ``earningsHistory`` JSON module — the same endpoint family as the
+    analyst snapshot, and far more reliable than the lxml-scraped ``get_earnings_dates`` (which
+    is separately rate-limited and often returns NaN reported EPS). Returns up to 4
+    ``(quarter_end_date, estimate, actual, surprise_pct)`` tuples, most recent first, for
+    reported quarters only. ``surprise_pct`` is normalised to percent units (Yahoo reports it
+    as a fraction, e.g. 0.062 -> 6.2) to match the get_earnings_dates convention.
+    """
+    eh = _yf_fetch(lambda: ticker.get_earnings_history(), symbol=symbol,
+                   what="earnings history")
+    if eh is None or not hasattr(eh, "iterrows") or eh.empty:
+        return []
+    out = []
+    for idx, erow in eh.iterrows():
+        try:
+            qd = idx.date() if hasattr(idx, "date") else None
+        except Exception:  # noqa: BLE001
+            qd = None
+        if qd is None or qd > as_of:
+            continue
+        actual = _safe_num(erow.get("epsActual"))
+        if actual is None:
+            continue
+        estimate = _safe_num(erow.get("epsEstimate"))
+        surprise = _safe_num(erow.get("surprisePercent"))
+        if surprise is not None:
+            surprise *= 100.0  # fraction -> percent
+        elif estimate not in (None, 0):
+            surprise = (actual - estimate) / abs(estimate) * 100.0
+        out.append((qd, estimate, actual, surprise))
+    out.sort(key=lambda r: r[0], reverse=True)
+    return out[:4]
+
+
+def _income_stmt_eps_quarters(stmt):
+    """Per-quarter reported EPS from the quarterly income statement (reliable fallback).
+
+    Returns up to 4 ``(quarter_end_date, estimate=None, actual_eps, surprise=None)`` tuples,
+    most recent first. Used when yfinance's flaky ``get_earnings_dates`` yields no reported
+    EPS — the income statement's ``Diluted EPS`` (or ``Basic EPS``) row is sourced from a
+    different, far more reliable endpoint so the last-4-quarters history still populates.
+    Estimate/surprise are unavailable from this source and left as None.
+    """
+    if stmt is None or not hasattr(stmt, "index") or not hasattr(stmt, "columns"):
+        return []
+    eps_labels = ["Diluted EPS", "Basic EPS"]
+    label = next((l for l in eps_labels if l in stmt.index), None)
+    if label is None:
+        return []
+    out = []
+    for i, col in enumerate(stmt.columns):
+        try:
+            qd = col.date()
+        except Exception:  # noqa: BLE001
+            continue
+        eps = _row_value(stmt, [label], i)
+        if eps is None:
+            continue
+        out.append((qd, None, eps, None))
+    out.sort(key=lambda r: r[0], reverse=True)
+    return out[:4]
+
+
 def _pct_change(cur, base):
     if cur is None or base is None or base == 0:
         return None
@@ -764,9 +890,8 @@ def _epoch_to_date(ts):
 
 def _calendar_next_earnings(ticker, as_of):
     """Earliest upcoming earnings date from ticker.calendar, else None."""
-    try:
-        cal = ticker.calendar
-    except Exception:  # noqa: BLE001
+    cal = _yf_fetch(lambda: ticker.calendar, symbol="(calendar)", what="calendar")
+    if cal is None:
         return None
     raw = None
     if isinstance(cal, dict):
@@ -832,11 +957,8 @@ def _try_earnings_fundamentals(conn, market, symbol, ticker, as_of) -> bool:
     last_date = prev_date = last_eps = last_surprise = next_date = None
     eps_quarters = []  # (date, estimate, actual, surprise_pct), most recent first
     future_dates = []  # upcoming (unreported) earnings dates
-    try:
-        ed = ticker.get_earnings_dates(limit=12)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("No earnings dates for %s: %s", symbol, exc)
-        ed = None
+    ed = _yf_fetch(lambda: ticker.get_earnings_dates(limit=12), symbol=symbol,
+                   what="earnings dates")
     if ed is not None and hasattr(ed, "iterrows") and not ed.empty:
         reported = []
         for idx, erow in ed.iterrows():
@@ -860,6 +982,33 @@ def _try_earnings_fundamentals(conn, market, symbol, ticker, as_of) -> bool:
         if future_dates:
             next_date = min(future_dates)
 
+    # Fallbacks: yfinance's get_earnings_dates is an lxml HTML scrape that is frequently
+    # rate-limited (separate quota from the JSON APIs) and returns nothing or all-NaN Reported
+    # EPS — leaving the EpsQ* history, LastReportedEps and the EPS-beat empty. Backfill from
+    # more reliable endpoints, best first:
+    #   1. earnings_history (quoteSummary JSON, same path as the analyst snapshot) — carries
+    #      estimate + actual + surprise%, so the EPS-beat scoring input still populates.
+    #   2. quarterly income statement "Diluted EPS" (timeseries endpoint) — actual EPS only
+    #      (no estimate/surprise), as a last resort so at least the reported EPS shows.
+    # These sources are keyed by quarter-END, not announcement date, so they ONLY fill the EPS
+    # values/beat — never last/prev_earnings_date (the idea key). When the announcement date is
+    # unavailable this run, the upsert preserves the existing LastEarningsDate (COALESCE-on-
+    # null), keeping the idea keyed to its real announcement date and avoiding duplicate ideas.
+    if not eps_quarters:
+        hist = _earnings_history_quarters(ticker, symbol, as_of)
+        if hist:
+            eps_quarters = hist[:4]
+            if last_eps is None:
+                last_eps = hist[0][2]
+            if last_surprise is None:
+                last_surprise = hist[0][3]
+    if not eps_quarters:
+        stmt_eps = _income_stmt_eps_quarters(stmt)
+        if stmt_eps:
+            eps_quarters = stmt_eps[:4]
+            if last_eps is None:
+                last_eps = stmt_eps[0][2]
+
     # Flatten up to 4 most-recent reported quarters into fixed Q1..Q4 column slots.
     eps_hist = {}
     for i in range(4):
@@ -872,11 +1021,7 @@ def _try_earnings_fundamentals(conn, market, symbol, ticker, as_of) -> bool:
 
     # Valuation multiples from ticker.info (best-effort; flaky/rate-limited endpoint).
     trailing_pe = forward_pe = None
-    try:
-        info = ticker.info
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("No info for %s: %s", symbol, exc)
-        info = None
+    info = _yf_fetch(lambda: ticker.info, symbol=symbol, what="info") or None
     if isinstance(info, dict):
         trailing_pe = _safe_num(info.get("trailingPE"))
         forward_pe = _safe_num(info.get("forwardPE"))

@@ -76,6 +76,9 @@ def _build_args(cli: str, step: str, market: str, payload: dict,
         args += ["--limit", str(int(limit))]
     if payload.get("missingOnly"):
         args.append("--missing")
+    if payload.get("force"):
+        # Full refresh: bypass --missing and earnings-window filters in the CLI.
+        args.append("--force")
     symbols = payload.get("symbols")
     if symbols:
         if isinstance(symbols, (list, tuple)):
@@ -303,8 +306,16 @@ def run_fundamentals_job(payload: dict) -> None:
                               metrics=metrics, completed_at=_now())
             return
 
-        # Scope the fundamentals step to just the stage2 symbols.
-        step_payload = {**payload, "symbols": symbols}
+        if universe == "stage2":
+            # Scope the fundamentals step to just the stage2 symbols.
+            step_payload = {**payload, "symbols": symbols}
+        else:
+            # Full-market refresh ("all"): let the CLI iterate the whole market and bypass
+            # the earnings-window filter via --force. Passing thousands of --symbols would
+            # exceed the OS command-line length limit, so we don't scope by symbol here.
+            step_payload = {**payload, "force": True}
+            step_payload.pop("symbols", None)
+
         failed = _run_steps(conn, run_id, market, ["fundamentals"], step_payload,
                             cli, cli_dir, output)
 

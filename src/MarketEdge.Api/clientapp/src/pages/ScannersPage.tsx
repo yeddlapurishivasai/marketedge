@@ -254,7 +254,7 @@ export default function ScannersPage() {
           Technical Scanners
         </h1>
         <span className="page-subtitle">{m === 'india' ? '🇮🇳 India' : '🇺🇸 US'}</span>
-        <div style={{ marginLeft: 'auto' }}>
+        <div className="header-actions">
           <button className="btn btn-outline btn-sm" onClick={load}>
             <RefreshCw size={14} /> Refresh
           </button>

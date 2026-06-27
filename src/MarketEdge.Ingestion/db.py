@@ -128,6 +128,9 @@ def get_present_tickers(conn: pyodbc.Connection, market: str, kind: str) -> set[
         "bars"       -> tickers whose master row reports BarsAvailable > 0
         "technical"  -> tickers with at least one technical snapshot
         "earnings"   -> tickers with an earnings-fundamentals snapshot
+        "fundamentals" -> tickers whose earnings snapshot has a reported EPS (a
+                          complete fundamental score needs the reported actual; rows
+                          still missing it are treated as gaps for --missing retries)
         "signals"    -> tickers with an auto-signals snapshot
     Used to drive ``--missing`` gap-fill runs.
     """
@@ -138,6 +141,8 @@ def get_present_tickers(conn: pyodbc.Connection, market: str, kind: str) -> set[
         query = f"SELECT DISTINCT Ticker FROM dbo.{t['technical']}"
     elif kind == "earnings":
         query = f"SELECT Ticker FROM dbo.{t['earnings']}"
+    elif kind == "fundamentals":
+        query = f"SELECT Ticker FROM dbo.{t['earnings']} WHERE LastReportedEps IS NOT NULL"
     elif kind == "signals":
         query = f"SELECT Ticker FROM dbo.{t['signals']}"
     else:
@@ -530,6 +535,32 @@ def _fnum(x: Any) -> float | None:
     return None if math.isnan(f) or math.isinf(f) else f
 
 
+def _forward_eps_growth_pct(conn: pyodbc.Connection, market: str, ticker: str) -> float | None:
+    """Expected QoQ EPS growth %: latest next-quarter consensus vs the last reported actual.
+
+    The next-quarter analyst consensus is the most recent quarterly ('Q') EPS-forecast row;
+    the prior actual is the earnings snapshot's LastReportedEps. Returns None when either is
+    missing or the prior actual is zero/negative (growth undefined / not meaningful there).
+    """
+    t = tables_for(market)
+    cur = conn.cursor()
+    fc = cur.execute(
+        f"""SELECT TOP 1 ConsensusEps FROM dbo.{t['eps']}
+            WHERE Ticker = ? AND PeriodType = 'Q' AND ConsensusEps IS NOT NULL
+            ORDER BY AsOfDate DESC""",
+        [ticker],
+    ).fetchone()
+    consensus = _fnum(fc[0]) if fc else None
+    er = cur.execute(
+        f"SELECT LastReportedEps FROM dbo.{t['earnings']} WHERE Ticker = ?",
+        [ticker],
+    ).fetchone()
+    last_eps = _fnum(er[0]) if er else None
+    if consensus is None or last_eps is None or last_eps <= 0:
+        return None
+    return (consensus / last_eps - 1.0) * 100.0
+
+
 def _refresh_idea_confidence(conn: pyodbc.Connection, market: str, ticker: str) -> None:
     """Score the ticker's active idea (per-metric + fundamental + technical + overall).
 
@@ -610,6 +641,14 @@ def _refresh_idea_confidence(conn: pyodbc.Connection, market: str, ticker: str) 
         own_wins, own_total, scanner_wins, scanner_total, scanner_name,
     )
 
+    # Reported-EPS surprise % for the last 4 quarters -> EPS-beat-rate (Wilson) metric.
+    er = cur.execute(
+        f"""SELECT EpsQ1SurprisePct, EpsQ2SurprisePct, EpsQ3SurprisePct, EpsQ4SurprisePct
+            FROM dbo.{t['earnings']} WHERE Ticker = ?""",
+        [ticker],
+    ).fetchone()
+    eps_quarter_surprises = [_fnum(er[i]) for i in range(4)] if er else None
+
     scores = confidence.compute_confidence(
         eps_beat_pct=_fnum(idea.EpsBeatPct),
         opm_expansion_pp=_fnum(idea.OpmExpansionYoyPct),
@@ -621,6 +660,8 @@ def _refresh_idea_confidence(conn: pyodbc.Connection, market: str, ticker: str) 
         days_since_rating=days_since_rating,
         technical=technical_conf,
         technical_detail=technical_detail,
+        eps_forecast_growth_pct=_forward_eps_growth_pct(conn, market, ticker),
+        eps_quarter_surprises=eps_quarter_surprises,
     )
 
     cur.execute(

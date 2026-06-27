@@ -665,6 +665,23 @@ export async function fetchFundamentalIdeas(market: Market): Promise<Fundamental
   return res.json();
 }
 
+/**
+ * Enqueues a stage-2 fundamentals refresh (the screener's data source). Pass
+ * `force: true` to bypass the earnings-window filter and refresh every stage-2 ticker.
+ */
+export async function triggerFundamentalsRefresh(
+  market: Market,
+  body: { force?: boolean; universe?: 'stage2' | 'all'; missingOnly?: boolean } = {},
+): Promise<{ runId: number }> {
+  const res = await fetch(`${BASE}/${market}/fundamentals/trigger`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force: body.force ?? false, universe: body.universe ?? 'stage2', missingOnly: body.missingOnly ?? false }),
+  });
+  if (!res.ok) throw new Error((await res.text()) || 'Failed to trigger fundamentals refresh');
+  return res.json();
+}
+
 export async function saveFundamentalNote(market: Market, symbol: string, noteText: string): Promise<void> {
   const res = await fetch(`${BASE}/${market}/fundamentals/${encodeURIComponent(symbol)}/note`, {
     method: 'PUT',

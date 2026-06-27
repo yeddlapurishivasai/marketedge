@@ -13,11 +13,13 @@ public record TriggerIngestionRequest(
     string[]? Steps = null,
     bool MissingOnly = false);
 
+public record TriggerFundamentalsRequest(bool Force = false, string? Universe = null, bool MissingOnly = false);
+
 public interface IIngestionService
 {
     Task<int> TriggerAsync(string market, TriggerIngestionRequest request);
     Task<int> RefreshStockAsync(string market, string symbol);
-    Task<int> TriggerFundamentalsAsync(string market, string triggeredBy = "manual");
+    Task<int> TriggerFundamentalsAsync(string market, string triggeredBy = "manual", bool force = false, string universe = "stage2", bool missingOnly = false);
     Task<JobScheduleDto> GetFundamentalsScheduleAsync(string market);
     Task<JobScheduleDto> UpdateFundamentalsScheduleAsync(string market, UpdateJobScheduleRequest request);
 }
@@ -162,6 +164,7 @@ public class IngestionService : IIngestionService
                 ["market"] = market,
                 ["symbol"] = symbol,
                 ["steps"] = PipelineSteps,
+                ["force"] = true,
             }),
             CreatedAt = now,
         };
@@ -169,7 +172,9 @@ public class IngestionService : IIngestionService
         await _db.SaveChangesAsync();
 
         // The worker re-ingests every pipeline step for this one symbol, then recomputes
-        // its score (jobType "stock_refresh").
+        // its score (jobType "stock_refresh"). Force guarantees the fundamentals step bypasses
+        // the earnings-window / missing filters so reported EPS, EPS forecasts and the idea are
+        // always fully re-fetched and rescored for a manual single-stock refresh.
         await EnqueueAsync(new
         {
             jobType = "stock_refresh",
@@ -178,6 +183,7 @@ public class IngestionService : IIngestionService
             steps = PipelineSteps,
             symbols = new[] { symbol },
             testSample = false,
+            force = true,
             missingOnly = false,
             triggeredBy = "stock-refresh",
             timestamp = now,
@@ -186,10 +192,18 @@ public class IngestionService : IIngestionService
         return job.Id;
     }
 
-    public async Task<int> TriggerFundamentalsAsync(string market, string triggeredBy = "manual")
+    public async Task<int> TriggerFundamentalsAsync(string market, string triggeredBy = "manual", bool force = false, string universe = "stage2", bool missingOnly = false)
     {
         if (market != "india" && market != "us")
             throw new ArgumentException("Market must be 'india' or 'us'.");
+
+        universe = (universe ?? "stage2").Trim().ToLowerInvariant();
+        if (universe != "stage2" && universe != "all")
+            throw new ArgumentException("Universe must be 'stage2' or 'all'.");
+
+        // "Missing only" gap-fills tickers that have no fundamentals yet. It is mutually
+        // exclusive with force (force bypasses the --missing filter to refresh everything).
+        if (missingOnly) force = false;
 
         // One in-flight fundamentals run per market: return the existing run if present.
         var existing = await _db.JobRuns
@@ -210,8 +224,10 @@ public class IngestionService : IIngestionService
             Parameters = JsonSerializer.Serialize(new Dictionary<string, object?>
             {
                 ["market"] = market,
-                ["universe"] = "stage2",
+                ["universe"] = universe,
                 ["steps"] = new[] { "fundamentals" },
+                ["force"] = force,
+                ["missingOnly"] = missingOnly,
                 ["triggeredBy"] = triggeredBy,
             }),
             CreatedAt = now,
@@ -219,13 +235,16 @@ public class IngestionService : IIngestionService
         _db.JobRuns.Add(job);
         await _db.SaveChangesAsync();
 
-        // The worker resolves the stage2 universe itself and runs only the fundamentals step.
+        // The worker resolves the requested universe itself and runs only the fundamentals step.
+        // Force bypasses the earnings-window filter so every ticker in scope is refreshed.
         await EnqueueAsync(new
         {
             jobType = "fundamentals",
             market,
             runId = job.Id,
-            universe = "stage2",
+            universe,
+            force,
+            missingOnly,
             triggeredBy,
             timestamp = now,
         });

@@ -23,9 +23,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .scoring import _EARN, _fin, _t
+from .scoring import _fin, _t
 
 logger = logging.getLogger(__name__)
+
+# Fundamental-ideas tables (canonical FundamentalConfidence lives here, keyed by Ticker +
+# EarningsDate with IsStale flagging superseded rows).
+_IDEAS = {"india": "IndianFundamentalIdeas", "us": "USFundamentalIdeas"}
 
 # Per-profile blend of the three confidence components. Swing is a momentum/technical
 # play (setup + breakout volume dominate); positional is held for the fundamental
@@ -132,50 +136,42 @@ def breakout_volume_score(rel_vol: float | None) -> float | None:
 def symbol_fundamentals(conn, market: str, symbol: str) -> float | None:
     """Bullish (long) fundamental score in 0..1 for ``symbol`` -- or ``None``.
 
-    Fraction of applicable fundamental checks that pass (earnings/revenue growth,
-    margin trend, EPS surprise, earnings increasing). The caller flips it (1 - x) for
-    short trades. ``None`` when the symbol has no fundamental data.
+    The canonical ``FundamentalConfidence`` from the fundamental-ideas table (the same
+    Wilson-lower-bound score the long fundamental screener shows -- EPS beat + forecast,
+    OPM/operating-profit expansion, analyst rating, target upside), normalised 0..100 -> 0..1,
+    so a breakout's fundamental component reflects exactly the score we publish for the stock.
+    There is deliberately **no fallback**: when a symbol has no computed idea, this returns
+    ``None`` and the breakout shows no confidence at all (rather than a guessed value). The
+    caller flips it (1 - x) for short trades.
     """
-    earn = conn.cursor().execute(
-        f"""SELECT TOP 1 EarningsGrowthYoyPct, EarningsGrowthQoqPct, RevenueGrowthYoyPct,
-                   OpmTrend, LastEpsSurprisePct, EarningsIncreasing
-            FROM dbo.{_t(_EARN, market)} WHERE Ticker = ?""",
+    idea = conn.cursor().execute(
+        f"""SELECT TOP 1 FundamentalConfidence
+            FROM dbo.{_t(_IDEAS, market)}
+            WHERE Ticker = ? AND IsStale = 0 AND FundamentalConfidence IS NOT NULL
+            ORDER BY EarningsDate DESC""",
         symbol,
     ).fetchone()
-    if earn is None:
+    if idea is None:
         return None
-    checks: list[bool] = []
-    eg = _fin(earn.EarningsGrowthYoyPct)
-    if eg is not None:
-        checks.append(eg > 0)
-    eq = _fin(earn.EarningsGrowthQoqPct)
-    if eq is not None:
-        checks.append(eq > 0)
-    rg = _fin(earn.RevenueGrowthYoyPct)
-    if rg is not None:
-        checks.append(rg > 0)
-    if earn.OpmTrend is not None:
-        checks.append((earn.OpmTrend or "") == "expanding")
-    sp = _fin(earn.LastEpsSurprisePct)
-    if sp is not None:
-        checks.append(sp > 0)
-    if earn.EarningsIncreasing is not None:
-        checks.append(bool(earn.EarningsIncreasing))
-    if not checks:
-        return None
-    return sum(1 for c in checks if c) / len(checks)
+    fc = _fin(idea.FundamentalConfidence)
+    return _clamp01(fc / 100.0) if fc is not None else None
 
 
 def breakout_confidence(weights: dict[str, Any], profile: str, direction: str,
                         scanners: list[str], reliability: dict[str, dict[str, Any]] | None,
                         fund_score: float | None,
-                        vol_score: float | None) -> tuple[float, dict[str, Any]]:
+                        vol_score: float | None) -> tuple[float | None, dict[str, Any]]:
     """Blend setup + fundamental + volume into a 0..100 confidence + JSON rationale.
 
     ``confidence = 100 * Σ(mix[c]·score[c]) / Σ mix[c]`` over the components that have
     a score. The fundamental component is direction-aware: long uses the bullish
     score, short uses its complement (1 - bullish), so a high number always means
     "strong conviction in the breakout's own direction".
+
+    The fundamental score is **required**: when ``fund_score is None`` (the symbol has no
+    canonical FundamentalConfidence) the confidence is left ``None`` -- the breakout shows no
+    confidence rather than a partial blend, per product rule. The rationale is still returned
+    (with ``confidence: None``) for diagnostics.
     """
     mix = weights.get("mix", {}).get(profile, _MIX_SEEDS.get(profile, {})) if weights else _MIX_SEEDS.get(profile, {})
 
@@ -208,7 +204,8 @@ def breakout_confidence(weights: dict[str, Any], profile: str, direction: str,
             "contribution": round(contribution, 4),
         })
 
-    confidence = round(100.0 * num / den, 2) if den > 0 else 0.0
+    # Fundamental score is mandatory: no canonical FundamentalConfidence -> no confidence.
+    confidence = None if fund_sc is None else (round(100.0 * num / den, 2) if den > 0 else 0.0)
     rationale = {
         "profile": profile,
         "direction": direction,
