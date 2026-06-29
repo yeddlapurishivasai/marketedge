@@ -451,12 +451,21 @@ def upsert_earnings_fundamentals(conn: pyodbc.Connection, market: str, row: dict
 def refresh_fundamental_idea(conn: pyodbc.Connection, market: str, ticker: str) -> None:
     """Recompute the screener 'idea' for a ticker from its earnings + analyst snapshots.
 
-    An idea is keyed by (Ticker, EarningsDate = LastEarningsDate). Earnings-based metrics
-    (EPS beat %, YoY OPM/operating-profit expansion) are stamped to the reported result;
-    analyst fields (latest upgrade/downgrade + price targets) are refreshed from the most
-    recent analyst snapshot on every run (daily detection). When a newer result lands, the
-    EarningsDate advances -> a new row is inserted and older rows for the ticker are flagged
-    IsStale = 1 so the UI hides them (a future purge job deletes them).
+    An idea is keyed by (Ticker, EarningsDate). EarningsDate is the reported announcement
+    date (``LastEarningsDate``) when yfinance has one, else it falls back to the financial
+    ``LatestQuarterEnd``. The fallback matters for the long tail of NSE/US small-caps whose
+    quarterly financials (revenue, OPM, operating-profit expansion) yfinance returns but for
+    which it has no announcement date: without it those names would never get an idea row at
+    all -> NULL ConfidenceScore everywhere. The earnings-metric confidences still apply (just
+    aged off the quarter-end), so the stock gets a real, scoreable idea instead of a blank.
+
+    Earnings-based metrics (EPS beat %, YoY OPM/operating-profit expansion) are stamped to the
+    reported result; analyst fields (latest upgrade/downgrade + price targets) are refreshed
+    from the most recent analyst snapshot on every run (daily detection). When a newer result
+    lands the effective EarningsDate advances -> a new row is inserted and older rows for the
+    ticker are flagged IsStale = 1 so the UI hides them (a future purge job deletes them).
+    Because the earnings upsert preserves a known LastEarningsDate against null fetches, a real
+    announcement date -- once seen -- sticks and supersedes the quarter-end fallback key.
     """
     t = tables_for(market)
     ideas, earnings, analyst = t["ideas"], t["earnings"], t["analyst"]
@@ -465,7 +474,7 @@ def refresh_fundamental_idea(conn: pyodbc.Connection, market: str, ticker: str) 
         USING (
             SELECT
                 e.Ticker,
-                e.LastEarningsDate AS EarningsDate,
+                COALESCE(e.LastEarningsDate, e.LatestQuarterEnd) AS EarningsDate,
                 e.LastEpsSurprisePct AS EpsBeatPct,
                 CASE WHEN e.Opm IS NOT NULL AND e.OpmYoyQ IS NOT NULL
                      THEN e.Opm - e.OpmYoyQ END AS OpmExpansionYoyPct,
@@ -482,7 +491,7 @@ def refresh_fundamental_idea(conn: pyodbc.Connection, market: str, ticker: str) 
                 WHERE s.Ticker = e.Ticker
                 ORDER BY s.AsOfDate DESC
             ) a
-            WHERE e.Ticker = ? AND e.LastEarningsDate IS NOT NULL
+            WHERE e.Ticker = ? AND COALESCE(e.LastEarningsDate, e.LatestQuarterEnd) IS NOT NULL
         ) AS src
         ON tgt.Ticker = src.Ticker AND tgt.EarningsDate = src.EarningsDate
         WHEN MATCHED THEN UPDATE SET
@@ -514,8 +523,8 @@ def refresh_fundamental_idea(conn: pyodbc.Connection, market: str, ticker: str) 
         FROM dbo.{ideas} i
         JOIN dbo.{earnings} e ON e.Ticker = i.Ticker
         WHERE i.Ticker = ? AND i.IsStale = 0
-          AND e.LastEarningsDate IS NOT NULL
-          AND i.EarningsDate < e.LastEarningsDate;
+          AND COALESCE(e.LastEarningsDate, e.LatestQuarterEnd) IS NOT NULL
+          AND i.EarningsDate < COALESCE(e.LastEarningsDate, e.LatestQuarterEnd);
     """
     cursor = conn.cursor()
     cursor.execute(merge, [ticker])
