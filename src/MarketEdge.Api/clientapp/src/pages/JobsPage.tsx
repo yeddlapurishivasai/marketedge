@@ -4,7 +4,7 @@ import type { Market, JobRun } from '../api';
 import { fetchJobRuns, fetchJobRun, cancelJobRun } from '../api';
 import {
   ChevronLeft, RefreshCw, Clock, CheckCircle2, XCircle,
-  Loader2, AlertCircle, Activity, StopCircle
+  Loader2, AlertCircle, Activity, StopCircle, Maximize2, X
 } from 'lucide-react';
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
@@ -22,6 +22,24 @@ const STATUS_CLASS: Record<string, string> = {
   failed: 'status-failed',
   cancelled: 'status-cancelled'
 };
+
+/**
+ * Flattens a metrics object into displayable label/value pairs. Nested objects
+ * (e.g. `breakouts` = { opened, managed, ... }, `perScanner`) are expanded into
+ * "parent · child" rows so they don't render as "[object Object]".
+ */
+function flattenMetrics(metrics: Record<string, unknown>, prefix = ''): { label: string; value: string }[] {
+  const out: { label: string; value: string }[] = [];
+  for (const [k, v] of Object.entries(metrics)) {
+    const label = `${prefix}${k.replace(/_/g, ' ')}`;
+    if (v != null && typeof v === 'object' && !Array.isArray(v)) {
+      out.push(...flattenMetrics(v as Record<string, unknown>, `${label} · `));
+    } else {
+      out.push({ label, value: Array.isArray(v) ? v.join(', ') : String(v) });
+    }
+  }
+  return out;
+}
 
 function formatDuration(seconds?: number): string {
   if (!seconds) return '—';
@@ -57,6 +75,7 @@ export default function JobsPage() {
   const [selectedRun, setSelectedRun] = useState<JobRun | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [jobType, setJobType] = useState('');
+  const [metricPopup, setMetricPopup] = useState<{ label: string; value: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -118,7 +137,7 @@ export default function JobsPage() {
           Job Runs
         </h1>
         <span className="page-subtitle">{market === 'india' ? '🇮🇳 India' : '🇺🇸 US'}</span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div className="header-actions">
           <select
             className="select-input"
             value={jobType}
@@ -309,12 +328,20 @@ export default function JobsPage() {
                 <div className="detail-section">
                   <h4>Metrics</h4>
                   <div className="metrics-grid">
-                    {Object.entries(selectedRun.metrics).map(([k, v]) => (
-                      <div className="metric-item" key={k}>
-                        <div className="metric-value">{String(v)}</div>
-                        <div className="metric-label">{k.replace(/_/g, ' ')}</div>
-                      </div>
-                    ))}
+                    {flattenMetrics(selectedRun.metrics).map(({ label, value }) => {
+                      const isLong = value.length > 60;
+                      return (
+                        <div className="metric-item" key={label}>
+                          <div className={`metric-value${isLong ? ' metric-value-clamp' : ''}`}>{value}</div>
+                          {isLong && (
+                            <button className="metric-expand" onClick={() => setMetricPopup({ label, value })}>
+                              <Maximize2 size={11} /> View full
+                            </button>
+                          )}
+                          <div className="metric-label">{label}</div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -341,6 +368,21 @@ export default function JobsPage() {
           </div>
         )}
       </div>
+
+      {/* Full-text metric popup */}
+      {metricPopup && (
+        <div className="modal-overlay" onClick={() => setMetricPopup(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 720, width: '92vw' }}>
+            <div className="modal-header">
+              <h3 className="modal-title" style={{ textTransform: 'capitalize' }}>{metricPopup.label}</h3>
+              <button className="modal-close" onClick={() => setMetricPopup(null)}><X size={18} /></button>
+            </div>
+            <div className="modal-body">
+              <pre className="error-box" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{metricPopup.value}</pre>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

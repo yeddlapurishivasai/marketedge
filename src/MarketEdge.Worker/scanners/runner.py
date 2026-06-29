@@ -64,11 +64,16 @@ def load_universe(conn, market: str, universe: str) -> list[dict[str, Any]]:
     params: list[Any] = []
     if universe == "stage2":
         stage = _table(_STAGE, market)
+        # Resolve the stage2 set by the *latest run* (MAX RunId), identical to the API's
+        # FundamentalsService. RunId is monotonic, so this always picks the most recent
+        # stage analysis — unlike MAX(WeekNumber), which can select an older run when the
+        # newest run isn't the lexicographically-highest week (re-runs, partial current
+        # week, ISO year boundary). Keeps the stage2 universe consistent everywhere.
         where = f"""
             WHERE s.Symbol IN (
                 SELECT r.Symbol FROM dbo.{stage} r
                 WHERE r.IsStage2 = 1
-                  AND r.WeekNumber = (SELECT MAX(WeekNumber) FROM dbo.{stage} WHERE IsStage2 = 1)
+                  AND r.RunId = (SELECT MAX(RunId) FROM dbo.{stage})
             )
         """
 
@@ -251,9 +256,9 @@ def run_scanner_job(payload: dict) -> None:
     market = str(payload["market"]).lower()
     run_id = int(payload["runId"])
     scanner_name = payload.get("scannerName")  # None => all scanners (pre-close scan)
-    # Paper trades are opened/managed only on the pre-close scan (the daily all-scanner
+    # Paper breakouts are opened/managed only on the pre-close scan (the daily all-scanner
     # run, scannerName=None). Intraday single-scanner runs and ad-hoc/local test runs
-    # evaluate scanners but must NOT touch the paper-trade blotter.
+    # evaluate scanners but must NOT touch the paper-breakout blotter.
     is_preclose_scan = scanner_name is None
     universe = (payload.get("universe") or "stage2").lower()
     scan_date = date.today()
@@ -318,7 +323,7 @@ def run_scanner_job(payload: dict) -> None:
             per_scanner[d.name] = len(rows)
             total_hits += len(rows)
 
-        # --- Scoring + paper-trade engine (feature: scoring & trade engine) ---
+        # --- Paper-breakout engine ---
         # Symbols flagged by any scanner this run are breakout candidates.
         meta_by_sym = {m["symbol"]: m for m in meta_rows}
         flagged: dict[str, dict] = {}
@@ -335,23 +340,19 @@ def run_scanner_job(payload: dict) -> None:
                     flagged[sym] = f
                 f["scanners"].append(s_name)
 
-        trade_metrics: dict[str, int] = {}
-        scored = 0
+        breakout_metrics: dict[str, int] = {}
         try:
-            from .trades import run_trade_engine
-            from .scoring import score_universe
-            # Only the pre-close scan opens/manages paper trades (see is_preclose_scan).
+            from .breakouts import run_breakout_engine
+            # Only the pre-close scan opens/manages paper breakouts (see is_preclose_scan).
             if is_preclose_scan:
-                trade_metrics = run_trade_engine(conn, market, scan_date, flagged, series_cache)
+                breakout_metrics = run_breakout_engine(conn, market, scan_date, flagged, series_cache)
             else:
-                trade_metrics = {"skipped": "not pre-close scan"}
-                logger.info("Scanner run %s: trade engine skipped (single-scanner run '%s')",
+                breakout_metrics = {"skipped": "not pre-close scan"}
+                logger.info("Scanner run %s: breakout engine skipped (single-scanner run '%s')",
                             run_id, scanner_name)
-            # scanner_hits defaults to the day's persisted scanner-result counts (already persisted above)
-            scored = score_universe(conn, market, symbols, scan_date, series_cache)
-            logger.info("Scanner run %s: trades=%s scored=%s", run_id, trade_metrics, scored)
-        except Exception:  # noqa: BLE001 - scoring/trades must never abort the scan
-            logger.exception("Scanner run %s: scoring/trade engine failed", run_id)
+            logger.info("Scanner run %s: breakouts=%s", run_id, breakout_metrics)
+        except Exception:  # noqa: BLE001 - breakout handling must never abort the scan
+            logger.exception("Scanner run %s: breakout engine failed", run_id)
 
         metrics = {
             "market": market,
@@ -363,8 +364,7 @@ def run_scanner_job(payload: dict) -> None:
             "totalHits": total_hits,
             "perScanner": per_scanner,
             "scanDate": str(scan_date),
-            "trades": trade_metrics,
-            "scored": scored,
+            "breakouts": breakout_metrics,
         }
         update_job_status(conn, run_id, "completed", progress=100, metrics=metrics,
                           completed_at=datetime.now(timezone.utc).replace(tzinfo=None))

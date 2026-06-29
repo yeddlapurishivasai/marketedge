@@ -105,19 +105,13 @@ public class LookupService : ILookupService
         var yearly = eps.Where(e => e.PeriodType == "Y").OrderBy(e => e.PeriodEndDate).Select(ToEpsDto).ToList();
 
         var analystDto = analyst == null ? null : ToAnalystDto(analyst);
-        decimal? currentPrice = tech?.Close;
-        var yearUpside = BuildProjection("year", currentPrice, analystDto?.CurrentYearEps, yearly);
-        var quarterUpside = BuildProjection("quarter", currentPrice, analystDto?.CurrentQuarterEps, quarterly);
-        var analystUpside = BuildAnalystProjection(currentPrice, analystDto);
-        var aiUpside = BuildAiPlaceholder(currentPrice);
 
         return new StockLookupDetail(
             symbol, companyName, broadSector, industry, market,
             ticker?.Exchange, ticker?.Active ?? true, ticker?.IsFno ?? false, ticker?.BarsAvailable,
             tech,
             analystDto,
-            quarterly, yearly,
-            quarterUpside, yearUpside, analystUpside, aiUpside);
+            quarterly, yearly);
     }
 
     public async Task<IReadOnlyList<LookupBarDto>> GetBarsAsync(string market, string symbol, string timeframe)
@@ -187,70 +181,30 @@ public class LookupService : ILookupService
             S(t => t.RsType), Dt(t => t.RsDate), I(t => t.ScannerHits), Dt(t => t.LastScannerHit));
     }
 
-    // Best/base/worst EPS upside at constant P/E for a horizon. Base EPS is the trailing
-    // figure (analyst current quarter/year EPS); if absent, the current-period forecast
-    // consensus is used. The projection target is the forward-most forecast row, whose
-    // Low / Consensus / High estimates give the bear / base / bull cases.
-    private static UpsideProjectionDto? BuildProjection(
-        string horizon, decimal? currentPrice, decimal? baseEpsFromAnalyst,
-        IReadOnlyList<LookupEpsForecastDto> forecasts)
-    {
-        if (forecasts.Count == 0) return null;
-        var proj = forecasts[^1];
-
-        decimal? baseEps = baseEpsFromAnalyst;
-        if ((baseEps is null || baseEps <= 0) && forecasts.Count >= 2)
-            baseEps = forecasts[0].ConsensusEps;
-        if (baseEps is null || baseEps <= 0)
-            return new UpsideProjectionDto(horizon, "deterministic", currentPrice, baseEps, null, null, null);
-
-        UpsideCaseDto? Case(decimal? eps)
-        {
-            if (eps is null) return null;
-            var ratio = eps.Value / baseEps.Value;
-            var pct = decimal.Round((ratio - 1m) * 100m, 2);
-            decimal? price = currentPrice.HasValue ? decimal.Round(currentPrice.Value * ratio, 2) : null;
-            return new UpsideCaseDto(eps, pct, price);
-        }
-
-        return new UpsideProjectionDto(
-            horizon, "deterministic", currentPrice, baseEps,
-            Case(proj.LowEps), Case(proj.ConsensusEps), Case(proj.HighEps));
-    }
-
-    // Analyst 12-month price-target scenarios from yfinance: bear=low, base=mean, bull=high.
-    // Each case's implied price is the target itself; the % move is vs the current price.
-    private static UpsideProjectionDto? BuildAnalystProjection(decimal? currentPrice, LookupAnalystDto? analyst)
-    {
-        if (analyst is null) return null;
-        var low = analyst.TargetLowPrice;
-        var mean = analyst.TargetMeanPrice;
-        var high = analyst.TargetHighPrice;
-        if (low is null && mean is null && high is null) return null;
-
-        UpsideCaseDto? Case(decimal? target)
-        {
-            if (target is null) return null;
-            decimal? pct = currentPrice is > 0
-                ? decimal.Round((target.Value / currentPrice.Value - 1m) * 100m, 2)
-                : null;
-            return new UpsideCaseDto(null, pct, decimal.Round(target.Value, 2));
-        }
-
-        return new UpsideProjectionDto(
-            "analyst", "analyst", currentPrice, null,
-            Case(low), Case(mean), Case(high));
-    }
-
-    // AI-predicted scenarios: placeholder until a model is wired in. Returns an empty
-    // projection so the UI can show an "AI" row marked as coming soon.
-    private static UpsideProjectionDto BuildAiPlaceholder(decimal? currentPrice) =>
-        new("ai", "ai", currentPrice, null, null, null, null);
-
+    // Maps the stored analyst snapshot to the wire DTO, decoding the recommendation
+    // distribution trend from its JSON column.
     private static LookupAnalystDto ToAnalystDto(AnalystSnapshotBase a) => new(
         a.AsOfDate, a.ConsensusRating, a.NumAnalysts,
         a.CurrentQuarterEps, a.NextQuarterEps, a.CurrentYearEps, a.NextYearEps,
-        a.TargetLowPrice, a.TargetMeanPrice, a.TargetHighPrice);
+        a.TargetLowPrice, a.TargetMeanPrice, a.TargetHighPrice,
+        ParseRecommendations(a.RecommendationsJson),
+        a.LatestRatingFirm, a.LatestRatingGrade, a.LatestRatingAction, a.LatestRatingDate);
+
+    private static IReadOnlyList<RecommendationPeriod> ParseRecommendations(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return Array.Empty<RecommendationPeriod>();
+        try
+        {
+            var list = System.Text.Json.JsonSerializer.Deserialize<List<RecommendationPeriod>>(
+                json,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            return list ?? (IReadOnlyList<RecommendationPeriod>)Array.Empty<RecommendationPeriod>();
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return Array.Empty<RecommendationPeriod>();
+        }
+    }
 
     private static LookupEpsForecastDto ToEpsDto(EpsForecastBase e) => new(
         e.PeriodType, e.PeriodEndDate, e.ConsensusEps, e.HighEps, e.LowEps,

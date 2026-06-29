@@ -34,12 +34,37 @@ CREATE TABLE [dbo].[USEarningsFundamentals]
     -- Earnings announcement dates (from yfinance earnings_dates)
     [LastEarningsDate]      DATE          NULL,
     [PrevEarningsDate]      DATE          NULL,
+    [NextEarningsDate]      DATE          NULL,          -- nearest upcoming earnings (drives daily-run scheduling)
     [LastReportedEps]       DECIMAL(12,4) NULL,
     [LastEpsSurprisePct]    DECIMAL(12,4) NULL,
+
+    -- Reported EPS history: last 4 reported quarters (Q1 = most recent), from
+    -- yfinance get_earnings_dates (EPS Estimate / Reported EPS / Surprise(%)).
+    [EpsQ1Date]             DATE          NULL,
+    [EpsQ1Estimate]         DECIMAL(12,4) NULL,
+    [EpsQ1Actual]           DECIMAL(12,4) NULL,
+    [EpsQ1SurprisePct]      DECIMAL(12,4) NULL,
+    [EpsQ2Date]             DATE          NULL,
+    [EpsQ2Estimate]         DECIMAL(12,4) NULL,
+    [EpsQ2Actual]           DECIMAL(12,4) NULL,
+    [EpsQ2SurprisePct]      DECIMAL(12,4) NULL,
+    [EpsQ3Date]             DATE          NULL,
+    [EpsQ3Estimate]         DECIMAL(12,4) NULL,
+    [EpsQ3Actual]           DECIMAL(12,4) NULL,
+    [EpsQ3SurprisePct]      DECIMAL(12,4) NULL,
+    [EpsQ4Date]             DATE          NULL,
+    [EpsQ4Estimate]         DECIMAL(12,4) NULL,
+    [EpsQ4Actual]           DECIMAL(12,4) NULL,
+    [EpsQ4SurprisePct]      DECIMAL(12,4) NULL,
+
+    -- Valuation multiples (from yfinance ticker.info)
+    [TrailingPe]            DECIMAL(18,4) NULL,
+    [ForwardPe]             DECIMAL(18,4) NULL,
 
     [UpdatedAt]             DATETIME2     NOT NULL CONSTRAINT [DF_USEarningsFundamentals_UpdatedAt] DEFAULT GETUTCDATE(),
 
     CONSTRAINT [PK_USEarningsFundamentals] PRIMARY KEY CLUSTERED ([Ticker]),
     CONSTRAINT [FK_USEarningsFundamentals_USTickers] FOREIGN KEY ([Ticker]) REFERENCES [dbo].[USTickers]([Ticker]),
-    INDEX [IX_USEarningsFundamentals_LastEarningsDate] NONCLUSTERED ([LastEarningsDate])
+    INDEX [IX_USEarningsFundamentals_LastEarningsDate] NONCLUSTERED ([LastEarningsDate]),
+    INDEX [IX_USEarningsFundamentals_NextEarningsDate] NONCLUSTERED ([NextEarningsDate])
 );

@@ -28,7 +28,7 @@ builder.Services.AddScoped<IIngestionService, IngestionService>();
 builder.Services.AddScoped<ILookupService, LookupService>();
 builder.Services.AddScoped<IScannerService, ScannerService>();
 builder.Services.AddScoped<IFundamentalsService, FundamentalsService>();
-builder.Services.AddScoped<IScoresService, ScoresService>();
+builder.Services.AddScoped<IBreakoutsService, BreakoutsService>();
 builder.Services.AddHostedService<ScannerScheduleService>();
 builder.Services.AddHostedService<FundamentalsScheduleService>();
 builder.Services.AddHostedService<Stage2ScheduleService>();

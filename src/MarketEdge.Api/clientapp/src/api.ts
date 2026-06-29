@@ -335,6 +335,20 @@ export interface LookupAnalyst {
   targetLowPrice?: number | null;
   targetMeanPrice?: number | null;
   targetHighPrice?: number | null;
+  recommendations: RecommendationPeriod[];
+  latestRatingFirm?: string | null;
+  latestRatingGrade?: string | null;
+  latestRatingAction?: string | null;
+  latestRatingDate?: string | null;
+}
+
+export interface RecommendationPeriod {
+  period: string;       // yfinance relative label: '0m' = current month, '-1m' = 1 month ago, ...
+  strongBuy: number;
+  buy: number;
+  hold: number;
+  sell: number;
+  strongSell: number;
 }
 
 export interface LookupEpsForecast {
@@ -346,22 +360,6 @@ export interface LookupEpsForecast {
   numEstimates?: number | null;
   revisionsUp: number;
   revisionsDown: number;
-}
-
-export interface UpsideCase {
-  eps?: number | null;
-  upsidePct?: number | null;
-  impliedPrice?: number | null;
-}
-
-export interface UpsideProjection {
-  horizon: string;            // 'quarter' | 'year' | 'analyst' | 'ai'
-  source: string;            // 'deterministic' | 'analyst' | 'ai'
-  currentPrice?: number | null;
-  baseEps?: number | null;
-  bear?: UpsideCase | null;
-  base?: UpsideCase | null;
-  bull?: UpsideCase | null;
 }
 
 export interface StockLookupDetail {
@@ -378,10 +376,6 @@ export interface StockLookupDetail {
   analyst?: LookupAnalyst | null;
   quarterlyEps: LookupEpsForecast[];
   yearlyEps: LookupEpsForecast[];
-  quarterUpside?: UpsideProjection | null;
-  yearUpside?: UpsideProjection | null;
-  analystUpside?: UpsideProjection | null;
-  aiUpside?: UpsideProjection | null;
 }
 
 export interface LookupBar {
@@ -563,9 +557,20 @@ export interface FundamentalRow {
   operatingProfitTrend?: string | null;
   lastEarningsDate?: string | null;
   prevEarningsDate?: string | null;
+  nextEarningsDate?: string | null;
   lastReportedEps?: number | null;
   lastEpsSurprisePct?: number | null;
+  trailingPe?: number | null;
+  forwardPe?: number | null;
   earningsAnnouncedRecent: boolean;
+  epsHistory: EpsQuarter[];
+}
+
+export interface EpsQuarter {
+  date?: string | null;
+  estimate?: number | null;
+  actual?: number | null;
+  surprisePct?: number | null;
 }
 
 export interface SignalNewsItem {
@@ -614,6 +619,69 @@ export async function fetchFundamentalDetail(market: Market, symbol: string): Pr
   return res.json();
 }
 
+export interface FundamentalIdeaRow {
+  symbol: string;
+  companyName: string;
+  broadSector?: string | null;
+  industry?: string | null;
+  earningsDate: string;
+  epsBeatPct?: number | null;
+  opmExpansionYoyPct?: number | null;
+  operatingProfitExpansionYoyPct?: number | null;
+  latestRatingFirm?: string | null;
+  latestRatingGrade?: string | null;
+  latestRatingAction?: string | null;
+  latestRatingDate?: string | null;
+  targetLowPrice?: number | null;
+  targetMeanPrice?: number | null;
+  targetHighPrice?: number | null;
+  epsBeatConfidence?: number | null;
+  opmExpansionConfidence?: number | null;
+  operatingProfitExpansionConfidence?: number | null;
+  analystRatingConfidence?: number | null;
+  targetUpsideConfidence?: number | null;
+  fundamentalConfidence?: number | null;
+  technicalConfidence?: number | null;
+  overallConfidence?: number | null;
+  daysSinceEarnings?: number | null;
+  daysSinceRating?: number | null;
+  confidenceRationaleJson?: string | null;
+  isStage2?: boolean | null;
+  directionScore?: number | null;
+  side?: 'long' | 'short' | 'neutral' | null;
+  epsBeatConfidenceShort?: number | null;
+  opmExpansionConfidenceShort?: number | null;
+  operatingProfitExpansionConfidenceShort?: number | null;
+  analystRatingConfidenceShort?: number | null;
+  fundamentalConfidenceShort?: number | null;
+  overallConfidenceShort?: number | null;
+  confidenceRationaleShortJson?: string | null;
+  updatedAt: string;
+}
+
+export async function fetchFundamentalIdeas(market: Market): Promise<FundamentalIdeaRow[]> {
+  const res = await fetch(`${BASE}/${market}/fundamentals/ideas`);
+  if (!res.ok) throw new Error('Failed to load fundamental ideas');
+  return res.json();
+}
+
+/**
+ * Enqueues a stage-2 fundamentals refresh (the screener's data source). Pass
+ * `force: true` to bypass the earnings-window filter and refresh every stage-2 ticker.
+ */
+export async function triggerFundamentalsRefresh(
+  market: Market,
+  body: { force?: boolean; universe?: 'stage2' | 'all'; missingOnly?: boolean } = {},
+): Promise<{ runId: number }> {
+  const res = await fetch(`${BASE}/${market}/fundamentals/trigger`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force: body.force ?? false, universe: body.universe ?? 'stage2', missingOnly: body.missingOnly ?? false }),
+  });
+  if (!res.ok) throw new Error((await res.text()) || 'Failed to trigger fundamentals refresh');
+  return res.json();
+}
+
 export async function saveFundamentalNote(market: Market, symbol: string, noteText: string): Promise<void> {
   const res = await fetch(`${BASE}/${market}/fundamentals/${encodeURIComponent(symbol)}/note`, {
     method: 'PUT',
@@ -623,35 +691,10 @@ export async function saveFundamentalNote(market: Market, symbol: string, noteTe
   if (!res.ok) throw new Error('Failed to save note');
 }
 
-// --- Scores & paper-trade engine ---
-export type TradeProfile = 'swing' | 'positional';
+// --- Breakout confidence engine ---
+export type BreakoutProfile = 'swing' | 'positional';
 
-export interface StockScore {
-  ticker: string;
-  asOfDate?: string | null;
-  upsideEpsPct?: number | null;
-  upsideAnalystPct?: number | null;
-  targetPrice?: number | null;
-  aiUpsidePct?: number | null;
-  aiDownsidePct?: number | null;
-  aiRationale?: string | null;
-  swingScore?: number | null;
-  swingSide?: string | null;
-  swingBull?: number | null;
-  swingBear?: number | null;
-  positionalScore?: number | null;
-  positionalSide?: string | null;
-  positionalBull?: number | null;
-  positionalBear?: number | null;
-  fundFreshnessDecay?: number | null;
-  daysSinceEarnings?: number | null;
-  scannerHits?: number | null;
-  isFno?: boolean | null;
-  componentsJson?: string | null;
-  scoredAt: string;
-}
-
-export interface Trade {
+export interface Breakout {
   id: number;
   ticker: string;
   companyName?: string | null;
@@ -682,7 +725,7 @@ export interface Trade {
   updatedAt: string;
 }
 
-export interface TradeStats {
+export interface BreakoutStats {
   activeCount: number;
   closedCount: number;
   wins: number;
@@ -697,39 +740,26 @@ export interface TradeStats {
   positionalRealizedPnLAmount?: number | null;
 }
 
-export async function fetchScores(
-  market: Market,
-  params: { profile?: TradeProfile; side?: string; take?: number } = {}
-): Promise<StockScore[]> {
-  const sp = new URLSearchParams();
-  sp.set('profile', params.profile || 'swing');
-  if (params.side) sp.set('side', params.side);
-  if (params.take) sp.set('take', params.take.toString());
-  const res = await fetch(`${BASE}/${market}/scores?${sp}`);
-  if (!res.ok) throw new Error('Failed to fetch scores');
-  return res.json();
-}
-
-export async function fetchTrades(
+export async function fetchBreakouts(
   market: Market,
   params: { status?: string; tradeType?: string } = {}
-): Promise<Trade[]> {
+): Promise<Breakout[]> {
   const sp = new URLSearchParams();
   if (params.status) sp.set('status', params.status);
   if (params.tradeType) sp.set('tradeType', params.tradeType);
   const qs = sp.toString();
-  const res = await fetch(`${BASE}/${market}/trades${qs ? '?' + qs : ''}`);
-  if (!res.ok) throw new Error('Failed to fetch trades');
+  const res = await fetch(`${BASE}/${market}/breakouts${qs ? '?' + qs : ''}`);
+  if (!res.ok) throw new Error('Failed to fetch breakouts');
   return res.json();
 }
 
-export async function fetchTradeStats(market: Market): Promise<TradeStats> {
-  const res = await fetch(`${BASE}/${market}/trades/stats`);
-  if (!res.ok) throw new Error('Failed to fetch trade stats');
+export async function fetchBreakoutStats(market: Market): Promise<BreakoutStats> {
+  const res = await fetch(`${BASE}/${market}/breakouts/stats`);
+  if (!res.ok) throw new Error('Failed to fetch breakout stats');
   return res.json();
 }
 
-export interface TradePnlSummary {
+export interface BreakoutPnlSummary {
   from: string;
   to: string;
   tradeType?: string | null;
@@ -743,35 +773,35 @@ export interface TradePnlSummary {
   openPnLAmount: number;
 }
 
-export interface TradeDay {
+export interface BreakoutDay {
   date: string;
   tradeType?: string | null;
-  entries: Trade[];
-  exits: Trade[];
+  entries: Breakout[];
+  exits: Breakout[];
 }
 
-export async function fetchTradePnl(
+export async function fetchBreakoutPnl(
   market: Market,
   from: string,
   to: string,
   tradeType?: string
-): Promise<TradePnlSummary> {
+): Promise<BreakoutPnlSummary> {
   const sp = new URLSearchParams({ from, to });
   if (tradeType) sp.set('tradeType', tradeType);
-  const res = await fetch(`${BASE}/${market}/trades/pnl?${sp}`);
-  if (!res.ok) throw new Error('Failed to fetch trade P&L');
+  const res = await fetch(`${BASE}/${market}/breakouts/pnl?${sp}`);
+  if (!res.ok) throw new Error('Failed to fetch breakout P&L');
   return res.json();
 }
 
-export async function fetchTradesByDay(
+export async function fetchBreakoutsByDay(
   market: Market,
   date: string,
   tradeType?: string
-): Promise<TradeDay> {
+): Promise<BreakoutDay> {
   const sp = new URLSearchParams({ date });
   if (tradeType) sp.set('tradeType', tradeType);
-  const res = await fetch(`${BASE}/${market}/trades/day?${sp}`);
-  if (!res.ok) throw new Error('Failed to fetch day trades');
+  const res = await fetch(`${BASE}/${market}/breakouts/day?${sp}`);
+  if (!res.ok) throw new Error('Failed to fetch day breakouts');
   return res.json();
 }
 

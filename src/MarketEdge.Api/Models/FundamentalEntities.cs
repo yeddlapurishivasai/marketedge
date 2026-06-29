@@ -37,14 +37,77 @@ public abstract class EarningsFundamentalsBase
 
     public DateOnly? LastEarningsDate { get; set; }
     public DateOnly? PrevEarningsDate { get; set; }
+    public DateOnly? NextEarningsDate { get; set; }
     public decimal? LastReportedEps { get; set; }
     public decimal? LastEpsSurprisePct { get; set; }
+
+    // Reported EPS history: last 4 reported quarters (Q1 = most recent).
+    public DateOnly? EpsQ1Date { get; set; }
+    public decimal? EpsQ1Estimate { get; set; }
+    public decimal? EpsQ1Actual { get; set; }
+    public decimal? EpsQ1SurprisePct { get; set; }
+    public DateOnly? EpsQ2Date { get; set; }
+    public decimal? EpsQ2Estimate { get; set; }
+    public decimal? EpsQ2Actual { get; set; }
+    public decimal? EpsQ2SurprisePct { get; set; }
+    public DateOnly? EpsQ3Date { get; set; }
+    public decimal? EpsQ3Estimate { get; set; }
+    public decimal? EpsQ3Actual { get; set; }
+    public decimal? EpsQ3SurprisePct { get; set; }
+    public DateOnly? EpsQ4Date { get; set; }
+    public decimal? EpsQ4Estimate { get; set; }
+    public decimal? EpsQ4Actual { get; set; }
+    public decimal? EpsQ4SurprisePct { get; set; }
+
+    // Valuation multiples (from yfinance ticker.info)
+    public decimal? TrailingPe { get; set; }
+    public decimal? ForwardPe { get; set; }
 
     public DateTime UpdatedAt { get; set; }
 }
 
 [Table("IndianEarningsFundamentals")] public class IndianEarningsFundamentals : EarningsFundamentalsBase { }
 [Table("USEarningsFundamentals")] public class USEarningsFundamentals : EarningsFundamentalsBase { }
+
+// Reimagined fundamental screener "idea": one snapshot per ticker per earnings result.
+// Earnings metrics are stamped to the reported result; analyst rating/targets refresh daily.
+// Superseded results are flagged IsStale and hidden in the UI. Schema owned by SQL project.
+public abstract class FundamentalIdeaBase
+{
+    public string Ticker { get; set; } = string.Empty;
+    public DateOnly EarningsDate { get; set; }
+
+    public decimal? EpsBeatPct { get; set; }
+    public decimal? OpmExpansionYoyPct { get; set; }
+    public decimal? OperatingProfitExpansionYoyPct { get; set; }
+
+    public string? LatestRatingFirm { get; set; }
+    public string? LatestRatingGrade { get; set; }
+    public string? LatestRatingAction { get; set; }
+    public DateOnly? LatestRatingDate { get; set; }
+    public decimal? TargetLowPrice { get; set; }
+    public decimal? TargetMeanPrice { get; set; }
+    public decimal? TargetHighPrice { get; set; }
+
+    public decimal? EpsBeatConfidence { get; set; }
+    public decimal? OpmExpansionConfidence { get; set; }
+    public decimal? OperatingProfitExpansionConfidence { get; set; }
+    public decimal? AnalystRatingConfidence { get; set; }
+    public decimal? TargetUpsideConfidence { get; set; }
+    public decimal? FundamentalConfidence { get; set; }
+    public decimal? TechnicalConfidence { get; set; }
+    public decimal? OverallConfidence { get; set; }
+    public int? DaysSinceEarnings { get; set; }
+    public int? DaysSinceRating { get; set; }
+    public string? ConfidenceRationaleJson { get; set; }
+
+    public bool IsStale { get; set; }
+    public DateTime CapturedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+[Table("IndianFundamentalIdeas")] public class IndianFundamentalIdea : FundamentalIdeaBase { }
+[Table("USFundamentalIdeas")] public class USFundamentalIdea : FundamentalIdeaBase { }
 
 // Per-stock free-text note: additional fundamental context captured by the user, used
 // as an input for a downstream AI workflow. Writable from the API.
@@ -77,45 +140,9 @@ public abstract class StockSignalsBase
 [Table("IndianStockSignals")] public class IndianStockSignals : StockSignalsBase { }
 [Table("USStockSignals")] public class USStockSignals : StockSignalsBase { }
 
-// Per-stock Wilson lower-bound scores (swing + positional) plus deterministic upside,
-// produced by the worker scoring engine each scanner run. Read-only from the API.
-public abstract class StockScoresBase
-{
-    public string Ticker { get; set; } = string.Empty;
-    public DateOnly? AsOfDate { get; set; }
 
-    public decimal? UpsideEpsPct { get; set; }
-    public decimal? UpsideAnalystPct { get; set; }
-    public decimal? TargetPrice { get; set; }
-
-    public decimal? AiUpsidePct { get; set; }
-    public decimal? AiDownsidePct { get; set; }
-    public string? AiRationale { get; set; }
-
-    public int? SwingScore { get; set; }
-    public string? SwingSide { get; set; }
-    public int? SwingBull { get; set; }
-    public int? SwingBear { get; set; }
-
-    public int? PositionalScore { get; set; }
-    public string? PositionalSide { get; set; }
-    public int? PositionalBull { get; set; }
-    public int? PositionalBear { get; set; }
-
-    public decimal? FundFreshnessDecay { get; set; }
-    public int? DaysSinceEarnings { get; set; }
-    public int? ScannerHits { get; set; }
-    public bool? IsFno { get; set; }
-    public string? ComponentsJson { get; set; }
-
-    public DateTime ScoredAt { get; set; }
-}
-
-[Table("IndianStockScores")] public class IndianStockScores : StockScoresBase { }
-[Table("USStockScores")] public class USStockScores : StockScoresBase { }
-
-// Paper trades opened/managed by the worker trade engine on scanner breakouts.
-public abstract class TradeBase
+// Breakouts opened/managed by the worker engine on scanner signals.
+public abstract class BreakoutBase
 {
     public int Id { get; set; }
     public string Ticker { get; set; } = string.Empty;
@@ -170,5 +197,5 @@ public class ScoringWeight
     public DateTime UpdatedAt { get; set; }
 }
 
-[Table("IndianTrades")] public class IndianTrade : TradeBase { }
-[Table("USTrades")] public class USTrade : TradeBase { }
+[Table("IndianBreakouts")] public class IndianBreakout : BreakoutBase { }
+[Table("USBreakouts")] public class USBreakout : BreakoutBase { }
