@@ -36,7 +36,7 @@ _IDEAS = {"india": "IndianFundamentalIdeas", "us": "USFundamentalIdeas"}
 # thesis (fundamentals dominate). Editable per-market via dbo.ScoringWeights(mix).
 _MIX_SEEDS: dict[str, dict[str, float]] = {
     "swing": {"setup": 0.55, "fundamental": 0.20, "volume": 0.25},
-    "positional": {"setup": 0.30, "fundamental": 0.55, "volume": 0.15},
+    "positional": {"setup": 0.20, "fundamental": 0.70, "volume": 0.10},
 }
 
 _COMPONENTS = ("setup", "fundamental", "volume")
@@ -46,6 +46,13 @@ _SCANNER_PRIOR = 0.5
 # Breakout volume (as a multiple of the 20-day average) that earns full marks (1.0).
 # The 1.5x breakout-confirmation floor therefore maps to ~0.25.
 _VOL_FULL_MULT = 3.0
+# Base accumulation: share of base volume on up days. 0.40 = neutral floor (0.0),
+# 0.70+ (green volume dominates) earns full marks; below 0.40 (distribution) scores 0.
+_ACCUM_FLOOR = 0.40
+_ACCUM_FULL = 0.70
+# Breakout-bar strength vs base accumulation blend for the volume component.
+_BAR_WEIGHT = 0.60
+_ACCUM_WEIGHT = 0.40
 
 
 def _clamp01(x: float) -> float:
@@ -123,14 +130,23 @@ def setup_score(reliability: dict[str, dict[str, Any]] | None,
                    "scanners": parts, "score": round(score, 4)}
 
 
-def breakout_volume_score(rel_vol: float | None) -> float | None:
-    """0..1 breakout-volume strength from RelVolume (breakout-bar vol / 20-day avg).
+def breakout_volume_score(rel_vol: float | None, accum: float | None = None) -> float | None:
+    """0..1 volume strength blending breakout-bar relative volume with base accumulation.
 
-    1.0x (average) -> 0.0, ``_VOL_FULL_MULT`` x -> 1.0; ``None`` when no volume data.
+    Bar strength: 1.0x (average) -> 0.0, ``_VOL_FULL_MULT`` x -> 1.0. Accumulation: share of
+    base volume on up days, ``_ACCUM_FLOOR`` -> 0.0, ``_ACCUM_FULL`` -> 1.0 (heavy red-day
+    volume scores low, heavy green-day volume scores high). Blend = 60% bar + 40% accum;
+    whichever is missing, the other stands alone. ``None`` when neither is available.
     """
-    if rel_vol is None:
+    bar = None if rel_vol is None else _clamp01((rel_vol - 1.0) / (_VOL_FULL_MULT - 1.0))
+    acc = None if accum is None else _clamp01((accum - _ACCUM_FLOOR) / (_ACCUM_FULL - _ACCUM_FLOOR))
+    if bar is None and acc is None:
         return None
-    return _clamp01((rel_vol - 1.0) / (_VOL_FULL_MULT - 1.0))
+    if acc is None:
+        return bar
+    if bar is None:
+        return acc
+    return _BAR_WEIGHT * bar + _ACCUM_WEIGHT * acc
 
 
 def symbol_fundamentals(conn, market: str, symbol: str) -> float | None:
@@ -160,7 +176,8 @@ def symbol_fundamentals(conn, market: str, symbol: str) -> float | None:
 def breakout_confidence(weights: dict[str, Any], profile: str, direction: str,
                         scanners: list[str], reliability: dict[str, dict[str, Any]] | None,
                         fund_score: float | None,
-                        vol_score: float | None) -> tuple[float | None, dict[str, Any]]:
+                        vol_score: float | None,
+                        accum: float | None = None) -> tuple[float | None, dict[str, Any]]:
     """Blend setup + fundamental + volume into a 0..100 confidence + JSON rationale.
 
     ``confidence = 100 * Σ(mix[c]·score[c]) / Σ mix[c]`` over the components that have
@@ -215,6 +232,7 @@ def breakout_confidence(weights: dict[str, Any], profile: str, direction: str,
         "notes": {
             "fundamentalScore": round(fund_sc, 4) if fund_sc is not None else None,
             "breakoutVolumeScore": round(vol_score, 4) if vol_score is not None else None,
+            "baseAccumulation": round(accum, 4) if accum is not None else None,
         },
     }
     return confidence, rationale

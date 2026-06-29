@@ -13,14 +13,18 @@ Runs as part of every scanner job (the 15-minute scheduled run). On each run it:
      current stop,
    * closes a trade (capturing realised PnL%) when price violates the current stop.
 2. **Opens** new trades for symbols flagged by a scanner *this run* **only once price
-   actually breaks the pivot** -- above the prior resistance (highest high) for longs,
-   below the prior support (lowest low) for shorts. A scanner hit alone is just a
-   setup. One swing (10-bar pivot, 6% stop) and one positional (20-bar base,
-   10%-floor stop that later trails the 20-EMA) per qualifying breakout. F&O names
-   flagged by a short scanner open shorts.
+   actually breaks the pivot** -- above the prior resistance (highest high) for longs.
+   A scanner hit alone is just a setup. One swing (10-bar pivot, 6% stop) and one
+   positional (20-bar base, 10%-floor stop that later trails the 20-EMA) per qualifying
+   breakout, but only when the blended ConfidenceScore clears the floor (>= _MIN_CONFIDENCE);
+   weaker or unscored setups are skipped as non-tradeable. Breakouts are long-only; short
+   "breakdown" setups are a future feature.
    The blotter starts from a clean slate and only fills with genuine forward breakouts.
 3. **Tags** every scanner that flagged an already-active trade onto that trade
    (``FlaggedScannersJson`` + ``ScannerHitCount``) without opening a duplicate entry.
+4. **Records** every flagged-but-not-yet-broken setup sitting within ``_NEAR_PIVOT_BAND_PCT``
+   of its pivot as a near-pivot watch candidate (``{Market}NearPivots``), refreshed each run,
+   so the UI can show what's closing in on a breakout (filterable by distance).
 
 Realised + open-in-profit trades feed back into :mod:`scanners.scoring` as the
 track-record evidence group.
@@ -41,6 +45,7 @@ from . import weights as wmod
 logger = logging.getLogger(__name__)
 
 _BREAKOUTS = {"india": "IndianBreakouts", "us": "USBreakouts"}
+_NEAR_PIVOTS = {"india": "IndianNearPivots", "us": "USNearPivots"}
 
 _SWING_STOP_PCT = 0.06      # initial swing stop
 _POS_STOP_FALLBACK = 0.10   # positional floor: trade always gets >= this much room
@@ -62,12 +67,29 @@ _POS_BREAKOUT_LOOKBACK = 20
 _VOL_AVG = 20             # average-volume lookback for breakout confirmation
 _VOL_MULT = 1.5           # breakout bar volume must be >= this x average volume
 
+# Quality floor: a setup is only a tradeable breakout if its blended confidence is
+# at least this. Below it -- or with no canonical fundamental score (confidence None)
+# -- the break is too low-conviction to open as a paper trade.
+_MIN_CONFIDENCE = 60.0
+
+# Near-pivot capture band: a flagged setup whose close is within this %% *below* the pivot
+# (resistance for longs, support for shorts) but hasn't broken yet is recorded as a near-pivot
+# candidate. We capture a wide band so the UI can filter to a tighter threshold on demand.
+_NEAR_PIVOT_BAND_PCT = 15.0
+
 # Scanners that express a bearish/short setup.
 _SHORT_SCANNERS = {"NSE_CSS"}
 
 
 def _t(market: str) -> str:
     t = _BREAKOUTS.get(market.lower())
+    if t is None:
+        raise ValueError(f"Unsupported market: {market}")
+    return t
+
+
+def _npt(market: str) -> str:
+    t = _NEAR_PIVOTS.get(market.lower())
     if t is None:
         raise ValueError(f"Unsupported market: {market}")
     return t
@@ -139,16 +161,76 @@ def _breakout_rel_vol(series, idx: int | None = None) -> float | None:
     return vol / avg
 
 
-def _series_metrics(series) -> dict[str, float | None]:
-    """Last close plus SMA10 / EMA20 at the last bar."""
-    if series is None or series.n < 1:
-        return {"close": None, "sma10": None, "ema20": None}
+def _base_accumulation(series, lookback: int) -> float | None:
+    """0..1 share of base volume on up-close days over the prior ``lookback`` bars.
+
+    >0.5 means green-day volume dominates (accumulation), <0.5 means red-day volume
+    dominates (distribution). ``None`` when there isn't enough history/volume.
+    """
+    if series is None or series.n < lookback + 1:
+        return None
     last = series.last
-    sma10 = float(series.sma(_TRAIL_MA)[last]) if series.n >= _TRAIL_MA else None
-    ema20 = float(series.ema(_POS_EMA)[last]) if series.n >= _POS_EMA else None
-    sma10 = None if (sma10 is not None and math.isnan(sma10)) else sma10
-    ema20 = None if (ema20 is not None and math.isnan(ema20)) else ema20
-    return {"close": float(series.close[last]), "sma10": sma10, "ema20": ema20}
+    up = down = 0.0
+    for i in range(last - lookback + 1, last + 1):
+        try:
+            c = float(series.close[i]); p = float(series.close[i - 1]); v = float(series.volume[i])
+        except (IndexError, ValueError, TypeError):
+            continue
+        if math.isnan(c) or math.isnan(p) or math.isnan(v) or v <= 0:
+            continue
+        if c >= p:
+            up += v
+        else:
+            down += v
+    tot = up + down
+    return up / tot if tot > 0 else None
+
+
+def _pivot_distance(series, direction: str, lookback: int) -> float | None:
+    """Percent the latest close sits *short of* the breakout pivot, or None.
+
+    Long  -> pivot is the prior resistance (highest high); distance = (pivot - close)/close.
+    Short -> pivot is the prior support (lowest low);   distance = (close - support)/support.
+    Returns the pivot and the >=0 distance only when price is still on the setup side of the
+    pivot (not yet broken). A negative distance means it already broke -> not a near-pivot.
+    """
+    if series is None:
+        return None
+    idx = series.last
+    if idx < lookback:
+        return None
+    close = float(series.close[idx])
+    if math.isnan(close) or close <= 0:
+        return None
+    if direction == "long":
+        pivot = float(np.nanmax(series.high[idx - lookback:idx]))
+        if math.isnan(pivot) or pivot <= 0:
+            return None
+        dist = (pivot - close) / close * 100.0
+    else:
+        pivot = float(np.nanmin(series.low[idx - lookback:idx]))
+        if math.isnan(pivot) or pivot <= 0:
+            return None
+        dist = (close - pivot) / pivot * 100.0
+    return None if dist < 0 else (pivot, dist)
+
+
+def _refresh_near_pivots(conn, market: str, scan_date: date, candidates: list[tuple]) -> int:
+    """Replace the near-pivot list for ``market`` with this run's candidates (delete + insert)."""
+    table = _npt(market)
+    cur = conn.cursor()
+    cur.execute(f"DELETE FROM dbo.{table}")
+    if candidates:
+        cur.fast_executemany = True
+        cur.executemany(
+            f"""INSERT INTO dbo.{table}
+                (Ticker, CompanyName, TradeType, Direction, FlaggedScannersJson, ScannerHitCount,
+                 LastClose, PivotPrice, DistancePct, RelVolume, VolumeConfirmed, ScanDate)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            candidates,
+        )
+    conn.commit()
+    return len(candidates)
 
 
 def _get_active_trades(conn, market: str) -> list[dict]:
@@ -183,6 +265,21 @@ def _load_list(raw: Any) -> list[str]:
         return [str(x) for x in v] if isinstance(v, list) else []
     except (ValueError, TypeError):
         return []
+
+
+def _series_metrics(series) -> dict[str, float | None]:
+    """Latest close plus SMA10 / EMA20 at the last bar; ``close`` is None when no usable bars."""
+    if series is None or getattr(series, "n", 0) < 1:
+        return {"close": None, "sma10": None, "ema20": None}
+    try:
+        last = series.last
+        sma10 = float(series.sma(_TRAIL_MA)[last]) if series.n >= _TRAIL_MA else None
+        ema20 = float(series.ema(_POS_EMA)[last]) if series.n >= _POS_EMA else None
+        sma10 = None if (sma10 is not None and math.isnan(sma10)) else sma10
+        ema20 = None if (ema20 is not None and math.isnan(ema20)) else ema20
+        return {"close": float(series.close[last]), "sma10": sma10, "ema20": ema20}
+    except (IndexError, TypeError, ValueError):
+        return {"close": None, "sma10": None, "ema20": None}
 
 
 def _manage_trade(conn, market: str, t: dict, series, flagged_now: list[str]) -> None:
@@ -276,7 +373,7 @@ def _manage_trade(conn, market: str, t: dict, series, flagged_now: list[str]) ->
 def _open_trade(conn, market: str, ticker: str, company: str | None, trade_type: str,
                 direction: str, entry: float, series, scanners: list[str],
                 weights: dict[str, Any] | None = None,
-                reliability: dict[str, Any] | None = None) -> dict:
+                reliability: dict[str, Any] | None = None) -> dict | None:
     table = _t(market)
     m = _series_metrics(series)
 
@@ -313,13 +410,24 @@ def _open_trade(conn, market: str, ticker: str, company: str | None, trade_type:
     if weights is not None:
         try:
             fund_score = wmod.symbol_fundamentals(conn, market, ticker)
-            vol_score = wmod.breakout_volume_score(_breakout_rel_vol(series))
+            lookback = _SWING_BREAKOUT_LOOKBACK if trade_type == "swing" else _POS_BREAKOUT_LOOKBACK
+            accum = _base_accumulation(series, lookback)
+            vol_score = wmod.breakout_volume_score(_breakout_rel_vol(series), accum)
             confidence, rationale = wmod.breakout_confidence(
-                weights, trade_type, direction, scanners, reliability, fund_score, vol_score)
+                weights, trade_type, direction, scanners, reliability, fund_score, vol_score, accum)
             # No canonical fundamental score -> no confidence at all (and no rationale shown).
             rationale_json = json.dumps(rationale, default=str) if confidence is not None else None
         except Exception:  # noqa: BLE001 - confidence is advisory, never block an entry
             logger.exception("Breakout-confidence computation failed for %s", ticker)
+
+    # Quality floor: only open genuinely tradeable breakouts. A symbol with no canonical
+    # fundamental score (confidence None) or a blended confidence below _MIN_CONFIDENCE is
+    # too low-conviction to open. Skipped only when weights loaded; if the weight load
+    # failed (weights None) we don't block entries on a scoring outage.
+    if weights is not None and (confidence is None or confidence < _MIN_CONFIDENCE):
+        logger.info("Skipped %s %s %s @ %.2f conf=%s < floor %.0f",
+                    market, trade_type, ticker, entry, confidence, _MIN_CONFIDENCE)
+        return None
 
     row = conn.cursor().execute(
         f"""INSERT INTO dbo.{table}
@@ -346,11 +454,14 @@ def _open_trade(conn, market: str, ticker: str, company: str | None, trade_type:
 
 
 def run_breakout_engine(conn, market: str, scan_date: date,
-                     flagged: dict[str, dict], series_cache: dict[str, Any]) -> dict[str, int]:
+                     flagged: dict[str, dict], series_cache: dict[str, Any],
+                     manage_trades: bool = True) -> dict[str, int]:
     """Manage open trades and open new ones for this run's breakouts.
 
     ``flagged`` maps symbol -> {"scanners": [names], "company": str, "is_fno": bool}.
     The blotter starts empty and only fills with genuine forward breakouts. Returns counts.
+    When ``manage_trades`` is False, the paper-breakout blotter is left untouched and only
+    the near-pivot watchlist is refreshed (intraday/single-scanner runs).
     """
     active = _get_active_trades(conn, market)
     # tickers that were active at the START of this run -> never re-enter same (ticker, type) this run
@@ -382,17 +493,19 @@ def run_breakout_engine(conn, market: str, scan_date: date,
         return s
 
     managed = closed_before = 0
-    for t in active:
-        flagged_now = flagged.get(t["ticker"], {}).get("scanners", [])
-        _manage_trade(conn, market, t, _series_for(t["ticker"]), flagged_now)
-        managed += 1
+    if manage_trades:
+        for t in active:
+            flagged_now = flagged.get(t["ticker"], {}).get("scanners", [])
+            _manage_trade(conn, market, t, _series_for(t["ticker"]), flagged_now)
+            managed += 1
 
     # count closes after management
     closed_now = conn.cursor().execute(
         f"SELECT COUNT(*) AS c FROM dbo.{_t(market)} WHERE Status='closed' AND CAST(UpdatedAt AS DATE)=CAST(GETUTCDATE() AS DATE)"
     ).fetchone()
 
-    opened = setups = 0
+    opened = setups = skipped_low_conf = 0
+    near_pivots: list[tuple] = []
     for sym, info in flagged.items():
         scanners = info.get("scanners", [])
         if not scanners:
@@ -402,19 +515,14 @@ def run_breakout_engine(conn, market: str, scan_date: date,
         if m["close"] is None:
             continue
         entry = m["close"]
-        is_fno = bool(info.get("is_fno"))
-        has_short = any(_is_short_scanner(s) for s in scanners)
-        has_long = any(not _is_short_scanner(s) for s in scanners)
-
-        # Direction: long setups -> long; short setups -> short only for F&O names.
+        # Breakouts are long-only. Short setups will become a separate "breakdowns"
+        # feature later, so names flagged only by short scanners are skipped here.
+        if not any(not _is_short_scanner(s) for s in scanners):
+            continue
         direction = "long"
-        if has_long:
-            direction = "long"
-        elif has_short and is_fno:
-            direction = "short"
-        else:
-            continue  # short setup on non-F&O -> skip (long-only universe)
 
+        scanner_list = sorted(set(scanners))
+        rel_vol = _breakout_rel_vol(series)
         for trade_type in ("swing", "positional"):
             if (sym, trade_type) in active_keys:
                 continue  # already active -> tagged during management, no new entry
@@ -422,14 +530,31 @@ def run_breakout_engine(conn, market: str, scan_date: date,
 
             if not _is_breakout(series, direction, lookback):
                 setups += 1  # flagged but no confirmed break yet -> wait
+                pivot = _pivot_distance(series, direction, lookback)
+                if pivot is not None and pivot[1] <= _NEAR_PIVOT_BAND_PCT:
+                    near_pivots.append((
+                        sym, info.get("company"), trade_type, direction,
+                        json.dumps(scanner_list), len(scanner_list),
+                        round(entry, 4), round(pivot[0], 4), round(pivot[1], 4),
+                        round(rel_vol, 4) if rel_vol is not None else None,
+                        1 if (rel_vol is not None and rel_vol >= _VOL_MULT) else 0, scan_date,
+                    ))
                 continue
-            _open_trade(conn, market, sym, info.get("company"), trade_type, direction,
-                        entry, series, scanners, weights=weights, reliability=reliability)
-            opened += 1
+            if manage_trades:
+                trade = _open_trade(conn, market, sym, info.get("company"), trade_type, direction,
+                            entry, series, scanners, weights=weights, reliability=reliability)
+                if trade is not None:
+                    opened += 1
+                else:
+                    skipped_low_conf += 1  # confirmed break but below confidence floor
+
+    near = _refresh_near_pivots(conn, market, scan_date, near_pivots)
 
     return {
         "managed": managed,
         "opened": opened,
+        "nearPivots": near,
         "setupsWaiting": setups,
+        "skippedLowConfidence": skipped_low_conf,
         "closedToday": int(closed_now.c) if closed_now else 0,
     }

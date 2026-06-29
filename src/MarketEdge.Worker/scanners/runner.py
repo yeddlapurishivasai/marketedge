@@ -256,10 +256,14 @@ def run_scanner_job(payload: dict) -> None:
     market = str(payload["market"]).lower()
     run_id = int(payload["runId"])
     scanner_name = payload.get("scannerName")  # None => all scanners (pre-close scan)
-    # Paper breakouts are opened/managed only on the pre-close scan (the daily all-scanner
-    # run, scannerName=None). Intraday single-scanner runs and ad-hoc/local test runs
-    # evaluate scanners but must NOT touch the paper-breakout blotter.
+    # Paper breakouts are opened/managed only on the scheduled pre-close all-scanner run.
+    # A manual watchlist refresh (e.g. the Near Pivot "Run scan") passes manageTrades=False
+    # so it refreshes the near-pivot list WITHOUT opening or managing any paper breakouts.
+    # When the flag is absent we fall back to the legacy rule: an all-scanner run manages the
+    # blotter, a single-scanner/intraday run does not.
     is_preclose_scan = scanner_name is None
+    _manage_flag = payload.get("manageTrades")
+    manage_trades = bool(_manage_flag) if _manage_flag is not None else is_preclose_scan
     universe = (payload.get("universe") or "stage2").lower()
     scan_date = date.today()
 
@@ -343,13 +347,11 @@ def run_scanner_job(payload: dict) -> None:
         breakout_metrics: dict[str, int] = {}
         try:
             from .breakouts import run_breakout_engine
-            # Only the pre-close scan opens/manages paper breakouts (see is_preclose_scan).
-            if is_preclose_scan:
-                breakout_metrics = run_breakout_engine(conn, market, scan_date, flagged, series_cache)
-            else:
-                breakout_metrics = {"skipped": "not pre-close scan"}
-                logger.info("Scanner run %s: breakout engine skipped (single-scanner run '%s')",
-                            run_id, scanner_name)
+            # Open/manage paper breakouts only when this run manages trades (the scheduled
+            # pre-close run); near-pivot watch is refreshed on every run so the UI stays
+            # current intraday and on manual watchlist refreshes.
+            breakout_metrics = run_breakout_engine(conn, market, scan_date, flagged, series_cache,
+                                                    manage_trades=manage_trades)
             logger.info("Scanner run %s: breakouts=%s", run_id, breakout_metrics)
         except Exception:  # noqa: BLE001 - breakout handling must never abort the scan
             logger.exception("Scanner run %s: breakout engine failed", run_id)

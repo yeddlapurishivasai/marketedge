@@ -67,6 +67,10 @@ public class TriggerScannerRequest
     public string? ScannerName { get; set; }
     /// <summary>"stage2" (default) or "all".</summary>
     public string? Universe { get; set; }
+    /// <summary>When false, the scan refreshes the near-pivot watchlist only and does NOT open or
+    /// manage paper breakouts (used by the Near Pivot "Run scan"). Null falls back to the default:
+    /// an all-scanner run manages the blotter, a single-scanner run does not.</summary>
+    public bool? ManageTrades { get; set; }
 }
 
 public class UpdateScannerScheduleRequest

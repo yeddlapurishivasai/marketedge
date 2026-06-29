@@ -46,6 +46,16 @@ public class BreakoutsController : ControllerBase
         return Ok(await _breakouts.GetBreakoutsByDayAsync(market, date, tradeType));
     }
 
+    [HttpGet("api/{market}/breakouts/near-pivot")]
+    public async Task<IActionResult> GetNearPivots(string market, [FromQuery] string? tradeType = null,
+        [FromQuery] decimal maxDistancePct = 5m)
+    {
+        if (!ValidMarket(market)) return BadRequest("Market must be 'india' or 'us'");
+        tradeType = NormalizeTradeType(tradeType);
+        maxDistancePct = Math.Clamp(maxDistancePct, 0m, 100m);
+        return Ok(await _breakouts.GetNearPivotsAsync(market, tradeType, maxDistancePct));
+    }
+
     // Empty/"all" means no trade-type filter.
     private static string? NormalizeTradeType(string? tradeType)
     {

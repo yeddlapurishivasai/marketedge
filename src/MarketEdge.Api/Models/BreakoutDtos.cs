@@ -67,6 +67,22 @@ public record BreakoutDayDto(
     List<BreakoutDto> Entries,
     List<BreakoutDto> Exits);
 
+public record NearPivotDto(
+    int Id,
+    string Ticker,
+    string? CompanyName,
+    string TradeType,
+    string Direction,
+    List<string> FlaggedScanners,
+    int ScannerHitCount,
+    decimal LastClose,
+    decimal PivotPrice,
+    decimal DistancePct,
+    decimal? RelVolume,
+    bool VolumeConfirmed,
+    DateTime ScanDate,
+    DateTime UpdatedAt);
+
 public record ScannerPerformanceDto(
     string Scanner,
     int Trades,

@@ -46,6 +46,8 @@ public class MarketEdgeDbContext : DbContext
     public DbSet<USStockSignals> USStockSignals => Set<USStockSignals>();
     public DbSet<IndianBreakout> IndianBreakouts => Set<IndianBreakout>();
     public DbSet<USBreakout> USBreakouts => Set<USBreakout>();
+    public DbSet<IndianNearPivot> IndianNearPivots => Set<IndianNearPivot>();
+    public DbSet<USNearPivot> USNearPivots => Set<USNearPivot>();
     public DbSet<ScoringWeight> ScoringWeights => Set<ScoringWeight>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -119,6 +121,17 @@ public class MarketEdgeDbContext : DbContext
             foreach (var p in new[] { nameof(BreakoutBase.PnLPct), nameof(BreakoutBase.MfePct), nameof(BreakoutBase.MaePct) })
                 e.Property(p).HasColumnType("decimal(12,4)");
             e.Property(nameof(BreakoutBase.ConfidenceScore)).HasColumnType("decimal(5,2)");
+        }
+
+        modelBuilder.Entity<IndianNearPivot>().HasKey(t => t.Id);
+        modelBuilder.Entity<USNearPivot>().HasKey(t => t.Id);
+        foreach (var t in new[] { typeof(IndianNearPivot), typeof(USNearPivot) })
+        {
+            var e = modelBuilder.Entity(t);
+            e.Property(nameof(NearPivotBase.LastClose)).HasColumnType("decimal(18,4)");
+            e.Property(nameof(NearPivotBase.PivotPrice)).HasColumnType("decimal(18,4)");
+            e.Property(nameof(NearPivotBase.DistancePct)).HasColumnType("decimal(9,4)");
+            e.Property(nameof(NearPivotBase.RelVolume)).HasColumnType("decimal(12,4)");
         }
 
         modelBuilder.Entity<ScoringWeight>().HasKey(w => w.Id);

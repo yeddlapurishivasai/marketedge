@@ -62,6 +62,7 @@ public class ScannerService : IScannerService
             runId = job.Id,
             scannerName,
             universe,
+            manageTrades = request.ManageTrades,
             triggeredBy = "manual",
             timestamp = DateTime.UtcNow
         });
