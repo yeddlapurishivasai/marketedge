@@ -16,9 +16,9 @@ Runs as part of every scanner job (the 15-minute scheduled run). On each run it:
    actually breaks the pivot** -- above the prior resistance (highest high) for longs.
    A scanner hit alone is just a setup. One swing (10-bar pivot, 6% stop) and one
    positional (20-bar base, 10%-floor stop that later trails the 20-EMA) per qualifying
-   breakout, but only when the blended ConfidenceScore clears the floor (>= _MIN_CONFIDENCE);
-   weaker or unscored setups are skipped as non-tradeable. Breakouts are long-only; short
-   "breakdown" setups are a future feature.
+   breakout -- except a *scored* setup whose blended ConfidenceScore is below the floor
+   (< _MIN_CONFIDENCE) is rejected; unscored setups (no fundamental idea yet) still open so
+   they surface for review. Breakouts are long-only; short "breakdown" setups are a future feature.
    The blotter starts from a clean slate and only fills with genuine forward breakouts.
 3. **Tags** every scanner that flagged an already-active trade onto that trade
    (``FlaggedScannersJson`` + ``ScannerHitCount``) without opening a duplicate entry.
@@ -67,9 +67,9 @@ _POS_BREAKOUT_LOOKBACK = 20
 _VOL_AVG = 20             # average-volume lookback for breakout confirmation
 _VOL_MULT = 1.5           # breakout bar volume must be >= this x average volume
 
-# Quality floor: a setup is only a tradeable breakout if its blended confidence is
-# at least this. Below it -- or with no canonical fundamental score (confidence None)
-# -- the break is too low-conviction to open as a paper trade.
+# Quality floor: a *scored* setup is only tradeable if its blended confidence is at least
+# this -- a scored break below it is rejected. Unscored setups (no canonical fundamental
+# idea, confidence None) are still opened so they surface for fundamental review.
 _MIN_CONFIDENCE = 60.0
 
 # Near-pivot capture band: a flagged setup whose close is within this %% *below* the pivot
@@ -420,12 +420,13 @@ def _open_trade(conn, market: str, ticker: str, company: str | None, trade_type:
         except Exception:  # noqa: BLE001 - confidence is advisory, never block an entry
             logger.exception("Breakout-confidence computation failed for %s", ticker)
 
-    # Quality floor: only open genuinely tradeable breakouts. A symbol with no canonical
-    # fundamental score (confidence None) or a blended confidence below _MIN_CONFIDENCE is
-    # too low-conviction to open. Skipped only when weights loaded; if the weight load
-    # failed (weights None) we don't block entries on a scoring outage.
-    if weights is not None and (confidence is None or confidence < _MIN_CONFIDENCE):
-        logger.info("Skipped %s %s %s @ %.2f conf=%s < floor %.0f",
+    # Quality floor: reject genuinely low-conviction breakouts -- a *scored* setup whose
+    # blended confidence is below _MIN_CONFIDENCE. Unscored setups (confidence None, i.e. no
+    # canonical fundamental idea yet) are deliberately allowed through so they surface in the
+    # blotter as a worklist for fundamental review/backfill rather than being silently dropped.
+    # Gated only when weights loaded; a weight-load failure (weights None) never blocks entries.
+    if weights is not None and confidence is not None and confidence < _MIN_CONFIDENCE:
+        logger.info("Rejected %s %s %s @ %.2f conf=%.2f < floor %.0f",
                     market, trade_type, ticker, entry, confidence, _MIN_CONFIDENCE)
         return None
 
@@ -546,7 +547,7 @@ def run_breakout_engine(conn, market: str, scan_date: date,
                 if trade is not None:
                     opened += 1
                 else:
-                    skipped_low_conf += 1  # confirmed break but below confidence floor
+                    skipped_low_conf += 1  # confirmed break but scored below the floor (rejected)
 
     near = _refresh_near_pivots(conn, market, scan_date, near_pivots)
 
