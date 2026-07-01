@@ -452,7 +452,7 @@ export async function fetchScanners(market: Market): Promise<ScannerInfo[]> {
   return res.json();
 }
 
-export async function triggerScanner(market: Market, body: { scannerName?: string | null; universe?: string }): Promise<{ runId: number }> {
+export async function triggerScanner(market: Market, body: { scannerName?: string | null; universe?: string; manageTrades?: boolean }): Promise<{ runId: number }> {
   const res = await fetch(`${BASE}/${market}/scanners/trigger`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -805,6 +805,36 @@ export async function fetchBreakoutsByDay(
   return res.json();
 }
 
+export interface NearPivot {
+  id: number;
+  ticker: string;
+  companyName?: string | null;
+  tradeType: string;
+  direction: string;
+  flaggedScanners: string[];
+  scannerHitCount: number;
+  lastClose: number;
+  pivotPrice: number;
+  distancePct: number;
+  relVolume?: number | null;
+  volumeConfirmed: boolean;
+  scanDate: string;
+  updatedAt: string;
+}
+
+export async function fetchNearPivots(
+  market: Market,
+  params: { tradeType?: string; maxDistancePct?: number } = {}
+): Promise<NearPivot[]> {
+  const sp = new URLSearchParams();
+  if (params.tradeType) sp.set('tradeType', params.tradeType);
+  if (params.maxDistancePct != null) sp.set('maxDistancePct', String(params.maxDistancePct));
+  const qs = sp.toString();
+  const res = await fetch(`${BASE}/${market}/breakouts/near-pivot${qs ? '?' + qs : ''}`);
+  if (!res.ok) throw new Error('Failed to fetch near-pivot candidates');
+  return res.json();
+}
+
 export interface ScannerPerformance {
   scanner: string;
   trades: number;
@@ -855,5 +885,42 @@ export async function updateScoringWeight(
     body: JSON.stringify(update),
   });
   if (!res.ok) throw new Error('Failed to update scoring weight');
+  return res.json();
+}
+
+// --- Database snapshot (bacpac export/import) ---
+export interface DatabaseInfo {
+  server: string;
+  database: string;
+  sqlPackageAvailable: boolean;
+  storageConfigured: boolean;
+}
+
+export async function fetchDatabaseInfo(): Promise<DatabaseInfo> {
+  const res = await fetch(`${BASE}/admin/database/info`);
+  if (!res.ok) throw new Error('Failed to fetch database info');
+  return res.json();
+}
+
+export interface DatabaseExport {
+  fileName: string;
+  sizeBytes: number;
+  url: string;
+  expiresUtc: string;
+}
+
+// Trigger a server-side export; the .bacpac is uploaded to storage and a SAS download URL is returned.
+export async function exportDatabase(): Promise<DatabaseExport> {
+  const res = await fetch(`${BASE}/admin/database/export`, { method: 'POST' });
+  if (!res.ok) throw new Error((await res.text()) || 'Export failed');
+  return res.json();
+}
+
+export async function importDatabase(file: File, targetDatabase?: string): Promise<{ database: string; server: string }> {
+  const fd = new FormData();
+  fd.append('file', file);
+  if (targetDatabase) fd.append('targetDatabase', targetDatabase);
+  const res = await fetch(`${BASE}/admin/database/import`, { method: 'POST', body: fd });
+  if (!res.ok) throw new Error((await res.text()) || 'Import failed');
   return res.json();
 }

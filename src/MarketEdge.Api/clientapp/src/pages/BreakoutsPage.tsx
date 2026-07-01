@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, Fragment } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { Market, Breakout, BreakoutStats, BreakoutProfile, ScannerPerformance, ScoringWeight, BreakoutPnlSummary, BreakoutDay } from '../api';
-import { fetchBreakouts, fetchBreakoutStats, fetchScannerPerformance, fetchScoringWeights, updateScoringWeight, fetchBreakoutPnl, fetchBreakoutsByDay } from '../api';
-import { ChevronLeft, ChevronDown, RefreshCw, Loader2, Activity, Target, Sliders } from 'lucide-react';
+import type { Market, Breakout, BreakoutStats, BreakoutProfile, ScannerPerformance, ScoringWeight, BreakoutPnlSummary, BreakoutDay, NearPivot } from '../api';
+import { fetchBreakouts, fetchBreakoutStats, fetchScannerPerformance, fetchScoringWeights, updateScoringWeight, fetchBreakoutPnl, fetchBreakoutsByDay, fetchNearPivots, triggerScanner, fetchJobRun } from '../api';
+import { ChevronLeft, ChevronDown, RefreshCw, Loader2, Activity, Target, Sliders, Crosshair, LineChart, Table } from 'lucide-react';
+import { StockLookupModal, MiniSymbolChart } from './StockLookupPage';
 
 function fmtPct(v?: number | null): string {
   if (v == null) return '—';
@@ -77,7 +78,7 @@ interface ConfidenceRationaleData {
   scanner?: string | null;
   confidence?: number;
   components?: RationaleComponent[];
-  notes?: { epsUpsidePct?: number | null };
+  notes?: { epsUpsidePct?: number | null; baseAccumulation?: number | null; breakoutVolumeScore?: number | null };
 }
 const COMPONENT_LABELS: Record<string, string> = {
   setup: 'Setup (scanner reliability)',
@@ -124,6 +125,9 @@ function ConfidenceRationale({ breakout }: { breakout: Breakout }) {
               <td className="cell-right">{c.available ? c.contribution.toFixed(3) : '—'}</td>
               <td className="cell-muted" style={{ fontSize: '0.78rem' }}>
                 {c.component === 'eps' && data!.notes?.epsUpsidePct != null && `EPS upside ${data!.notes.epsUpsidePct}% → clamped to 0–1 over 25%`}
+                {c.component === 'volume' && (data!.notes?.baseAccumulation != null
+                  ? `Base ${(data!.notes.baseAccumulation * 100).toFixed(0)}% up-day vol; 60% breakout bar + 40% accumulation`
+                  : 'Breakout-bar volume vs 20-day avg')}
                 {c.component === 'fundamental' && (c.available ? 'Fraction of fundamental checks passing' : 'No fundamentals for this symbol')}
                 {c.component === 'ai' && 'Neutral 0.5 until an AI signal feeds in'}
                 {!c.available && c.component !== 'ai' && c.component !== 'fundamental' && 'Not available — dropped from the blend'}
@@ -142,7 +146,7 @@ export default function BreakoutsPage() {
   const { market } = useParams<{ market: string }>();
   const m = market as Market;
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'breakouts' | 'patterns' | 'weights'>('breakouts');
+  const [tab, setTab] = useState<'breakouts' | 'nearpivot' | 'patterns' | 'weights'>('breakouts');
   // Swing vs positional is shared across breakout views so the chosen style persists when switching sections.
   const [profile, setProfile] = useState<BreakoutProfile>('swing');
   const profiled = tab === 'breakouts';
@@ -165,6 +169,9 @@ export default function BreakoutsPage() {
         <button className={`btn ${tab === 'breakouts' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setTab('breakouts')}>
           <Activity size={16} /> Breakouts
         </button>
+        <button className={`btn ${tab === 'nearpivot' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setTab('nearpivot')}>
+          <Crosshair size={16} /> Near Pivot
+        </button>
         <button className={`btn ${tab === 'patterns' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setTab('patterns')}>
           <Target size={16} /> Pattern Performance
         </button>
@@ -176,6 +183,7 @@ export default function BreakoutsPage() {
       {profiled && <ProfileTabs profile={profile} onChange={setProfile} />}
 
       {tab === 'breakouts' ? <BreakoutsTab market={m} profile={profile} />
+        : tab === 'nearpivot' ? <NearPivotTab market={m} />
         : tab === 'patterns' ? <PatternsTab market={m} />
         : <WeightsTab market={m} />}
     </div>
@@ -193,9 +201,189 @@ function ProfileTabs({ profile, onChange }: { profile: BreakoutProfile; onChange
         Swing <span className="sub-tab-note">technical</span>
       </button>
       <button className={`sub-tab ${profile === 'positional' ? 'on' : ''}`} onClick={() => onChange('positional')}>
-        Positional <span className="sub-tab-note">fundamentals 50%</span>
+        Positional <span className="sub-tab-note">fundamentals 70%</span>
       </button>
     </div>
+  );
+}
+
+const PIVOT_PCTS = [2, 3, 5, 8, 10, 15];
+
+/**
+ * Near Pivot: scanner-flagged names sitting within a chosen %% of their breakout pivot but
+ * not yet broken out. The distance threshold is adjustable so you can widen/tighten the watch.
+ */
+function NearPivotTab({ market }: { market: Market }) {
+  const [rows, setRows] = useState<NearPivot[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [maxPct, setMaxPct] = useState(5);
+  const [running, setRunning] = useState(false);
+  const [runMsg, setRunMsg] = useState<string | null>(null);
+  const [lookup, setLookup] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<keyof NearPivot>('distancePct');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [page, setPage] = useState(1);
+  const [chartView, setChartView] = useState(false);
+  const pageSize = 25;
+
+  const load = useCallback(() => {
+    setLoading(true);
+    fetchNearPivots(market, { maxDistancePct: maxPct })
+      .then(setRows)
+      .catch(() => setRows([]))
+      .finally(() => setLoading(false));
+  }, [market, maxPct]);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setPage(1); }, [rows, sortKey, sortDir, maxPct]);
+
+  const runScan = useCallback(async () => {
+    setRunning(true); setRunMsg('Queued scan…');
+    try {
+      // Near-pivot scan refreshes the watchlist only; it must NOT open paper breakouts
+      // (those come from the scheduled pre-close run).
+      const { runId } = await triggerScanner(market, { universe: 'stage2', manageTrades: false });
+      for (let i = 0; i < 120; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        const j = await fetchJobRun(runId);
+        setRunMsg(`Scan ${j.status}${j.progress ? ` ${j.progress}%` : ''}…`);
+        if (j.status === 'completed' || j.status === 'failed' || j.status === 'cancelled') {
+          setRunMsg(`Scan ${j.status}.`); break;
+        }
+      }
+      load();
+    } catch (e) { setRunMsg(`Scan failed: ${e instanceof Error ? e.message : e}`); }
+    finally { setRunning(false); }
+  }, [market, load]);
+
+  const toggleSort = (key: keyof NearPivot) => {
+    if (key === sortKey) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir(key === 'distancePct' ? 'asc' : 'desc'); }
+  };
+  const merged: NearPivot[] = (() => {
+    const byKey = new Map<string, NearPivot>();
+    for (const r of rows) {
+      const k = `${r.ticker}|${r.direction}|${r.pivotPrice.toFixed(2)}`;
+      const cur = byKey.get(k);
+      if (cur) {
+        const types = new Set(cur.tradeType.split('+').concat(r.tradeType));
+        cur.tradeType = [...types].sort().join('+');
+        cur.scannerHitCount = Math.max(cur.scannerHitCount, r.scannerHitCount);
+        cur.flaggedScanners = [...new Set([...cur.flaggedScanners, ...r.flaggedScanners])];
+      } else {
+        byKey.set(k, { ...r });
+      }
+    }
+    return [...byKey.values()];
+  })();
+  const sorted = [...merged].sort((a, b) => {
+    const av = a[sortKey], bv = b[sortKey];
+    if (av == null) return bv == null ? 0 : 1;
+    if (bv == null) return -1;
+    const cmp = typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv));
+    return sortDir === 'asc' ? cmp : -cmp;
+  });
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const pageRows = sorted.slice((page - 1) * pageSize, page * pageSize);
+  const arrow = (key: keyof NearPivot) => sortKey === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+  const th = (key: keyof NearPivot, label: string, align: 'left' | 'right' | 'center' = 'left') => (
+    <th onClick={() => toggleSort(key)} style={{ cursor: 'pointer', userSelect: 'none', textAlign: align, whiteSpace: 'nowrap' }}>
+      {label}{arrow(key)}
+    </th>
+  );
+
+  return (
+    <>
+      <div className="toolbar" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <p className="page-subtitle" style={{ margin: 0 }}>
+          Swing &amp; positional setups within
+        </p>
+        <select className="search-input" style={{ width: 'auto' }} value={maxPct}
+          onChange={e => setMaxPct(Number(e.target.value))}>
+          {PIVOT_PCTS.map(p => <option key={p} value={p}>{p}%</option>)}
+        </select>
+        <p className="page-subtitle" style={{ margin: 0 }}>of breakout — flagged, not yet broken.</p>
+        {runMsg && <span className="page-subtitle" style={{ margin: 0 }}>{runMsg}</span>}
+        <button className="btn btn-primary btn-sm" onClick={runScan} disabled={running} style={{ marginLeft: 'auto' }}>
+          {running ? <Loader2 size={14} className="spin" /> : <Activity size={14} />} {running ? 'Running…' : 'Run scan'}
+        </button>
+        <div className="seg-toggle">
+          <button className={!chartView ? 'on' : ''} onClick={() => setChartView(false)} title="Grid view"><Table size={13} /> Grid</button>
+          <button className={chartView ? 'on' : ''} onClick={() => setChartView(true)} title="Chart-only view"><LineChart size={13} /> Charts</button>
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={load}>
+          <RefreshCw size={14} /> Refresh
+        </button>
+      </div>
+      {loading ? (
+        <div className="loading"><Loader2 size={18} className="spin" /> Loading near-pivot candidates...</div>
+      ) : rows.length === 0 ? (
+        <div className="empty-state">
+          <div className="empty-state-icon"><Crosshair size={48} /></div>
+          <p className="empty-state-text">
+            No names within {maxPct}% of their pivot. Candidates appear after the daily pre-close
+            scan when a scanner flags a stock sitting just below its breakout level. Widen the % to see more.
+          </p>
+        </div>
+      ) : (
+        <>
+        {chartView ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+            {pageRows.map(r => (
+              <MiniSymbolChart key={r.id} market={market} symbol={r.ticker}
+                label={`${r.tradeType} · ${r.distancePct.toFixed(1)}%`} onOpen={() => setLookup(r.ticker)} />
+            ))}
+          </div>
+        ) : (
+        <div className="table-container">
+          <table className="table">
+            <thead>
+              <tr>
+                {th('ticker', 'Ticker')}
+                {th('tradeType', 'Type')}
+                {th('direction', 'Dir')}
+                {th('lastClose', 'Last', 'right')}
+                {th('pivotPrice', 'Pivot', 'right')}
+                {th('distancePct', 'To pivot', 'right')}
+                {th('relVolume', 'Rel vol', 'right')}
+                {th('volumeConfirmed', 'Vol ok', 'center')}
+                {th('scannerHitCount', 'Scanners', 'center')}
+              </tr>
+            </thead>
+            <tbody>
+              {pageRows.map(r => (
+                <tr key={r.id}>
+                  <td><button className="stock-link" onClick={() => setLookup(r.ticker)} title={r.companyName || ''}>{r.ticker}</button></td>
+                  <td style={{ textTransform: 'capitalize' }}>{r.tradeType}</td>
+                  <td><SideBadge side={r.direction} /></td>
+                  <td className="cell-right">{fmtPrice(r.lastClose, market)}</td>
+                  <td className="cell-right">{fmtPrice(r.pivotPrice, market)}</td>
+                  <td className="cell-right" style={{ fontWeight: 600, color: 'var(--warning, #d08700)' }}>{r.distancePct.toFixed(2)}%</td>
+                  <td className="cell-right">{r.relVolume != null ? `${r.relVolume.toFixed(2)}x` : '—'}</td>
+                  <td className="cell-center">{r.volumeConfirmed ? '✓' : '—'}</td>
+                  <td className="cell-center" title={r.flaggedScanners.join(', ')}>
+                    <span className="badge badge-count">{r.scannerHitCount}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        )}
+        {totalPages > 1 && (
+          <div className="toolbar" style={{ gap: 8, alignItems: 'center', justifyContent: 'flex-end', marginTop: 8 }}>
+            <span className="page-subtitle" style={{ margin: 0 }}>
+              {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, sorted.length)} of {sorted.length}
+            </span>
+            <button className="btn btn-ghost btn-sm" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>Prev</button>
+            <span className="page-subtitle" style={{ margin: 0 }}>{page} / {totalPages}</span>
+            <button className="btn btn-ghost btn-sm" disabled={page >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}>Next</button>
+          </div>
+        )}
+        </>
+      )}
+      {lookup && <StockLookupModal market={market} symbol={lookup} onClose={() => setLookup(null)} />}
+    </>
   );
 }
 
@@ -476,33 +664,82 @@ function PositionsView({ market, profile }: { market: Market; profile: BreakoutP
 /** Shared breakout table with an expandable confidence-rationale row. */
 function BreakoutBlotter({ rows, market, closed }: { rows: Breakout[]; market: Market; closed: boolean }) {
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [lookup, setLookup] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<keyof Breakout>('confidenceScore');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [chartView, setChartView] = useState(false);
+
+  const toggleSort = (key: keyof Breakout) => {
+    if (key === sortKey) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('desc'); }
+  };
+  const sorted = [...rows].sort((a, b) => {
+    const av = a[sortKey], bv = b[sortKey];
+    if (av == null) return bv == null ? 0 : 1;
+    if (bv == null) return -1;
+    let cmp = typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv));
+    return sortDir === 'asc' ? cmp : -cmp;
+  });
+  const arrow = (key: keyof Breakout) => sortKey === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+  const th = (key: keyof Breakout, label: string, align: 'left' | 'right' | 'center' = 'left') => (
+    <th onClick={() => toggleSort(key)} style={{ cursor: 'pointer', userSelect: 'none', textAlign: align, whiteSpace: 'nowrap' }}>
+      {label}{arrow(key)}
+    </th>
+  );
+
   return (
+    <>
+    <div className="toolbar" style={{ justifyContent: 'flex-end', marginBottom: 6 }}>
+      <div className="seg-toggle">
+        <button className={!chartView ? 'on' : ''} onClick={() => setChartView(false)} title="Grid view"><Table size={13} /> Grid</button>
+        <button className={chartView ? 'on' : ''} onClick={() => setChartView(true)} title="Chart-only view"><LineChart size={13} /> Charts</button>
+      </div>
+    </div>
+    {chartView ? (
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+        {sorted.map(t => (
+          <MiniSymbolChart key={t.id} market={market} symbol={t.ticker}
+            label={`${t.tradeType} · ${fmtNum(t.pnLPct)}%`} onOpen={() => setLookup(t.ticker)} />
+        ))}
+        {lookup && <StockLookupModal market={market} symbol={lookup} onClose={() => setLookup(null)} />}
+      </div>
+    ) : (
     <div className="table-container">
       <table className="table">
         <thead>
           <tr>
-            <th>Ticker</th>
-            <th>Type</th>
-            <th>Dir</th>
-            <th>Entry time</th>
-            <th style={{ textAlign: 'right' }}>Qty</th>
-            <th style={{ textAlign: 'right' }}>Entry</th>
-            <th style={{ textAlign: 'right' }}>Trail</th>
-            <th style={{ textAlign: 'right' }}>{closed ? 'Last' : 'Current'}</th>
-            <th style={{ textAlign: 'right' }}>Exit</th>
-            <th style={{ textAlign: 'right' }}>P&amp;L %</th>
-            <th style={{ textAlign: 'right' }}>P&amp;L</th>
-            <th style={{ textAlign: 'right' }}>MFE / MAE</th>
-            <th style={{ textAlign: 'center' }}>Confidence</th>
-            <th style={{ textAlign: 'center' }}>Scanners</th>
-            <th>Status</th>
+            {th('ticker', 'Ticker')}
+            {th('confidenceScore', 'Confidence', 'center')}
+            {th('tradeType', 'Type')}
+            {th('direction', 'Dir')}
+            {th('entryAt', 'Entry time')}
+            {th('qty', 'Qty', 'right')}
+            {th('entryPrice', 'Entry', 'right')}
+            {th('currentStop', 'Trail', 'right')}
+            {th('lastPrice', closed ? 'Last' : 'Current', 'right')}
+            {th('exitPrice', 'Exit', 'right')}
+            {th('pnLPct', 'P&L %', 'right')}
+            {th('pnLAmount', 'P&L', 'right')}
+            {th('mfePct', 'MFE / MAE', 'right')}
+            {th('scannerHitCount', 'Scanners', 'center')}
+            {th('status', 'Status')}
           </tr>
         </thead>
         <tbody>
-          {rows.map(t => (
+          {sorted.map(t => (
             <Fragment key={t.id}>
             <tr>
-              <td style={{ fontWeight: 600 }}>{t.ticker}</td>
+              <td><button className="stock-link" onClick={() => setLookup(t.ticker)}>{t.ticker}</button></td>
+              <td className="cell-center">
+                {t.confidenceScore != null ? (
+                  <button className="btn btn-ghost btn-sm" style={{ padding: '2px 6px', gap: 4 }}
+                    title="Explain why this breakout got its confidence score"
+                    onClick={() => setExpanded(expanded === t.id ? null : t.id)}>
+                    <ScoreBadge score={Math.round(t.confidenceScore)} />
+                    <ChevronDown size={12} style={{ transform: expanded === t.id ? 'rotate(180deg)' : 'none' }} />
+                  </button>
+                ) : <span className="cell-muted">—</span>}
+              </td>
               <td>{t.tradeType}</td>
               <td><SideBadge side={t.direction} /></td>
               <td style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{fmtDateTime(t.entryAt)}</td>
@@ -518,16 +755,6 @@ function BreakoutBlotter({ rows, market, closed }: { rows: Breakout[]; market: M
                 {' / '}
                 <span style={{ color: 'var(--danger)' }}>{fmtNum(t.maePct)}</span>
               </td>
-              <td className="cell-center">
-                {t.confidenceScore != null ? (
-                  <button className="btn btn-ghost btn-sm" style={{ padding: '2px 6px', gap: 4 }}
-                    title="Explain why this breakout got its confidence score"
-                    onClick={() => setExpanded(expanded === t.id ? null : t.id)}>
-                    <ScoreBadge score={Math.round(t.confidenceScore)} />
-                    <ChevronDown size={12} style={{ transform: expanded === t.id ? 'rotate(180deg)' : 'none' }} />
-                  </button>
-                ) : <span className="cell-muted">—</span>}
-              </td>
               <td className="cell-center" title={t.flaggedScanners.join(', ')}>
                 <span className="badge badge-count">{t.scannerHitCount}</span>
               </td>
@@ -539,7 +766,7 @@ function BreakoutBlotter({ rows, market, closed }: { rows: Breakout[]; market: M
             </tr>
             {expanded === t.id && (
               <tr>
-                <td colSpan={14} style={{ background: 'var(--bg-subtle, rgba(127,127,127,0.06))' }}>
+                <td colSpan={15} style={{ background: 'var(--bg-subtle, rgba(127,127,127,0.06))' }}>
                   <ConfidenceRationale breakout={t} />
                 </td>
               </tr>
@@ -548,7 +775,10 @@ function BreakoutBlotter({ rows, market, closed }: { rows: Breakout[]; market: M
           ))}
         </tbody>
       </table>
+      {lookup && <StockLookupModal market={market} symbol={lookup} onClose={() => setLookup(null)} />}
     </div>
+    )}
+    </>
   );
 }
 

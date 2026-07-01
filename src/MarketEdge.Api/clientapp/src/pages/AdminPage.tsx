@@ -5,9 +5,11 @@ import {
   triggerIngestion, fetchScannerSchedule, updateScannerSchedule,
   fetchFundamentalsSchedule, updateFundamentalsSchedule,
   fetchStage2Schedule, updateStage2Schedule,
+  fetchDatabaseInfo, exportDatabase, importDatabase,
 } from '../api';
+import type { DatabaseInfo, DatabaseExport } from '../api';
 import {
-  ChevronLeft, Database, PlayCircle, Loader2, Clock, LineChart, RefreshCw
+  ChevronLeft, Database, PlayCircle, Loader2, Clock, LineChart, RefreshCw, Download, Upload
 } from 'lucide-react';
 
 const MARKETS: { market: Market; label: string }[] = [
@@ -325,6 +327,83 @@ export default function AdminPage() {
         fetchFn={fetchStage2Schedule}
         updateFn={updateStage2Schedule}
       />
+
+      <DatabaseSnapshotCard />
     </div>
+  );
+}
+
+// Export the current DB to a .bacpac (schema + data) and import one into a fresh local DB,
+// so the prod dataset can be pulled down for local testing.
+function DatabaseSnapshotCard() {
+  const [info, setInfo] = useState<DatabaseInfo | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [target, setTarget] = useState('');
+  const [msg, setMsg] = useState<string | null>(null);
+  const [exp, setExp] = useState<DatabaseExport | null>(null);
+
+  useEffect(() => { fetchDatabaseInfo().then(setInfo).catch(() => setInfo(null)); }, []);
+
+  const doExport = async () => {
+    setExporting(true); setMsg(null); setExp(null);
+    try {
+      const r = await exportDatabase(); setExp(r);
+      setMsg(`Export complete — ${r.fileName} (${(r.sizeBytes / 1048576).toFixed(1)} MB) uploaded to storage.`);
+      window.open(r.url, '_blank');
+    }
+    catch (e) { setMsg(`Export failed: ${e instanceof Error ? e.message : e}`); }
+    finally { setExporting(false); }
+  };
+  const doImport = async () => {
+    if (!file) return;
+    setImporting(true); setMsg(null);
+    try { const r = await importDatabase(file, target || undefined); setMsg(`Imported into ${r.server} / ${r.database}. Point your local connection string at it to test.`); }
+    catch (e) { setMsg(`Import failed: ${e instanceof Error ? e.message : e}`); }
+    finally { setImporting(false); }
+  };
+
+  return (
+    <>
+      <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Database size={18} /> Database Snapshot (.bacpac)
+      </h2>
+      <div className="card" style={{ padding: 20, maxWidth: 720 }}>
+        <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+          Export the current database{info ? ` (${info.server} / ${info.database})` : ''} to a .bacpac with schema + data,
+          uploaded to blob storage with a 7-day download link, then import it into a fresh local database for testing. Import never overwrites the source.
+        </p>
+        {info && !info.sqlPackageAvailable && (
+          <p style={{ color: 'var(--danger)', fontSize: '0.82rem' }}>
+            SqlPackage CLI not found. Install: <code>dotnet tool install -g microsoft.sqlpackage</code>
+          </p>
+        )}
+        {info && !info.storageConfigured && (
+          <p style={{ color: 'var(--danger)', fontSize: '0.82rem' }}>
+            AzureStorage:ConnectionString not configured — export will fail.
+          </p>
+        )}
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+          <button className="btn btn-primary" onClick={doExport} disabled={exporting || !info?.sqlPackageAvailable || !info?.storageConfigured}>
+            {exporting ? <Loader2 size={16} className="spin-icon" /> : <Download size={16} />} {exporting ? 'Exporting…' : 'Export .bacpac'}
+          </button>
+          <input type="file" accept=".bacpac" onChange={e => setFile(e.target.files?.[0] ?? null)} />
+          <input className="search-input" style={{ width: 220 }} placeholder="New DB name (optional)"
+            value={target} onChange={e => setTarget(e.target.value)} />
+          <button className="btn" onClick={doImport} disabled={importing || !file || !info?.sqlPackageAvailable}>
+            {importing ? <Loader2 size={16} className="spin-icon" /> : <Upload size={16} />} {importing ? 'Importing…' : 'Import'}
+          </button>
+        </div>
+        {msg && <p style={{ marginBottom: 0, marginTop: 12, fontSize: '0.82rem', color: 'var(--text-secondary)' }}>{msg}</p>}
+        {exp && (
+          <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <a className="btn" href={exp.url} target="_blank" rel="noreferrer"><Download size={16} /> Download {exp.fileName}</a>
+            <button className="btn" onClick={() => navigator.clipboard.writeText(exp.url)}>Copy SAS link</button>
+            <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Link expires {new Date(exp.expiresUtc).toLocaleString()}</span>
+          </div>
+        )}
+      </div>
+    </>
   );
 }

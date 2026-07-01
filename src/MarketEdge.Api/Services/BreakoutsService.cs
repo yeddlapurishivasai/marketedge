@@ -11,6 +11,7 @@ public interface IBreakoutsService
     Task<BreakoutStatsDto> GetBreakoutStatsAsync(string market);
     Task<BreakoutPnlSummaryDto> GetBreakoutPnlAsync(string market, DateTime from, DateTime to, string? tradeType);
     Task<BreakoutDayDto> GetBreakoutsByDayAsync(string market, DateTime date, string? tradeType);
+    Task<List<NearPivotDto>> GetNearPivotsAsync(string market, string? tradeType, decimal maxDistancePct);
     Task<List<ScannerPerformanceDto>> GetScannerPerformanceAsync(string market);
     Task<List<ScoringWeightDto>> GetScoringWeightsAsync(string market);
     Task<ScoringWeightDto?> UpdateScoringWeightAsync(string market, int id, ScoringWeightUpdateDto update);
@@ -25,6 +26,10 @@ public class BreakoutsService : IBreakoutsService
         => typeof(T) == typeof(IndianBreakout)
             ? (IQueryable<T>)_db.IndianBreakouts
             : (IQueryable<T>)_db.USBreakouts;
+    private IQueryable<T> NearPivotSet<T>() where T : NearPivotBase
+        => typeof(T) == typeof(IndianNearPivot)
+            ? (IQueryable<T>)_db.IndianNearPivots
+            : (IQueryable<T>)_db.USNearPivots;
 
     public Task<List<BreakoutDto>> GetBreakoutsAsync(string market, string? status, string? tradeType)
         => market == "india" ? GetBreakouts<IndianBreakout>(status, tradeType) : GetBreakouts<USBreakout>(status, tradeType);
@@ -112,6 +117,34 @@ public class BreakoutsService : IBreakoutsService
 
         return new BreakoutDayDto(dayStart, tradeType,
             entries.Select(ToBreakoutDto).ToList(), exits.Select(ToBreakoutDto).ToList());
+    }
+
+    public Task<List<NearPivotDto>> GetNearPivotsAsync(string market, string? tradeType, decimal maxDistancePct)
+        => market == "india" ? GetNearPivots<IndianNearPivot>(tradeType, maxDistancePct) : GetNearPivots<USNearPivot>(tradeType, maxDistancePct);
+
+    private async Task<List<NearPivotDto>> GetNearPivots<T>(string? tradeType, decimal maxDistancePct) where T : NearPivotBase
+    {
+        var q = NearPivotSet<T>().AsQueryable();
+        if (!string.IsNullOrWhiteSpace(tradeType)) q = q.Where(t => t.TradeType == tradeType);
+        q = q.Where(t => t.DistancePct <= maxDistancePct);
+        var rows = await q.OrderBy(t => t.DistancePct).Take(500).ToListAsync();
+        return rows.Select(ToNearPivotDto).ToList();
+    }
+
+    private static NearPivotDto ToNearPivotDto(NearPivotBase t)
+    {
+        List<string> flagged;
+        try
+        {
+            flagged = string.IsNullOrWhiteSpace(t.FlaggedScannersJson)
+                ? new List<string>()
+                : JsonSerializer.Deserialize<List<string>>(t.FlaggedScannersJson) ?? new List<string>();
+        }
+        catch { flagged = new List<string>(); }
+
+        return new NearPivotDto(
+            t.Id, t.Ticker, t.CompanyName, t.TradeType, t.Direction, flagged, t.ScannerHitCount,
+            t.LastClose, t.PivotPrice, t.DistancePct, t.RelVolume, t.VolumeConfirmed, t.ScanDate, t.UpdatedAt);
     }
 
     public Task<List<ScannerPerformanceDto>> GetScannerPerformanceAsync(string market)

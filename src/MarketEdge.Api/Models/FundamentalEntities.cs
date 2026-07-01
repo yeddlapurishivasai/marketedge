@@ -199,3 +199,31 @@ public class ScoringWeight
 
 [Table("IndianBreakouts")] public class IndianBreakout : BreakoutBase { }
 [Table("USBreakouts")] public class USBreakout : BreakoutBase { }
+
+// Near-pivot candidates: scanner-flagged symbols sitting just below their breakout pivot
+// (resistance for longs, support for shorts) that have not yet broken out. Refreshed each
+// pre-close scan by the worker so the list always reflects the latest run.
+public abstract class NearPivotBase
+{
+    public int Id { get; set; }
+    public string Ticker { get; set; } = string.Empty;
+    public string? CompanyName { get; set; }
+    public string TradeType { get; set; } = string.Empty;   // swing / positional
+    public string Direction { get; set; } = string.Empty;   // long / short
+
+    public string? FlaggedScannersJson { get; set; }
+    public int ScannerHitCount { get; set; }
+
+    public decimal LastClose { get; set; }
+    public decimal PivotPrice { get; set; }
+    public decimal DistancePct { get; set; }
+    public decimal? RelVolume { get; set; }
+    public bool VolumeConfirmed { get; set; }
+
+    public DateTime ScanDate { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+[Table("IndianNearPivots")] public class IndianNearPivot : NearPivotBase { }
+[Table("USNearPivots")] public class USNearPivot : NearPivotBase { }

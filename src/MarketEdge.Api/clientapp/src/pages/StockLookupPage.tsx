@@ -31,7 +31,20 @@ function ema(closes: { time: string; value: number }[], period: number) {
   return out;
 }
 
-function PriceChart({ bars, activeEmas, theme }: { bars: LookupBar[]; activeEmas: number[]; theme: string }) {
+// Prior resistance pivot: highest high of the N bars *before* the latest one (the level a
+// breakout must clear). Swing uses 10 bars, positional 20 — matching the breakout engine.
+const PIVOT_LOOKBACKS: { label: string; n: number; color: string }[] = [
+  { label: 'Swing pivot (10)', n: 10, color: '#0ea5e9' },
+  { label: 'Pos pivot (20)', n: 20, color: '#a855f7' },
+];
+function resistancePivot(bars: LookupBar[], n: number): number | null {
+  const highs = bars.filter(b => b.high != null).map(b => b.high!);
+  if (highs.length < n + 1) return null;
+  const prior = highs.slice(highs.length - 1 - n, highs.length - 1);
+  return prior.length ? Math.max(...prior) : null;
+}
+
+export function PriceChart({ bars, activeEmas, showPivot, theme, height, compact }: { bars: LookupBar[]; activeEmas: number[]; showPivot: boolean; theme: string; height?: number; compact?: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -45,7 +58,7 @@ function PriceChart({ bars, activeEmas, theme }: { bars: LookupBar[]; activeEmas
       layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor },
       grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
       rightPriceScale: { borderColor: gridColor },
-      timeScale: { borderColor: gridColor, timeVisible: false },
+      timeScale: { borderColor: gridColor, timeVisible: false, rightOffset: compact ? 6 : 2 },
       crosshair: { mode: 0 },
     });
 
@@ -72,11 +85,69 @@ function PriceChart({ bars, activeEmas, theme }: { bars: LookupBar[]; activeEmas
       line.setData(ema(closes, p));
     }
 
+    if (showPivot) {
+      for (const { n, color } of PIVOT_LOOKBACKS) {
+        const price = resistancePivot(bars, n);
+        if (price != null) candle.createPriceLine({
+          price, color, lineWidth: 1, lineStyle: 0,
+          axisLabelVisible: false, title: '',
+        });
+      }
+    }
+
     chart.timeScale().fitContent();
     return () => chart.remove();
-  }, [bars, activeEmas, theme]);
+  }, [bars, activeEmas, showPivot, theme, compact]);
 
-  return <div ref={containerRef} className="lookup-chart" />;
+  const pivots = showPivot ? PIVOT_LOOKBACKS
+    .map(p => ({ ...p, price: resistancePivot(bars, p.n) }))
+    .filter(p => p.price != null) : [];
+  return (
+    <div style={{ position: 'relative' }}>
+      {pivots.length > 0 && !compact && (
+        <div style={{ position: 'absolute', top: 6, left: 8, zIndex: 2, display: 'flex', flexDirection: 'column', gap: 2,
+          fontSize: '0.72rem', pointerEvents: 'none' }}>
+          {pivots.map(p => (
+            <span key={p.n} style={{ color: p.color }}>— {p.label}: {p.price!.toFixed(2)}</span>
+          ))}
+        </div>
+      )}
+      <div ref={containerRef} className="lookup-chart" style={height ? { height } : undefined} />
+    </div>
+  );
+}
+
+// Compact, self-loading chart card for grid/stacked "charts only" views. Loads daily bars,
+// always shows pivot lines, and the title click bubbles up so callers can open a full lookup.
+export function MiniSymbolChart({ market, symbol, label, onOpen }: { market: Market; symbol: string; label?: string; onOpen?: () => void }) {
+  const [bars, setBars] = useState<LookupBar[]>([]);
+  const [loading, setLoading] = useState(true);
+  const { theme } = useContext(ThemeContext);
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    fetchLookupBars(market, symbol, 'daily')
+      .then(b => { if (live) setBars(b); })
+      .catch(() => { if (live) setBars([]); })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [market, symbol]);
+  return (
+    <div className="card" style={{ padding: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+        <button className="stock-link" style={{ fontWeight: 600 }} onClick={onOpen}>
+          {symbol}{label ? ` · ${label}` : ''}
+        </button>
+        <span style={{ display: 'flex', gap: 8, fontSize: '0.7rem' }}>
+          <span style={{ color: '#0ea5e9' }}>— S10</span>
+          <span style={{ color: '#a855f7' }}>— P20</span>
+        </span>
+      </div>
+      {loading ? <div className="loading" style={{ height: 220 }}><Loader2 size={16} className="spin" /></div>
+        : bars.length === 0 ? <div className="empty-state" style={{ height: 220 }}><p className="empty-state-text">No bars</p></div>
+        : <PriceChart bars={bars} activeEmas={[20, 50]} showPivot theme={theme} height={220} compact />}
+    </div>
+  );
 }
 
 function Metric({ label, value, tone }: { label: string; value: React.ReactNode; tone?: 'up' | 'down' }) {
@@ -383,6 +454,7 @@ export function StockDetailView({ market, symbol }: { market: Market; symbol: st
   const [bars, setBars] = useState<LookupBar[]>([]);
   const [timeframe, setTimeframe] = useState<Timeframe>('daily');
   const [activeEmas, setActiveEmas] = useState<number[]>([20]);
+  const [showPivot, setShowPivot] = useState(true);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -501,11 +573,15 @@ export function StockDetailView({ market, symbol }: { market: Market; symbol: st
                 onClick={() => toggleEma(p)}
               >EMA {p}</button>
             ))}
+            <button className={showPivot ? 'on' : ''}
+              style={showPivot ? { borderColor: '#0ea5e9', color: '#0ea5e9' } : undefined}
+              onClick={() => setShowPivot(v => !v)}
+              title="Prior 10/20-bar resistance (breakout pivot)">PIVOT</button>
           </div>
         </div>
         {bars.length === 0
           ? <div className="empty-state"><p className="empty-state-text">No price bars for this symbol.</p></div>
-          : <PriceChart bars={bars} activeEmas={activeEmas} theme={theme} />}
+          : <PriceChart bars={bars} activeEmas={activeEmas} showPivot={showPivot} theme={theme} />}
       </div>
 
       {/* Metric cards */}
