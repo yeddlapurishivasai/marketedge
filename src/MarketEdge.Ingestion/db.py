@@ -6,6 +6,7 @@ upserts (MERGE) on the natural key.
 """
 import logging
 import math
+import json
 from datetime import date, timedelta
 from typing import Any
 
@@ -76,6 +77,41 @@ def update_job_progress(conn: pyodbc.Connection, run_id: int, progress: int) -> 
         [int(progress), int(run_id)],
     )
     conn.commit()
+
+
+def update_job_stage_progress(conn: pyodbc.Connection, run_id: int, stage_key: str,
+                              progress: int) -> None:
+    """Set a single stage's ``progress`` (0-100) inside the JobRun's ``Stages`` JSON.
+
+    A subprocess ingestion step (bars/technical/fundamentals) is one *stage* of the parent
+    job. This read-modify-writes the ``Stages`` array so the running step reports fine-grained
+    per-stage progress alongside the overall ``Progress`` bar. The stage skeleton is written by
+    the worker before the step starts; here we only advance the matching stage (marking it
+    ``running`` if still pending). Best-effort: never abort ingestion on a progress write.
+    """
+    cursor = conn.cursor()
+    row = cursor.execute("SELECT Stages FROM dbo.JobRuns WHERE Id = ?", int(run_id)).fetchone()
+    if not row or not row[0]:
+        return
+    try:
+        stages = json.loads(row[0])
+    except (ValueError, TypeError):
+        return
+    if not isinstance(stages, list):
+        return
+    changed = False
+    pct = max(0, min(100, int(progress)))
+    for s in stages:
+        if isinstance(s, dict) and s.get("key") == stage_key:
+            s["progress"] = pct
+            if s.get("status") in (None, "pending"):
+                s["status"] = "running"
+            changed = True
+            break
+    if changed:
+        cursor.execute("UPDATE dbo.JobRuns SET Stages = ? WHERE Id = ?",
+                       [json.dumps(stages), int(run_id)])
+        conn.commit()
 
 
 def _clean(value: Any) -> Any:

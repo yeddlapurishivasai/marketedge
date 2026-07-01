@@ -20,6 +20,7 @@ import sys
 from datetime import datetime, timezone
 
 from db import get_connection, update_job_status
+from job_stages import StageTracker, steps_to_specs
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,12 @@ _PIPELINE = ("bars", "technical", "fundamentals")
 
 # Keep the tail of subprocess output for diagnostics (mirrors the old API behaviour).
 _OUTPUT_TAIL = 4000
+
+# Upper bound (seconds) on the inline bars-refresh subprocess run by the Stage 2 job. A hung
+# yfinance fetch must not hold the Stage 2 run open past the queue visibility timeout (5h),
+# which would risk the message being re-delivered and the run processed twice. Generous versus a
+# realistic per-market bars fetch (minutes), yet well under the visibility limit. Env-overridable.
+_BARS_REFRESH_TIMEOUT = int(os.getenv("BARS_REFRESH_TIMEOUT", "7200"))
 
 
 def _now() -> datetime:
@@ -67,7 +74,8 @@ def _ordered_steps(requested: list[str] | None) -> list[str]:
 def _build_args(cli: str, step: str, market: str, payload: dict,
                 run_id: int | None = None,
                 progress_start: int | None = None,
-                progress_end: int | None = None) -> list[str]:
+                progress_end: int | None = None,
+                stage_key: str | None = None) -> list[str]:
     args = [sys.executable, cli, "ingest", step, "--market", market]
     if payload.get("testSample"):
         args.append("--test-sample")
@@ -79,6 +87,11 @@ def _build_args(cli: str, step: str, market: str, payload: dict,
     if payload.get("force"):
         # Full refresh: bypass --missing and earnings-window filters in the CLI.
         args.append("--force")
+    sectors = payload.get("sectorIds")
+    if sectors:
+        if isinstance(sectors, (list, tuple)):
+            sectors = ",".join(str(s) for s in sectors)
+        args += ["--sectors", str(sectors)]
     symbols = payload.get("symbols")
     if symbols:
         if isinstance(symbols, (list, tuple)):
@@ -89,6 +102,8 @@ def _build_args(cli: str, step: str, market: str, payload: dict,
         args += ["--run-id", str(int(run_id)),
                  "--progress-start", str(int(progress_start)),
                  "--progress-end", str(int(progress_end))]
+        if stage_key:
+            args += ["--stage-key", str(stage_key)]
     return args
 
 
@@ -128,6 +143,71 @@ def run_steps_inline(market: str, symbols: list[str] | None, steps: list[str]) -
     return failed, (full[-_OUTPUT_TAIL:] if len(full) > _OUTPUT_TAIL else full)
 
 
+def run_bars_refresh_inline(
+    market: str,
+    *,
+    sector_ids: list[int] | None = None,
+    limit: int | None = None,
+    test_sample: bool = False,
+    symbols: list[str] | None = None,
+) -> tuple[bool, str]:
+    """Run a full daily-bars refresh for a universe WITHOUT creating/updating a JobRun.
+
+    Used by the Stage 2 analysis job to bring the analyzed universe's daily bars current in
+    ``{Market}Bars1D`` before it reads them (Stage 2 runs entirely on the DB). The scheduled
+    pre-close scan only refreshes bars for the *stage2* universe, so without this non-stage2
+    stocks would be analysed on stale bars and a name that just entered Stage 2 could never be
+    discovered.
+
+    The universe is scoped with the ingestion CLI's ``--sectors``/``--limit``/``--test-sample``
+    filters (matching the Stage 2 run) rather than an enumerated symbol list, so a full-market
+    refresh doesn't exceed the OS command-line length limit. ``symbols`` may be passed for a
+    small, explicit set (e.g. a retry run). ``--missing`` is intentionally NOT set: this is a
+    full re-fetch so already-present-but-stale bars are overwritten with the latest window.
+    Returns ``(failed, output_tail)``.
+    """
+    cli = _resolve_cli()
+    cli_dir = os.path.dirname(cli)
+    market = (market or "").lower()
+
+    payload: dict = {}
+    if test_sample:
+        payload["testSample"] = True
+    if limit is not None:
+        payload["limit"] = int(limit)
+    if sector_ids:
+        payload["sectorIds"] = list(sector_ids)
+    if symbols:
+        payload["symbols"] = list(symbols)
+
+    args = _build_args(cli, "bars", market, payload)
+    output: list[str] = []
+    failed = False
+    try:
+        proc = subprocess.run(
+            args, cwd=cli_dir, env=os.environ.copy(),
+            capture_output=True, text=True, timeout=_BARS_REFRESH_TIMEOUT,
+        )
+        if proc.stdout:
+            output.append(proc.stdout)
+        if proc.stderr:
+            output.append(proc.stderr)
+        if proc.returncode != 0:
+            failed = True
+            output.append(f"[bars refresh exited {proc.returncode}]")
+    except subprocess.TimeoutExpired as exc:  # noqa: BLE001 - bounded fetch; caller continues
+        failed = True
+        if exc.stdout:
+            output.append(exc.stdout if isinstance(exc.stdout, str) else exc.stdout.decode(errors="replace"))
+        output.append(f"[bars refresh timed out after {_BARS_REFRESH_TIMEOUT}s]")
+    except Exception as exc:  # noqa: BLE001 - record launch failure, caller decides
+        failed = True
+        output.append(f"[bars refresh launch error] {exc}")
+
+    full = "\n".join(output)
+    return failed, (full[-_OUTPUT_TAIL:] if len(full) > _OUTPUT_TAIL else full)
+
+
 def run_ingestion_job(payload: dict) -> None:
     market = str(payload["market"]).lower()
     run_id = int(payload["runId"])
@@ -146,17 +226,23 @@ def run_ingestion_job(payload: dict) -> None:
             run_id, market, steps, missing, cli,
         )
 
-        failed = _run_steps(conn, run_id, market, steps, payload, cli, cli_dir, output)
+        # One stage per ingestion step; the subprocess reports its own per-stage progress
+        # while the runner owns the overall Progress bar (write_progress=False).
+        tracker = StageTracker(conn, run_id, steps_to_specs(steps), write_progress=False)
+        tracker.publish()
+
+        failed = _run_steps(conn, run_id, market, steps, payload, cli, cli_dir, output,
+                            tracker=tracker)
 
         full = "\n".join(output)
         tail = full[-_OUTPUT_TAIL:] if len(full) > _OUTPUT_TAIL else full
         if failed:
-            update_job_status(conn, run_id, "failed", error=tail, completed_at=_now())
+            update_job_status(conn, run_id, "failed", error=tail,
+                              stages=tracker.snapshot(), completed_at=_now())
             logger.error("Ingestion run %s failed", run_id)
         else:
             metrics = {"market": market, "steps": steps, "output": tail}
-            update_job_status(conn, run_id, "completed", progress=100,
-                              metrics=metrics, completed_at=_now())
+            tracker.finish(status="completed", metrics=metrics, completed_at=_now())
             logger.info("Ingestion run %s completed (%s steps)", run_id, len(steps))
     except Exception as exc:
         logger.exception("Ingestion run %s crashed", run_id)
@@ -171,11 +257,13 @@ def run_ingestion_job(payload: dict) -> None:
 
 def _run_steps(conn, run_id: int, market: str, steps: list[str], payload: dict,
                cli: str, cli_dir: str, output: list[str],
-               progress_ceiling: int = 100) -> bool:
+               progress_ceiling: int = 100, tracker: StageTracker | None = None) -> bool:
     """Run the requested ingestion steps as subprocesses in pipeline order.
 
     Appends each step's output to ``output`` and advances the run's progress up to
-    ``progress_ceiling``. Returns ``True`` if any step failed (and the pipeline stopped).
+    ``progress_ceiling``. When a ``tracker`` is supplied each step is also recorded as a
+    stage (running -> completed/failed) and the subprocess reports its own per-stage progress
+    via ``--stage-key``. Returns ``True`` if any step failed (and the pipeline stopped).
     """
     missing = bool(payload.get("missingOnly"))
     failed = False
@@ -185,8 +273,11 @@ def _run_steps(conn, run_id: int, market: str, steps: list[str], payload: dict,
         output.append(header)
         band_start = int(i * progress_ceiling / n)
         band_end = int((i + 1) * progress_ceiling / n)
+        if tracker is not None:
+            tracker.start(step)
         args = _build_args(cli, step, market, payload,
-                           run_id=run_id, progress_start=band_start, progress_end=band_end)
+                           run_id=run_id, progress_start=band_start, progress_end=band_end,
+                           stage_key=step)
         try:
             proc = subprocess.run(
                 args,
@@ -210,8 +301,12 @@ def _run_steps(conn, run_id: int, market: str, steps: list[str], payload: dict,
 
         if exit_code != 0:
             failed = True
+            if tracker is not None:
+                tracker.fail(step, detail=f"exited {exit_code}")
             output.append(f"[step '{step}' exited {exit_code}]")
             break
+        if tracker is not None:
+            tracker.complete(step)
     return failed
 
 
@@ -246,21 +341,24 @@ def run_stock_refresh_job(payload: dict) -> None:
         logger.info("Stock refresh run %s: market=%s symbol=%s steps=%s",
                     run_id, market, symbol, steps)
 
+        tracker = StageTracker(conn, run_id, steps_to_specs(steps), write_progress=False)
+        tracker.publish()
+
         # Ingest the symbol's data.
         failed = _run_steps(conn, run_id, market, steps, payload, cli, cli_dir, output,
-                            progress_ceiling=100)
+                            progress_ceiling=100, tracker=tracker)
 
         full = "\n".join(output)
         tail = full[-_OUTPUT_TAIL:] if len(full) > _OUTPUT_TAIL else full
         if failed:
-            update_job_status(conn, run_id, "failed", error=tail, completed_at=_now())
+            update_job_status(conn, run_id, "failed", error=tail,
+                              stages=tracker.snapshot(), completed_at=_now())
             logger.error("Stock refresh run %s failed during ingestion", run_id)
             return
 
         metrics = {"market": market, "symbol": symbol, "steps": steps,
                    "output": tail}
-        update_job_status(conn, run_id, "completed", progress=100,
-                          metrics=metrics, completed_at=_now())
+        tracker.finish(status="completed", metrics=metrics, completed_at=_now())
         logger.info("Stock refresh run %s completed (symbol=%s)", run_id, symbol)
     except Exception as exc:
         logger.exception("Stock refresh run %s crashed", run_id)
@@ -293,17 +391,27 @@ def run_fundamentals_job(payload: dict) -> None:
     try:
         update_job_status(conn, run_id, "running", progress=0, started_at=_now())
 
+        tracker = StageTracker(
+            conn, run_id,
+            [("resolve", "Resolve universe", 10), ("fundamentals", "Fundamentals", 90)],
+            write_progress=False,
+        )
+        tracker.publish()
+
+        tracker.start("resolve")
         from scanners.runner import load_universe
         meta_rows = load_universe(conn, market, universe)
         symbols = [m["symbol"] for m in meta_rows]
         logger.info("Fundamentals run %s: market=%s universe=%s symbols=%s",
                     run_id, market, universe, len(symbols))
+        tracker.complete("resolve", detail=f"{len(symbols)} symbols")
 
         if not symbols:
             metrics = {"market": market, "universe": universe, "symbols": 0,
                        "output": "no symbols in universe"}
+            tracker.skip("fundamentals", detail="no symbols in universe")
             update_job_status(conn, run_id, "completed", progress=100,
-                              metrics=metrics, completed_at=_now())
+                              metrics=metrics, stages=tracker.snapshot(), completed_at=_now())
             return
 
         if universe == "stage2":
@@ -317,18 +425,18 @@ def run_fundamentals_job(payload: dict) -> None:
             step_payload.pop("symbols", None)
 
         failed = _run_steps(conn, run_id, market, ["fundamentals"], step_payload,
-                            cli, cli_dir, output)
+                            cli, cli_dir, output, tracker=tracker)
 
         full = "\n".join(output)
         tail = full[-_OUTPUT_TAIL:] if len(full) > _OUTPUT_TAIL else full
         if failed:
-            update_job_status(conn, run_id, "failed", error=tail, completed_at=_now())
+            update_job_status(conn, run_id, "failed", error=tail,
+                              stages=tracker.snapshot(), completed_at=_now())
             logger.error("Fundamentals run %s failed", run_id)
         else:
             metrics = {"market": market, "universe": universe, "symbols": len(symbols),
                        "steps": ["fundamentals"], "output": tail}
-            update_job_status(conn, run_id, "completed", progress=100,
-                              metrics=metrics, completed_at=_now())
+            tracker.finish(status="completed", metrics=metrics, completed_at=_now())
             logger.info("Fundamentals run %s completed (%s symbols)", run_id, len(symbols))
     except Exception as exc:
         logger.exception("Fundamentals run %s crashed", run_id)

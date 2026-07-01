@@ -107,6 +107,14 @@ export async function moveStocks(market: Market, stockIds: number[], targetSecto
 
 // ── Job Runs ──
 
+export interface JobStage {
+  key: string;
+  label: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  progress: number;
+  detail?: string;
+}
+
 export interface JobRun {
   id: number;
   jobType: string;
@@ -116,6 +124,7 @@ export interface JobRun {
   progress: number;
   parameters?: Record<string, unknown>;
   metrics?: Record<string, unknown>;
+  stages?: JobStage[];
   errorMessage?: string;
   startedAt?: string;
   completedAt?: string;

@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import time
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 from threading import Lock
 from typing import Any
 
@@ -13,6 +13,7 @@ from azure.storage.queue import QueueClient
 
 from config import Config
 from rs_rating import compute_rs_ratings
+from job_stages import StageTracker
 from db import (
     get_completed_symbols_for_week,
     get_connection,
@@ -238,6 +239,7 @@ def process_message(message_content: str) -> None:
         run_id, market, sector_ids, limit, test_sample_only, retry_failed_only,
     )
     conn = None
+    tracker: StageTracker | None = None
 
     try:
         conn = get_connection()
@@ -278,6 +280,22 @@ def process_message(message_content: str) -> None:
             error="",
         )
 
+        # Stage roadmap for this run (see StageTracker). The tracker owns the overall
+        # Progress bar (weighted average of the stages) as well as the per-stage breakdown.
+        tracker = StageTracker(
+            conn,
+            run_id,
+            [
+                ("refresh_bars", "Refresh bars", 15),
+                ("rs", "RS ratings", 10),
+                ("benchmark", "Benchmark", 5),
+                ("analyze", "Analyze stocks", 60),
+                ("finalize", "Finalize", 10),
+            ],
+            write_progress=True,
+        )
+        tracker.publish()
+
         # Fetch all stocks and group by sector
         all_stocks = get_stocks(conn, market, sector_ids=sector_ids, limit=limit, test_sample_only=test_sample_only)
         if not all_stocks:
@@ -306,8 +324,63 @@ def process_message(message_content: str) -> None:
         total_sectors = len(sector_list)
         logger.info("Found %s stocks across %s sectors", total_stocks, total_sectors)
 
+        # Refresh the analyzed universe's daily bars before reading them (Stage 2 runs entirely
+        # on the DB, and the RS-ratings step below also reads {Market}Bars1D). The scheduled
+        # pre-close scan only refreshes bars for the *stage2* universe, so without this a
+        # non-stage2 stock would be evaluated on stale bars and a name that just entered Stage 2
+        # could never be discovered.
+        #
+        # Refresh for a live/current-week run, and also for the most-recently-ended week so a
+        # delayed or retried weekend run (executing the Monday+ after the target week, when
+        # as_of_end lands on the current week's Monday) still freshens the bars. Older
+        # point-in-time backfills are skipped: re-fetching the whole market for each would be
+        # wasteful and the target window predates the rolling ingested-bars horizon anyway.
+        # Best-effort: a refresh failure logs and the run continues on existing bars.
+        today = date.today()
+        current_week_monday = today - timedelta(days=today.weekday())
+        bars_are_current = as_of_end is None or as_of_end >= current_week_monday
+        if bars_are_current and all_stocks:
+            tracker.start("refresh_bars")
+            try:
+                from ingestion_runner import run_bars_refresh_inline
+
+                # Prefer the universe *filters* over enumerating symbols so a full-market run
+                # stays well under the OS command-line length limit. In retry mode the remaining
+                # set is usually small, so scope to those symbols when it is safely short.
+                retry_syms = [s["symbol"] for s in all_stocks] if retry_failed_only else []
+                if retry_syms and len(retry_syms) <= 400:
+                    refresh_kwargs: dict[str, Any] = {"symbols": retry_syms}
+                else:
+                    refresh_kwargs = {
+                        "sector_ids": sector_ids,
+                        "limit": limit,
+                        "test_sample": test_sample_only,
+                    }
+
+                bars_failed, bars_tail = run_bars_refresh_inline(market, **refresh_kwargs)
+                if bars_failed:
+                    logger.warning(
+                        "Run %s: daily-bars refresh reported a failure — continuing with "
+                        "existing bars.\n%s", run_id, bars_tail,
+                    )
+                    tracker.skip("refresh_bars", detail="refresh reported a failure — using existing bars")
+                else:
+                    logger.info(
+                        "Run %s: refreshed daily bars for the analyzed universe before analysis",
+                        run_id,
+                    )
+                    tracker.complete("refresh_bars")
+            except Exception:
+                logger.exception(
+                    "Run %s: daily-bars refresh failed — continuing with existing bars", run_id
+                )
+                tracker.skip("refresh_bars", detail="refresh failed — using existing bars")
+        else:
+            tracker.skip("refresh_bars", detail="point-in-time run — using ingested bars")
+
         # Workflow step: refresh persisted RS ratings from ingested bars for this run's
         # universe. Reads only ingested data (no network); failures must not abort Stage 2.
+        tracker.start("rs")
         try:
             rs_summary = compute_rs_ratings(
                 conn,
@@ -316,12 +389,16 @@ def process_message(message_content: str) -> None:
                 symbols=[s["symbol"] for s in all_stocks],
             )
             logger.info("RS ratings step complete: %s", rs_summary)
+            tracker.complete("rs")
         except Exception:
             logger.exception("RS ratings step failed — continuing Stage 2 run")
+            tracker.skip("rs", detail="RS step failed — continuing")
 
         # Fetch benchmark once (the index is not part of the ingested universe, so this is the
         # only remaining yfinance call — one download per run, not per stock).
+        tracker.start("benchmark")
         benchmark_data = fetch_benchmark_weekly_from_daily(market, end_date=as_of_end)
+        tracker.complete("benchmark")
 
         # Process stock by stock within each sector
         all_results: list[dict[str, Any]] = []
@@ -332,6 +409,7 @@ def process_message(message_content: str) -> None:
         run_start_time = time.monotonic()
         run_timeout = Config.MAX_RUN_TIMEOUT
 
+        tracker.start("analyze")
         for sector_idx, (sector_id, sector_stocks) in enumerate(sector_list):
             # Check cancellation and timeout before each sector
             _check_cancelled(conn, run_id)
@@ -411,9 +489,10 @@ def process_message(message_content: str) -> None:
                     )
 
             # Update progress after each sector (stock-based, not sector-based)
-            progress = min(int(total_processed / total_stocks * 90), 90)
-            update_job_status(
-                conn, run_id, "running", progress=progress,
+            analyze_pct = min(int(total_processed / total_stocks * 100), 100) if total_stocks else 100
+            tracker.progress(
+                "analyze", analyze_pct,
+                detail=f"{total_processed}/{total_stocks} stocks · {len(current_stage2_symbols)} Stage 2",
                 metrics=_build_metrics(
                     market, total_stocks, total_filtered,
                     stage2_count=len(current_stage2_symbols),
@@ -432,6 +511,7 @@ def process_message(message_content: str) -> None:
         # Results are upserted per week, so classification/ranks/weeks must be computed
         # across every symbol in the week (including symbols processed in an earlier run
         # for the same week), not just this run's symbols. Read the week's snapshot back.
+        tracker.start("finalize")
         week_results = get_week_results(conn, market, week_number)
         current_stage2_symbols = {r["symbol"] for r in week_results if r["is_stage2"]}
 
@@ -491,11 +571,8 @@ def process_message(message_content: str) -> None:
         metrics["continuingCount"] = sum(1 for v in classifications.values() if v == "continuing")
         metrics["removedCount"] = sum(1 for v in classifications.values() if v == "removed")
 
-        update_job_status(
-            conn,
-            run_id,
-            "completed",
-            progress=100,
+        tracker.finish(
+            status="completed",
             metrics=metrics,
             completed_at=_utcnow(),
             error="",
@@ -508,6 +585,10 @@ def process_message(message_content: str) -> None:
     except Exception as exc:
         logger.exception("Failed to process run %s", run_id)
         _set_listener_status(last_error=str(exc))
+        failure_stages = None
+        if tracker is not None:
+            tracker.fail_running(detail=str(exc)[:200])
+            failure_stages = tracker.snapshot()
         failure_conn = conn
         try:
             if failure_conn is None:
@@ -517,6 +598,7 @@ def process_message(message_content: str) -> None:
                 run_id,
                 "failed",
                 error=str(exc),
+                stages=failure_stages,
                 completed_at=_utcnow(),
             )
         except Exception:

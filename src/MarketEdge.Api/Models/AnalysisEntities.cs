@@ -15,6 +15,7 @@ public class JobRun
     public int Progress { get; set; }
     public string? Parameters { get; set; }
     public string? Metrics { get; set; }
+    public string? Stages { get; set; }
     public string? ErrorMessage { get; set; }
     public DateTime? StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
