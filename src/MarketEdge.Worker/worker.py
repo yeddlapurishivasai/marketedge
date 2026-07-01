@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import time
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 from threading import Lock
 from typing import Any
 
@@ -305,6 +305,54 @@ def process_message(message_content: str) -> None:
         sector_list = list(sectors_map.items())
         total_sectors = len(sector_list)
         logger.info("Found %s stocks across %s sectors", total_stocks, total_sectors)
+
+        # Refresh the analyzed universe's daily bars before reading them (Stage 2 runs entirely
+        # on the DB, and the RS-ratings step below also reads {Market}Bars1D). The scheduled
+        # pre-close scan only refreshes bars for the *stage2* universe, so without this a
+        # non-stage2 stock would be evaluated on stale bars and a name that just entered Stage 2
+        # could never be discovered.
+        #
+        # Refresh for a live/current-week run, and also for the most-recently-ended week so a
+        # delayed or retried weekend run (executing the Monday+ after the target week, when
+        # as_of_end lands on the current week's Monday) still freshens the bars. Older
+        # point-in-time backfills are skipped: re-fetching the whole market for each would be
+        # wasteful and the target window predates the rolling ingested-bars horizon anyway.
+        # Best-effort: a refresh failure logs and the run continues on existing bars.
+        today = date.today()
+        current_week_monday = today - timedelta(days=today.weekday())
+        bars_are_current = as_of_end is None or as_of_end >= current_week_monday
+        if bars_are_current and all_stocks:
+            try:
+                from ingestion_runner import run_bars_refresh_inline
+
+                # Prefer the universe *filters* over enumerating symbols so a full-market run
+                # stays well under the OS command-line length limit. In retry mode the remaining
+                # set is usually small, so scope to those symbols when it is safely short.
+                retry_syms = [s["symbol"] for s in all_stocks] if retry_failed_only else []
+                if retry_syms and len(retry_syms) <= 400:
+                    refresh_kwargs: dict[str, Any] = {"symbols": retry_syms}
+                else:
+                    refresh_kwargs = {
+                        "sector_ids": sector_ids,
+                        "limit": limit,
+                        "test_sample": test_sample_only,
+                    }
+
+                bars_failed, bars_tail = run_bars_refresh_inline(market, **refresh_kwargs)
+                if bars_failed:
+                    logger.warning(
+                        "Run %s: daily-bars refresh reported a failure — continuing with "
+                        "existing bars.\n%s", run_id, bars_tail,
+                    )
+                else:
+                    logger.info(
+                        "Run %s: refreshed daily bars for the analyzed universe before analysis",
+                        run_id,
+                    )
+            except Exception:
+                logger.exception(
+                    "Run %s: daily-bars refresh failed — continuing with existing bars", run_id
+                )
 
         # Workflow step: refresh persisted RS ratings from ingested bars for this run's
         # universe. Reads only ingested data (no network); failures must not abort Stage 2.

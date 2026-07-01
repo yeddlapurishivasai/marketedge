@@ -29,6 +29,12 @@ _PIPELINE = ("bars", "technical", "fundamentals")
 # Keep the tail of subprocess output for diagnostics (mirrors the old API behaviour).
 _OUTPUT_TAIL = 4000
 
+# Upper bound (seconds) on the inline bars-refresh subprocess run by the Stage 2 job. A hung
+# yfinance fetch must not hold the Stage 2 run open past the queue visibility timeout (5h),
+# which would risk the message being re-delivered and the run processed twice. Generous versus a
+# realistic per-market bars fetch (minutes), yet well under the visibility limit. Env-overridable.
+_BARS_REFRESH_TIMEOUT = int(os.getenv("BARS_REFRESH_TIMEOUT", "7200"))
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -79,6 +85,11 @@ def _build_args(cli: str, step: str, market: str, payload: dict,
     if payload.get("force"):
         # Full refresh: bypass --missing and earnings-window filters in the CLI.
         args.append("--force")
+    sectors = payload.get("sectorIds")
+    if sectors:
+        if isinstance(sectors, (list, tuple)):
+            sectors = ",".join(str(s) for s in sectors)
+        args += ["--sectors", str(sectors)]
     symbols = payload.get("symbols")
     if symbols:
         if isinstance(symbols, (list, tuple)):
@@ -124,6 +135,71 @@ def run_steps_inline(market: str, symbols: list[str] | None, steps: list[str]) -
             failed = True
             output.append(f"[step '{step}' exited {exit_code}]")
             break
+    full = "\n".join(output)
+    return failed, (full[-_OUTPUT_TAIL:] if len(full) > _OUTPUT_TAIL else full)
+
+
+def run_bars_refresh_inline(
+    market: str,
+    *,
+    sector_ids: list[int] | None = None,
+    limit: int | None = None,
+    test_sample: bool = False,
+    symbols: list[str] | None = None,
+) -> tuple[bool, str]:
+    """Run a full daily-bars refresh for a universe WITHOUT creating/updating a JobRun.
+
+    Used by the Stage 2 analysis job to bring the analyzed universe's daily bars current in
+    ``{Market}Bars1D`` before it reads them (Stage 2 runs entirely on the DB). The scheduled
+    pre-close scan only refreshes bars for the *stage2* universe, so without this non-stage2
+    stocks would be analysed on stale bars and a name that just entered Stage 2 could never be
+    discovered.
+
+    The universe is scoped with the ingestion CLI's ``--sectors``/``--limit``/``--test-sample``
+    filters (matching the Stage 2 run) rather than an enumerated symbol list, so a full-market
+    refresh doesn't exceed the OS command-line length limit. ``symbols`` may be passed for a
+    small, explicit set (e.g. a retry run). ``--missing`` is intentionally NOT set: this is a
+    full re-fetch so already-present-but-stale bars are overwritten with the latest window.
+    Returns ``(failed, output_tail)``.
+    """
+    cli = _resolve_cli()
+    cli_dir = os.path.dirname(cli)
+    market = (market or "").lower()
+
+    payload: dict = {}
+    if test_sample:
+        payload["testSample"] = True
+    if limit is not None:
+        payload["limit"] = int(limit)
+    if sector_ids:
+        payload["sectorIds"] = list(sector_ids)
+    if symbols:
+        payload["symbols"] = list(symbols)
+
+    args = _build_args(cli, "bars", market, payload)
+    output: list[str] = []
+    failed = False
+    try:
+        proc = subprocess.run(
+            args, cwd=cli_dir, env=os.environ.copy(),
+            capture_output=True, text=True, timeout=_BARS_REFRESH_TIMEOUT,
+        )
+        if proc.stdout:
+            output.append(proc.stdout)
+        if proc.stderr:
+            output.append(proc.stderr)
+        if proc.returncode != 0:
+            failed = True
+            output.append(f"[bars refresh exited {proc.returncode}]")
+    except subprocess.TimeoutExpired as exc:  # noqa: BLE001 - bounded fetch; caller continues
+        failed = True
+        if exc.stdout:
+            output.append(exc.stdout if isinstance(exc.stdout, str) else exc.stdout.decode(errors="replace"))
+        output.append(f"[bars refresh timed out after {_BARS_REFRESH_TIMEOUT}s]")
+    except Exception as exc:  # noqa: BLE001 - record launch failure, caller decides
+        failed = True
+        output.append(f"[bars refresh launch error] {exc}")
+
     full = "\n".join(output)
     return failed, (full[-_OUTPUT_TAIL:] if len(full) > _OUTPUT_TAIL else full)
 

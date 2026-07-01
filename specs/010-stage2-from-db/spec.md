@@ -62,8 +62,16 @@ the benchmark into its own table to remove this last call is a possible follow-u
   the live e2e test; only the production run path switches to the DB.
 
 ## Data dependency note
-Because Stage 2 now reads ingested data, the **Ingest Bars** admin step must be run for the target
-universe before analysis. Un-ingested stocks are silently skipped (insufficient data).
+Because Stage 2 now reads ingested data, the **Ingest Bars** step must have run for the target
+universe before analysis. To guarantee this for the scheduled weekend run, the Stage 2 job now
+**self-refreshes the analyzed universe's daily bars** (a full `ingest bars` over the same
+sectors/limit/test-sample scope) before the RS-ratings step and the per-stock loop. This runs
+only for a live/current-week run — a point-in-time historical run reads already-ingested bars
+as-is. The refresh is best-effort: a failure logs a warning and the run continues on existing
+bars. Without it, only the *stage2* universe stays fresh (the weekday pre-close scan refreshes
+just that set), so non-stage2 stocks would be analysed on stale bars and a name that just
+entered Stage 2 could never be discovered. Un-ingested stocks are still silently skipped
+(insufficient data).
 
 ## Out of scope
 - Ingesting the benchmark index into the DB (keeps one yfinance call per run).
