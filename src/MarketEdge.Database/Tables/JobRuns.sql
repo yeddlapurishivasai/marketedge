@@ -12,6 +12,7 @@ CREATE TABLE [dbo].[JobRuns]
     [StartedAt] DATETIME2 NULL,
     [CompletedAt] DATETIME2 NULL,
     [CreatedAt] DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    [Stages] NVARCHAR(MAX) NULL,
 
     CONSTRAINT [PK_JobRuns] PRIMARY KEY CLUSTERED ([Id]),
     CONSTRAINT [CK_JobRuns_Status] CHECK ([Status] IN ('queued', 'running', 'completed', 'failed', 'cancelled')),

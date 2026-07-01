@@ -92,6 +92,7 @@ def update_job_status(
     status: str,
     progress: int | None = None,
     metrics: dict[str, Any] | None = None,
+    stages: Any = None,
     error: str | None = None,
     started_at: datetime | None = None,
     completed_at: datetime | None = None,
@@ -106,6 +107,10 @@ def update_job_status(
     if metrics is not None:
         assignments.append("Metrics = ?")
         values.append(json.dumps(metrics, default=str))
+
+    if stages is not None:
+        assignments.append("Stages = ?")
+        values.append(json.dumps(stages, default=str))
 
     if error is not None:
         assignments.append("ErrorMessage = ?")

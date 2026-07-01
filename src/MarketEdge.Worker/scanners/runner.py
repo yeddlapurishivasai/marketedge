@@ -24,6 +24,7 @@ import yfinance as yf
 
 from config import Config
 from db import get_connection, update_job_status
+from job_stages import StageTracker
 
 from .definitions import SCANNERS, ScannerDef, scanners_for
 from .indicators import IndicatorSnapshot, day_change_pct, load_bars, round_or_none
@@ -268,8 +269,25 @@ def run_scanner_job(payload: dict) -> None:
     scan_date = date.today()
 
     conn = get_connection()
+    tracker: StageTracker | None = None
     try:
         update_job_status(conn, run_id, "running", progress=0, started_at=datetime.now(timezone.utc).replace(tzinfo=None))
+
+        # Stage roadmap for the scan (see StageTracker). The tracker owns the overall Progress
+        # bar (weighted average of stages) as well as the per-stage breakdown.
+        tracker = StageTracker(
+            conn,
+            run_id,
+            [
+                ("refresh_bars", "Refresh bars", 15),
+                ("technical", "Technical snapshot", 15),
+                ("scan", "Run scanners", 50),
+                ("persist", "Persist results", 10),
+                ("breakouts", "Breakouts", 10),
+            ],
+            write_progress=True,
+        )
+        tracker.publish()
 
         if scanner_name:
             defs = [SCANNERS[scanner_name]] if scanner_name in SCANNERS else []
@@ -283,12 +301,15 @@ def run_scanner_job(payload: dict) -> None:
         logger.info("Scanner run %s: market=%s universe=%s symbols=%s scanners=%s",
                     run_id, market, universe, len(symbols), [d.name for d in defs])
 
+        tracker.start("refresh_bars")
         refreshed = refresh_today_bars(conn, market, symbols)
         logger.info("Scanner run %s: refreshed %s today-bars", run_id, refreshed)
+        tracker.complete("refresh_bars", detail=f"{refreshed} bars")
 
         # Refresh the TickerTechnical snapshot (prices, 52W, market cap) from the just-updated
         # bars by reusing the ingestion 'technical' step, so scoring and Stock Lookup reflect
         # today's data rather than the last full ingestion. Best-effort: never abort the scan.
+        tracker.start("technical")
         tech_refreshed = False
         try:
             from ingestion_runner import run_steps_inline
@@ -297,8 +318,13 @@ def run_scanner_job(payload: dict) -> None:
             logger.info("Scanner run %s: technical snapshot refresh ok=%s", run_id, tech_refreshed)
         except Exception:  # noqa: BLE001 - technical refresh must never abort the scan
             logger.exception("Scanner run %s: technical snapshot refresh failed", run_id)
+        if tech_refreshed:
+            tracker.complete("technical")
+        else:
+            tracker.skip("technical", detail="refresh failed — using existing snapshot")
 
         # Load each symbol's series once; evaluate all selected scanners against it.
+        tracker.start("scan")
         results_by_scanner: dict[str, list[dict]] = {d.name: [] for d in defs}
         series_cache: dict[str, Any] = {}
         processed = 0
@@ -316,9 +342,11 @@ def run_scanner_job(payload: dict) -> None:
                         results_by_scanner[d.name].append(_build_row(meta, series, triggers))
             processed += 1
             if processed % 200 == 0:
-                pct = int(processed / max(len(meta_rows), 1) * 90)
-                update_job_status(conn, run_id, "running", progress=pct)
+                pct = int(processed / max(len(meta_rows), 1) * 100)
+                tracker.progress("scan", pct, detail=f"{processed}/{len(meta_rows)} symbols")
+        tracker.complete("scan", detail=f"{len(meta_rows)} symbols")
 
+        tracker.start("persist")
         total_hits = 0
         per_scanner: dict[str, int] = {}
         for d in defs:
@@ -326,9 +354,11 @@ def run_scanner_job(payload: dict) -> None:
             persist_results(conn, market, d.name, scan_date, run_id, rows)
             per_scanner[d.name] = len(rows)
             total_hits += len(rows)
+        tracker.complete("persist", detail=f"{total_hits} hits")
 
         # --- Paper-breakout engine ---
         # Symbols flagged by any scanner this run are breakout candidates.
+        tracker.start("breakouts")
         meta_by_sym = {m["symbol"]: m for m in meta_rows}
         flagged: dict[str, dict] = {}
         for s_name, rows in results_by_scanner.items():
@@ -353,8 +383,10 @@ def run_scanner_job(payload: dict) -> None:
             breakout_metrics = run_breakout_engine(conn, market, scan_date, flagged, series_cache,
                                                     manage_trades=manage_trades)
             logger.info("Scanner run %s: breakouts=%s", run_id, breakout_metrics)
+            tracker.complete("breakouts")
         except Exception:  # noqa: BLE001 - breakout handling must never abort the scan
             logger.exception("Scanner run %s: breakout engine failed", run_id)
+            tracker.skip("breakouts", detail="breakout engine failed")
 
         metrics = {
             "market": market,
@@ -368,13 +400,17 @@ def run_scanner_job(payload: dict) -> None:
             "scanDate": str(scan_date),
             "breakouts": breakout_metrics,
         }
-        update_job_status(conn, run_id, "completed", progress=100, metrics=metrics,
-                          completed_at=datetime.now(timezone.utc).replace(tzinfo=None))
+        tracker.finish(status="completed", metrics=metrics,
+                       completed_at=datetime.now(timezone.utc).replace(tzinfo=None))
         logger.info("Scanner run %s completed: %s hits across %s scanners", run_id, total_hits, len(defs))
     except Exception as exc:
         logger.exception("Scanner run %s failed", run_id)
         try:
-            update_job_status(conn, run_id, "failed", error=str(exc),
+            failure_stages = None
+            if tracker is not None:
+                tracker.fail_running(detail=str(exc)[:200])
+                failure_stages = tracker.snapshot()
+            update_job_status(conn, run_id, "failed", error=str(exc), stages=failure_stages,
                               completed_at=datetime.now(timezone.utc).replace(tzinfo=None))
         except Exception:
             pass

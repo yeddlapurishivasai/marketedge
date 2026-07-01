@@ -432,6 +432,11 @@ public class JobService : IJobService
         };
     }
 
+    private static readonly JsonSerializerOptions StagesJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     private static JobRunDto MapJobRun(JobRun j)
     {
         return new JobRunDto
@@ -444,6 +449,7 @@ public class JobService : IJobService
             Progress = j.Progress,
             Parameters = j.Parameters != null ? JsonSerializer.Deserialize<Dictionary<string, object>>(j.Parameters) : null,
             Metrics = j.Metrics != null ? JsonSerializer.Deserialize<Dictionary<string, object>>(j.Metrics) : null,
+            Stages = ParseStages(j.Stages),
             ErrorMessage = j.ErrorMessage,
             StartedAt = j.StartedAt,
             CompletedAt = j.CompletedAt,
@@ -452,6 +458,19 @@ public class JobService : IJobService
                 ? (j.CompletedAt.Value - j.StartedAt.Value).TotalSeconds
                 : null
         };
+    }
+
+    private static List<JobStageDto>? ParseStages(string? stages)
+    {
+        if (string.IsNullOrWhiteSpace(stages)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<List<JobStageDto>>(stages, StagesJsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private async Task PopulateRsRatingsAsync(string market, List<StageAnalysisResultDto> dtos)

@@ -12,11 +12,21 @@ public class JobRunDto
     public int Progress { get; set; }
     public Dictionary<string, object>? Parameters { get; set; }
     public Dictionary<string, object>? Metrics { get; set; }
+    public List<JobStageDto>? Stages { get; set; }
     public string? ErrorMessage { get; set; }
     public DateTime? StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public double? DurationSeconds { get; set; }
+}
+
+public class JobStageDto
+{
+    public string Key { get; set; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
+    public string Status { get; set; } = "pending";
+    public int Progress { get; set; }
+    public string? Detail { get; set; }
 }
 
 public class TriggerAnalysisRequest

@@ -4,7 +4,7 @@ import type { Market, JobRun } from '../api';
 import { fetchJobRuns, fetchJobRun, cancelJobRun } from '../api';
 import {
   ChevronLeft, RefreshCw, Clock, CheckCircle2, XCircle,
-  Loader2, AlertCircle, Activity, StopCircle, Maximize2, X
+  Loader2, AlertCircle, Activity, StopCircle, Maximize2, X, MinusCircle
 } from 'lucide-react';
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
@@ -13,6 +13,14 @@ const STATUS_ICON: Record<string, React.ReactNode> = {
   completed: <CheckCircle2 size={16} />,
   failed: <XCircle size={16} />,
   cancelled: <AlertCircle size={16} />
+};
+
+const STAGE_STATUS_ICON: Record<string, React.ReactNode> = {
+  pending: <Clock size={14} />,
+  running: <Loader2 size={14} className="spin-icon" />,
+  completed: <CheckCircle2 size={14} />,
+  failed: <XCircle size={14} />,
+  skipped: <MinusCircle size={14} />
 };
 
 const STATUS_CLASS: Record<string, string> = {
@@ -55,6 +63,15 @@ function formatDate(dateStr: string): string {
 
 function formatJobType(type: string): string {
   return type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+/** Label of the stage currently running (or the first pending one), for the row summary. */
+function activeStageLabel(run: JobRun): string | null {
+  if (!run.stages || run.stages.length === 0) return null;
+  const running = run.stages.find(s => s.status === 'running');
+  if (running) return running.label;
+  const pending = run.stages.find(s => s.status === 'pending');
+  return pending ? pending.label : null;
 }
 
 const JOB_TYPES = [
@@ -225,6 +242,9 @@ export default function JobsPage() {
                         <div className="progress-bar-fill" style={{ width: `${run.progress}%` }} />
                         <span className="progress-bar-text">{run.progress}%</span>
                       </div>
+                      {run.status === 'running' && activeStageLabel(run) && (
+                        <span className="row-active-stage">{activeStageLabel(run)}</span>
+                      )}
                     </td>
                     <td className="cell-muted">{run.startedAt ? formatDate(run.startedAt) : '—'}</td>
                     <td className="cell-muted">{formatDuration(run.durationSeconds)}</td>
@@ -309,6 +329,35 @@ export default function JobsPage() {
                 </div>
                 <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{selectedRun.progress}%</span>
               </div>
+
+              {/* Stages */}
+              {selectedRun.stages && selectedRun.stages.length > 0 && (
+                <div className="detail-section">
+                  <h4>Stages</h4>
+                  <div className="stage-list">
+                    {selectedRun.stages.map((stage) => (
+                      <div className="stage-item" key={stage.key}>
+                        <div className="stage-head">
+                          <span className={`stage-icon stage-${stage.status}`}>
+                            {STAGE_STATUS_ICON[stage.status] ?? STAGE_STATUS_ICON.pending}
+                          </span>
+                          <span className="stage-label">{stage.label}</span>
+                          <span className="stage-pct">
+                            {stage.status === 'skipped' ? 'skipped' : `${stage.progress}%`}
+                          </span>
+                        </div>
+                        <div className="stage-bar">
+                          <div
+                            className={`stage-bar-fill stage-fill-${stage.status}`}
+                            style={{ width: `${stage.status === 'skipped' ? 100 : stage.progress}%` }}
+                          />
+                        </div>
+                        {stage.detail && <span className="stage-detail">{stage.detail}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Parameters */}
               {selectedRun.parameters && Object.keys(selectedRun.parameters).length > 0 && (

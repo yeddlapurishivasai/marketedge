@@ -123,7 +123,8 @@ class _ProgressReporter:
     when no run-id was passed (e.g. inline/manual CLI runs). Never raises into the loop.
     """
 
-    def __init__(self, conn, run_id: int | None, start: int, end: int, total: int) -> None:
+    def __init__(self, conn, run_id: int | None, start: int, end: int, total: int,
+                 stage_key: str | None = None) -> None:
         self._conn = conn
         self._run_id = run_id
         self._start = max(0, min(100, int(start)))
@@ -131,6 +132,7 @@ class _ProgressReporter:
         self._total = max(1, int(total))
         self._last_pct = self._start
         self._last_write = 0.0
+        self._stage_key = stage_key
 
     def update(self, done: int) -> None:
         if self._run_id is None:
@@ -144,6 +146,9 @@ class _ProgressReporter:
             return
         try:
             db.update_job_progress(self._conn, self._run_id, pct)
+            if self._stage_key:
+                stage_pct = int(round(frac * 100))
+                db.update_job_stage_progress(self._conn, self._run_id, self._stage_key, stage_pct)
             self._last_pct = pct
             self._last_write = now
         except Exception:  # noqa: BLE001 - progress is best-effort, never abort the run
@@ -155,9 +160,10 @@ def _progress_reporter(args, conn, total: int) -> _ProgressReporter:
     run_id = getattr(args, "run_id", None)
     start = getattr(args, "progress_start", None)
     end = getattr(args, "progress_end", None)
+    stage_key = getattr(args, "stage_key", None)
     if run_id is None or start is None or end is None:
         return _ProgressReporter(conn, None, 0, 0, max(1, total))
-    return _ProgressReporter(conn, int(run_id), int(start), int(end), total)
+    return _ProgressReporter(conn, int(run_id), int(start), int(end), total, stage_key=stage_key)
 
 
 # --------------------------------------------------------------------------- #
@@ -1314,6 +1320,9 @@ def _add_progress_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--run-id", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--progress-start", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--progress-end", type=int, default=None, help=argparse.SUPPRESS)
+    # Which JobRun stage this step maps to; lets the step report its own per-stage progress
+    # into JobRuns.Stages alongside the overall Progress bar. Hidden internal wiring.
+    parser.add_argument("--stage-key", default=None, help=argparse.SUPPRESS)
 
 
 def build_parser() -> argparse.ArgumentParser:
