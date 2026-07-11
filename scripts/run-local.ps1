@@ -104,8 +104,9 @@ function Clear-Port([int] $Port) {
     foreach ($conn in $conns) {
         $procId = [int]$conn.OwningProcess
         if ($procId -le 4) { continue }   # skip System / Idle
-        $pname = (Get-Process -Id $procId -ErrorAction SilentlyContinue).ProcessName
-        Write-Info "Freeing port $Port (pid $procId $pname)"
+        $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+        if (-not $proc) { continue }      # owning process already gone
+        Write-Info "Freeing port $Port (pid $procId $($proc.ProcessName))"
         Stop-Tree -ProcessId $procId
     }
 }
@@ -252,10 +253,12 @@ function Publish-Database {
     }
     Write-Step 'Building dacpac'
     & dotnet build $DbProject -v q | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "dacpac build failed (exit code $LASTEXITCODE)." }
     $dacpac = Join-Path $RepoRoot 'src\MarketEdge.Database\bin\Debug\MarketEdge.Database.dacpac'
     Write-Step 'Publishing dacpac to localhost\MarketEdge'
     & sqlpackage /Action:Publish /SourceFile:$dacpac /TargetServerName:localhost `
-        /TargetDatabaseName:MarketEdge /p:TrustServerCertificate=True | Out-Host
+        /TargetDatabaseName:MarketEdge /TargetTrustServerCertificate:True | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "dacpac publish failed (exit code $LASTEXITCODE)." }
     Write-Ok 'Database published'
 }
 

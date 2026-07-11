@@ -39,6 +39,7 @@ STAGE_LABELS = {
     "scan": "Run scanners",
     "persist": "Persist results",
     "breakouts": "Breakouts",
+    "breadth": "Breadth",
     "resolve": "Resolve universe",
 }
 

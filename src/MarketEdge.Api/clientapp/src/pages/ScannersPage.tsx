@@ -5,6 +5,7 @@ import {
   fetchScanners, triggerScanner, fetchScannerDates, fetchScannerResults
 } from '../api';
 import { StockLookupModal } from './StockLookupPage';
+import { RegimeBanner } from './RegimePage';
 import {
   ChevronLeft, RefreshCw, Radar, PlayCircle, Loader2
 } from 'lucide-react';
@@ -259,6 +260,11 @@ export default function ScannersPage() {
             <RefreshCw size={14} /> Refresh
           </button>
         </div>
+      </div>
+
+      {/* Market regime context (display-only — never hides or reorders results) */}
+      <div style={{ marginBottom: 16 }}>
+        <RegimeBanner market={m} onOpen={() => navigate(`/${m}/regime`)} />
       </div>
 
       {/* Controls */}

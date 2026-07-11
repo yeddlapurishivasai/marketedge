@@ -50,6 +50,13 @@ public class MarketEdgeDbContext : DbContext
     public DbSet<USNearPivot> USNearPivots => Set<USNearPivot>();
     public DbSet<ScoringWeight> ScoringWeights => Set<ScoringWeight>();
 
+    // Market Regime (feature 013)
+    public DbSet<IndianBenchmarkBar1D> IndianBenchmarkBars1D => Set<IndianBenchmarkBar1D>();
+    public DbSet<USBenchmarkBar1D> USBenchmarkBars1D => Set<USBenchmarkBar1D>();
+    public DbSet<IndianRegimeSnapshot> IndianRegimeSnapshots => Set<IndianRegimeSnapshot>();
+    public DbSet<USRegimeSnapshot> USRegimeSnapshots => Set<USRegimeSnapshot>();
+    public DbSet<RegimeSchedule> RegimeSchedules => Set<RegimeSchedule>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<IndianSector>()
@@ -91,6 +98,42 @@ public class MarketEdgeDbContext : DbContext
         ConfigureLookupEntities(modelBuilder);
         ConfigureScannerEntities(modelBuilder);
         ConfigureFundamentalEntities(modelBuilder);
+        ConfigureRegimeEntities(modelBuilder);
+    }
+
+    private static void ConfigureRegimeEntities(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<IndianBenchmarkBar1D>().HasKey(b => new { b.Symbol, b.BarDate });
+        modelBuilder.Entity<USBenchmarkBar1D>().HasKey(b => new { b.Symbol, b.BarDate });
+
+        modelBuilder.Entity<IndianRegimeSnapshot>().HasKey(s => s.AsOfDate);
+        modelBuilder.Entity<USRegimeSnapshot>().HasKey(s => s.AsOfDate);
+
+        foreach (var t in new[] { typeof(IndianBenchmarkBar1D), typeof(USBenchmarkBar1D) })
+        {
+            var e = modelBuilder.Entity(t);
+            foreach (var p in new[] { nameof(BenchmarkBar1DBase.Open), nameof(BenchmarkBar1DBase.High),
+                nameof(BenchmarkBar1DBase.Low), nameof(BenchmarkBar1DBase.Close), nameof(BenchmarkBar1DBase.AdjClose) })
+                e.Property(p).HasColumnType("decimal(18,4)");
+        }
+
+        foreach (var t in new[] { typeof(IndianRegimeSnapshot), typeof(USRegimeSnapshot) })
+        {
+            var e = modelBuilder.Entity(t);
+            foreach (var p in new[] { nameof(RegimeSnapshotBase.ConditionClose), nameof(RegimeSnapshotBase.ConditionSma20),
+                nameof(RegimeSnapshotBase.ConditionSma50), nameof(RegimeSnapshotBase.ConditionSma200) })
+                e.Property(p).HasColumnType("decimal(18,4)");
+            foreach (var p in new[] { nameof(RegimeSnapshotBase.PctAboveSma10), nameof(RegimeSnapshotBase.PctAboveSma20),
+                nameof(RegimeSnapshotBase.PctAboveSma50), nameof(RegimeSnapshotBase.PctAboveSma200),
+                nameof(RegimeSnapshotBase.PctSma20AboveSma50), nameof(RegimeSnapshotBase.PctSma50AboveSma200) })
+                e.Property(p).HasColumnType("decimal(6,2)");
+            foreach (var p in new[] { nameof(RegimeSnapshotBase.ConditionCloseVsSma20Pct), nameof(RegimeSnapshotBase.ConditionCloseVsSma50Pct),
+                nameof(RegimeSnapshotBase.ConditionCloseVsSma200Pct), nameof(RegimeSnapshotBase.ConditionVolumeVsAvgPct),
+                nameof(RegimeSnapshotBase.BenchmarkYtdPct), nameof(RegimeSnapshotBase.Benchmark1wPct),
+                nameof(RegimeSnapshotBase.Benchmark1mPct), nameof(RegimeSnapshotBase.Benchmark1yPct),
+                nameof(RegimeSnapshotBase.BenchmarkPctFrom52wHigh), nameof(RegimeSnapshotBase.VolatilityClose) })
+                e.Property(p).HasColumnType("decimal(10,4)");
+        }
     }
 
     private static void ConfigureFundamentalEntities(ModelBuilder modelBuilder)
