@@ -29,9 +29,11 @@ builder.Services.AddScoped<ILookupService, LookupService>();
 builder.Services.AddScoped<IScannerService, ScannerService>();
 builder.Services.AddScoped<IFundamentalsService, FundamentalsService>();
 builder.Services.AddScoped<IBreakoutsService, BreakoutsService>();
+builder.Services.AddScoped<IMarketRegimeService, MarketRegimeService>();
 builder.Services.AddHostedService<ScannerScheduleService>();
 builder.Services.AddHostedService<FundamentalsScheduleService>();
 builder.Services.AddHostedService<Stage2ScheduleService>();
+builder.Services.AddHostedService<MarketRegimeScheduleService>();
 
 // API
 builder.Services.AddControllers();

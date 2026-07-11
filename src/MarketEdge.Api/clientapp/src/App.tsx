@@ -7,7 +7,7 @@ import { ThemeContext } from './theme';
 import {
   Sun, Moon, ChevronLeft, Search, Plus, Pencil, Trash2,
   ArrowRightLeft, X, TrendingUp, LayoutGrid, BarChart3,
-  IndianRupee, DollarSign, ChevronRight, Activity, Target, Database, Radar, LineChart
+  IndianRupee, DollarSign, ChevronRight, Activity, Target, Database, Radar, LineChart, Gauge
 } from 'lucide-react';
 import JobsPage from './pages/JobsPage';
 import AnalysisPage from './pages/AnalysisPage';
@@ -16,6 +16,7 @@ import StockLookupPage, { StockLookupModal } from './pages/StockLookupPage';
 import ScannersPage from './pages/ScannersPage';
 import FundamentalsPage from './pages/FundamentalsPage';
 import BreakoutsPage from './pages/BreakoutsPage';
+import RegimePage, { RegimeBanner } from './pages/RegimePage';
 import './styles.css';
 
 // Theme context
@@ -103,6 +104,7 @@ function App() {
             <Route path="/:market/scanners" element={<ScannersPage />} />
             <Route path="/:market/fundamentals" element={<FundamentalsPage />} />
             <Route path="/:market/breakouts" element={<BreakoutsPage />} />
+            <Route path="/:market/regime" element={<RegimePage />} />
             <Route path="/:market/jobs" element={<JobsPage />} />
             <Route path="/admin" element={<AdminPage />} />
           </Routes>
@@ -148,7 +150,10 @@ function MarketMenu() {
         <ChevronLeft size={16} /> Home
       </NavLink>
       <Icon size={36} strokeWidth={1.5} style={{ color: 'var(--primary)', marginBottom: 12 }} />
-      <h1 className="page-title" style={{ marginBottom: 32 }}>{label}</h1>
+      <h1 className="page-title" style={{ marginBottom: 16 }}>{label}</h1>
+      <div style={{ width: '100%', maxWidth: 640, marginBottom: 20 }}>
+        <RegimeBanner market={m} onOpen={() => navigate(`/${m}/regime`)} />
+      </div>
       <div className="menu-grid">
         <div className="menu-card" onClick={() => navigate(`/${m}/sectors`)}>
           <div className="menu-card-icon sectors"><LayoutGrid size={22} /></div>
@@ -195,6 +200,14 @@ function MarketMenu() {
           <div className="menu-card-text">
             <h3>Breakouts</h3>
             <p>Swing/positional breakout blotter &amp; confidence</p>
+          </div>
+          <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
+        </div>
+        <div className="menu-card" onClick={() => navigate(`/${m}/regime`)}>
+          <div className="menu-card-icon analysis"><Gauge size={22} /></div>
+          <div className="menu-card-text">
+            <h3>Market Regime</h3>
+            <p>Trend &amp; breadth context for risk posture</p>
           </div>
           <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
         </div>

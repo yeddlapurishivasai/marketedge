@@ -933,3 +933,94 @@ export async function importDatabase(file: File, targetDatabase?: string): Promi
   if (!res.ok) throw new Error((await res.text()) || 'Import failed');
   return res.json();
 }
+
+// --- Market regime (feature 013) ---
+export interface MarketCondition {
+  label: string;                  // Pessimistic | Bearish | Cautious | Euphoric | Uptrend | Neutral | Unavailable
+  tone: string;                   // red | yellow | green | grey
+  explanation: string;
+  benchmarkSymbol?: string | null;
+  asOfDate?: string | null;
+  close?: number | null;
+  sma20?: number | null;
+  sma50?: number | null;
+  sma200?: number | null;
+  closeVsSma20Pct?: number | null;
+  closeVsSma50Pct?: number | null;
+  closeVsSma200Pct?: number | null;
+  volumeVsAvgPct?: number | null;
+  available: boolean;
+}
+
+export interface BreadthSignal {
+  key: string;
+  label: string;
+  value?: number | null;
+  threshold: string;
+  positive?: boolean | null;
+}
+
+export interface MarketBreadth {
+  label: string;                  // Bullish | Positive | Neutral | Negative | Bearish | Unavailable
+  tone: string;
+  score?: number | null;          // 0..100
+  positiveSignals: number;
+  availableSignals: number;
+  evaluatedCount: number;
+  asOfDate?: string | null;
+  benchmarkSymbol?: string | null;
+  volatilitySymbol?: string | null;
+  signals: BreadthSignal[];
+  available: boolean;
+}
+
+export interface MarketRegime {
+  market: string;
+  regime: string;                 // RiskOn | SelectiveRiskOn | Caution | RiskOff | Mixed | Unavailable
+  regimeLabel: string;
+  tone: string;
+  posture: string;
+  condition: MarketCondition;
+  breadth: MarketBreadth;
+  asOfDate?: string | null;
+  available: boolean;
+  stale: boolean;
+  staleReason?: string | null;
+}
+
+export interface RegimeSchedule {
+  market: string;
+  enabled: boolean;
+  hourLocal: number;
+  lastEnqueuedAt?: string | null;
+  updatedAt: string;
+  lastRunAt?: string | null;
+}
+
+export async function fetchRegime(market: Market): Promise<MarketRegime> {
+  const res = await fetch(`${BASE}/${market}/regime`);
+  if (!res.ok) throw new Error('Failed to load market regime');
+  return res.json();
+}
+
+export async function refreshRegime(market: Market): Promise<{ runId: number }> {
+  const res = await fetch(`${BASE}/${market}/regime/refresh`, { method: 'POST' });
+  if (!res.ok) throw new Error((await res.text()) || 'Failed to refresh regime');
+  return res.json();
+}
+
+export async function fetchRegimeSchedule(market: Market): Promise<RegimeSchedule> {
+  const res = await fetch(`${BASE}/${market}/regime/schedule`);
+  if (!res.ok) throw new Error('Failed to load regime schedule');
+  return res.json();
+}
+
+export async function updateRegimeSchedule(market: Market, body: { enabled: boolean; hourLocal?: number }): Promise<RegimeSchedule> {
+  const res = await fetch(`${BASE}/${market}/regime/schedule`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error('Failed to update regime schedule');
+  return res.json();
+}

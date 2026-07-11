@@ -213,6 +213,12 @@ def process_message(message_content: str) -> None:
         run_fundamentals_job(payload)
         return
 
+    # Market regime (feature 013): refresh benchmark/volatility bars + compute & persist the full regime.
+    if str(payload.get("jobType", "")).lower() == "market_regime":
+        from market_regime_runner import run_market_regime_job
+        run_market_regime_job(payload)
+        return
+
     market = str(payload["market"]).lower()
     run_id = int(payload["runId"])
     min_market_cap = _coerce_number(payload.get("minMarketCap"))
