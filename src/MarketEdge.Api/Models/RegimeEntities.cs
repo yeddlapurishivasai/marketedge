@@ -79,6 +79,9 @@ public abstract class RegimeSnapshotBase
     public decimal? BenchmarkPctFrom52wHigh { get; set; }
     public decimal? VolatilityClose { get; set; }
 
+    // True when this snapshot reflects a live intraday index price (computed during market hours).
+    public bool IsIntraday { get; set; }
+
     public DateTime CreatedAt { get; set; }
 }
 

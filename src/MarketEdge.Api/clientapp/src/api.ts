@@ -986,6 +986,7 @@ export interface MarketRegime {
   available: boolean;
   stale: boolean;
   staleReason?: string | null;
+  isIntraday: boolean;            // true when the snapshot reflects a live intraday index price
 }
 
 export interface RegimeSchedule {

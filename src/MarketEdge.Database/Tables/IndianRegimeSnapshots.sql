@@ -53,6 +53,7 @@ CREATE TABLE [dbo].[IndianRegimeSnapshots]
     [BenchmarkPctFrom52wHigh]  DECIMAL(10,4)  NULL,
     [VolatilityClose]          DECIMAL(10,4)  NULL,
 
+    [IsIntraday]               BIT            NOT NULL CONSTRAINT [DF_IndianRegimeSnapshots_IsIntraday] DEFAULT (0),
     [CreatedAt]                DATETIME2      NOT NULL CONSTRAINT [DF_IndianRegimeSnapshots_CreatedAt] DEFAULT GETUTCDATE(),
     CONSTRAINT [PK_IndianRegimeSnapshots] PRIMARY KEY CLUSTERED ([AsOfDate])
 );

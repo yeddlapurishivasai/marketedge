@@ -48,7 +48,8 @@ public record MarketRegimeDto(
     DateOnly? AsOfDate,
     bool Available,
     bool Stale,
-    string? StaleReason);
+    string? StaleReason,
+    bool IsIntraday);
 
 public record RegimeScheduleDto(
     string Market, bool Enabled, int HourLocal, DateTime? LastEnqueuedAt, DateTime UpdatedAt,

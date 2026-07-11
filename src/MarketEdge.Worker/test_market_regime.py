@@ -10,9 +10,11 @@ Exits non-zero on the first failed assertion.
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 
 import pandas as pd
 
+from market_hours import is_market_open, market_local_now
 from market_regime_runner import (
     combine_regime,
     compute_benchmark_context,
@@ -241,6 +243,36 @@ def test_combine_regime_unavailable_either_side() -> None:
                  ("Unavailable", "Unavailable")):
         r = combine_regime(*pair)
         assert r["regime"] == "Unavailable" and r["regime_tone"] == "grey", (pair, r)
+
+
+def test_market_hours_india_window_and_weekday() -> None:
+    """NSE 09:15–15:30 IST inclusive on weekdays; closed outside window and on weekends."""
+    utc = timezone.utc
+    # Tue 2024-06-04: 11:30 IST (06:00 UTC) open; 19:30 IST (14:00 UTC) closed.
+    assert is_market_open("india", datetime(2024, 6, 4, 6, 0, tzinfo=utc)) is True
+    assert is_market_open("india", datetime(2024, 6, 4, 14, 0, tzinfo=utc)) is False
+    # Boundaries: 09:15 IST (03:45 UTC) and 15:30 IST (10:00 UTC) inclusive; 15:31 excluded.
+    assert is_market_open("india", datetime(2024, 6, 4, 3, 45, tzinfo=utc)) is True
+    assert is_market_open("india", datetime(2024, 6, 4, 10, 0, tzinfo=utc)) is True
+    assert is_market_open("india", datetime(2024, 6, 4, 10, 1, tzinfo=utc)) is False
+    # Saturday 2024-06-08 11:30 IST -> weekend closed.
+    assert is_market_open("india", datetime(2024, 6, 8, 6, 0, tzinfo=utc)) is False
+
+
+def test_market_hours_us_dst_aware() -> None:
+    """NYSE 09:30–16:00 ET, DST-aware: 10:00 EDT open in June, 02:00 ET closed."""
+    utc = timezone.utc
+    # Tue 2024-06-04: 10:00 EDT (14:00 UTC) open; 02:00 EDT (06:00 UTC) closed.
+    assert is_market_open("us", datetime(2024, 6, 4, 14, 0, tzinfo=utc)) is True
+    assert is_market_open("us", datetime(2024, 6, 4, 6, 0, tzinfo=utc)) is False
+    # Winter (EST, UTC-5): 09:30 EST = 14:30 UTC open; 21:01 UTC (16:01 EST) closed.
+    assert is_market_open("us", datetime(2024, 1, 9, 14, 30, tzinfo=utc)) is True
+    assert is_market_open("us", datetime(2024, 1, 9, 21, 1, tzinfo=utc)) is False
+
+
+def test_market_hours_unknown_market_closed() -> None:
+    assert is_market_open("nope") is False
+    assert market_local_now("nope") is None
 
 
 def main() -> int:

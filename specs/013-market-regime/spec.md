@@ -177,11 +177,20 @@ CHECK ([Market] IN ('india','us'))
 ## <a name="benchmark-condition-signal"></a>Benchmark condition signal (§3.1)
 
 Computed in the worker (`compute_condition`) from the stored benchmark index bars (loaded from
-`{Market}BenchmarkBars1D` — no live fetch during the read). For each market, resolve the first
+`{Market}BenchmarkBars1D`). For each market, resolve the first
 benchmark with enough history (candidate order US: `^GSPC`; NSE: `^NSEI`). Build a series as of
 the latest stored bar and compute Close, SMA20, SMA50, SMA200, current volume, 50-day average
 volume, and the close/volume distances. The resulting label + facts are persisted into the
 regime snapshot; the API just reads them back.
+
+When the job runs **during market hours** (NSE 09:15–15:30 IST, NYSE 09:30–16:00 ET, weekdays —
+see the worker's `market_hours.py`), stage 1 overlays the **live intraday** last price of the
+benchmark and volatility indices onto today's provisional bar before persisting, so the condition
+and benchmark-returns context reflect the live index level. Breadth continues to use the latest
+stored universe closes (§3.2). Today's partial intraday volume is left untouched so the
+volume-confirmation rule never treats an in-progress session as a full day. Snapshots produced
+this way set `IsIntraday = 1`; the nightly EOD run overwrites the row with final closes and
+`IsIntraday = 0`.
 
 Label in **priority order** (first match wins):
 
@@ -254,10 +263,16 @@ the regime is reported as `Unavailable` (never inferred from the single present 
 ## Data freshness (§8)
 
 Every regime response carries: `market`, `asOfDate`, `benchmarkSymbol`, condition label,
-breadth score + label, an `available` flag, and a `stale` flag/warning when benchmark,
-volatility, or breadth data is missing or older than the latest trading date. Missing one
-component degrades only that component (condition unavailable ⇒ breadth still shown, and vice
-versa); it never fabricates a bullish/bearish label.
+breadth score + label, an `available` flag, an `isIntraday` flag, and a `stale` flag/warning
+when benchmark, volatility, or breadth data is missing or older than the latest trading date.
+Missing one component degrades only that component (condition unavailable ⇒ breadth still shown,
+and vice versa); it never fabricates a bullish/bearish label.
+
+`isIntraday` is `true` when the snapshot was computed during market hours with a live index
+price overlaid (see §3.1). Intraday, the effective `asOfDate` is the **freshest** component date
+(`max` of the condition and breadth as-of dates), so a live condition (today) can lead an
+EOD-only breadth date (yesterday); that lag is surfaced through the existing `stale` reason. The
+SPA renders a pulsing **LIVE** badge whenever `isIntraday` is set.
 
 ## Worker (Constitution III — heavy compute off the API)
 
@@ -265,7 +280,8 @@ New job type `market_regime` dispatched in `worker.py::process_message`, handled
 `market_regime_runner.run_market_regime_job(payload)` with a `StageTracker` roadmap:
 
 1. `benchmark` — fetch + upsert benchmark + volatility daily bars (~2y window) into
-   `{Market}BenchmarkBars1D` (reuses the ingestion fetch helpers).
+   `{Market}BenchmarkBars1D` (reuses the ingestion fetch helpers). During market hours it also
+   fetches each index's live last price and overlays it onto today's provisional bar (§3.1).
 2. `breadth` — compute the **whole regime**: load the active universe's `{Market}Bars1D` and
    the persisted benchmark bars, then compute participation, benchmark returns/52w-high
    distance/volatility, the benchmark condition (§3.1), the breadth composite (§3.2), and the
@@ -274,7 +290,8 @@ New job type `market_regime` dispatched in `worker.py::process_message`, handled
    `AsOfDate`), including the per-signal `SignalsJson` breakdown.
 
 The job reads only ingested stock bars for participation (no per-stock network calls); the
-only network calls are the 1–2 index downloads in stage 1.
+only network calls are the 1–2 index downloads in stage 1 (plus their live-price lookups when
+the market is open).
 
 ## API surface
 

@@ -53,6 +53,7 @@ CREATE TABLE [dbo].[USRegimeSnapshots]
     [BenchmarkPctFrom52wHigh]  DECIMAL(10,4)  NULL,
     [VolatilityClose]          DECIMAL(10,4)  NULL,
 
+    [IsIntraday]               BIT            NOT NULL CONSTRAINT [DF_USRegimeSnapshots_IsIntraday] DEFAULT (0),
     [CreatedAt]                DATETIME2      NOT NULL CONSTRAINT [DF_USRegimeSnapshots_CreatedAt] DEFAULT GETUTCDATE(),
     CONSTRAINT [PK_USRegimeSnapshots] PRIMARY KEY CLUSTERED ([AsOfDate])
 );

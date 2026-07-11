@@ -4,6 +4,7 @@ pyodbc==5.*
 yfinance==0.2.*
 pandas==2.*
 numpy==2.*
+tzdata==2025.*
 lxml==5.*
 gunicorn==23.*
 python-dotenv==1.*

@@ -68,6 +68,11 @@ export function RegimeBanner({ market, onOpen }: { market: Market; onOpen?: () =
           {regime.breadth.label}{regime.breadth.score != null ? ` (${regime.breadth.score})` : ''}
         </strong>
       </span>
+      {regime.isIntraday && (
+        <span className="regime-live" title="Reflects live intraday index price (market is open)">
+          ● LIVE
+        </span>
+      )}
       {regime.stale && (
         <span className="regime-stale" title={regime.staleReason ?? 'Data may be stale'}>
           <AlertTriangle size={12} /> stale
@@ -169,6 +174,11 @@ export default function RegimePage() {
             </div>
             <div className="regime-hero-meta">
               <div>as of <strong>{fmtDate(regime.asOfDate)}</strong></div>
+              {regime.isIntraday && (
+                <div className="regime-live" title="Reflects live intraday index price (market is open)">
+                  ● LIVE · intraday
+                </div>
+              )}
               {regime.stale && (
                 <div className="regime-stale" title={regime.staleReason ?? ''}>
                   <AlertTriangle size={13} /> {regime.staleReason ?? 'stale'}

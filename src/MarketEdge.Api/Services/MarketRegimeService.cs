@@ -70,7 +70,7 @@ public class MarketRegimeService : IMarketRegimeService
 
         return new MarketRegimeDto(
             market, row.Regime, row.RegimeLabel, row.RegimeTone, row.Posture ?? string.Empty,
-            condition, breadth, row.AsOfDate, row.Available, stale, staleReason);
+            condition, breadth, row.AsOfDate, row.Available, stale, staleReason, row.IsIntraday);
     }
 
     private static MarketRegimeDto Unavailable(string market, string reason)
@@ -84,7 +84,7 @@ public class MarketRegimeService : IMarketRegimeService
         return new MarketRegimeDto(
             market, "Unavailable", "Unavailable", "grey",
             "Insufficient data to determine market context.",
-            condition, breadth, null, false, true, reason);
+            condition, breadth, null, false, true, reason, false);
     }
 
     private static IReadOnlyList<BreadthSignalDto> DeserializeSignals(string? json)

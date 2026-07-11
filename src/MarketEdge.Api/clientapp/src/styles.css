@@ -1579,6 +1579,13 @@ body {
   font-weight: 600; font-size: 0.78rem;
 }
 
+.regime-live {
+  display: inline-flex; align-items: center; gap: 4px; color: var(--success, #16a34a);
+  font-weight: 700; font-size: 0.78rem; letter-spacing: 0.04em;
+  animation: regime-live-pulse 1.6s ease-in-out infinite;
+}
+@keyframes regime-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+
 .regime-hero {
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
   padding: 20px; flex-wrap: wrap;

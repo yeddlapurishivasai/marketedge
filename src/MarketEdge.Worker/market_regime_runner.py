@@ -31,6 +31,7 @@ import yfinance as yf
 from config import Config
 from db import get_connection, update_job_status
 from job_stages import StageTracker
+from market_hours import is_market_open, market_local_now
 
 logger = logging.getLogger(__name__)
 
@@ -465,6 +466,71 @@ def _fetch_index_frame(symbol: str) -> pd.DataFrame | None:
     return raw.dropna(how="all").sort_index()
 
 
+def _fetch_live_index_price(symbol: str) -> float | None:
+    """Best-effort **live** last price for an index-class symbol (used during market hours).
+
+    Tries ``fast_info`` (cheap, near-real-time) first, then a 1-minute intraday history as a
+    fallback. Returns ``None`` on any failure so the caller degrades to the stored daily bar.
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        fi = getattr(ticker, "fast_info", None)
+        if fi is not None:
+            for accessor in (
+                lambda: fi["lastPrice"],
+                lambda: fi["last_price"],
+                lambda: fi.last_price,  # type: ignore[union-attr]
+            ):
+                try:
+                    price = accessor()
+                except Exception:  # noqa: BLE001 - try the next accessor shape
+                    continue
+                p = _f(price)
+                if p is not None and p > 0:
+                    return p
+    except Exception as exc:  # noqa: BLE001 - fall through to intraday history
+        logger.debug("fast_info live price failed for %s: %s", symbol, exc)
+
+    try:
+        intraday = yf.Ticker(symbol).history(period="1d", interval="1m", auto_adjust=False)
+        if intraday is not None and not intraday.empty and "Close" in intraday.columns:
+            closes = intraday["Close"].dropna()
+            if not closes.empty:
+                p = _f(float(closes.iloc[-1]))
+                if p is not None and p > 0:
+                    return p
+    except Exception as exc:  # noqa: BLE001 - best-effort; caller degrades gracefully
+        logger.warning("Live intraday price fetch failed for %s: %s", symbol, exc)
+    return None
+
+
+def _apply_live_price(frame: pd.DataFrame | None, trading_date: date, price: float) -> pd.DataFrame | None:
+    """Overlay a live ``price`` onto ``trading_date``'s row (provisional intraday close).
+
+    Updates Close (and keeps High consistent) for an existing row, or appends a new provisional
+    bar when the day is missing. Volume is intentionally left untouched: today's partial volume
+    stays as-is (or NULL for a fresh row) so the condition's volume-confirmation never treats a
+    partial session as a full day. Returns the (possibly new) frame.
+    """
+    ts = pd.Timestamp(trading_date)
+    if frame is None or frame.empty:
+        frame = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+    if ts in frame.index:
+        frame.loc[ts, "Close"] = price
+        if "High" in frame.columns:
+            cur_high = frame.loc[ts, "High"]
+            frame.loc[ts, "High"] = price if pd.isna(cur_high) else max(float(cur_high), price)
+        if "Low" in frame.columns:
+            cur_low = frame.loc[ts, "Low"]
+            frame.loc[ts, "Low"] = price if pd.isna(cur_low) else min(float(cur_low), price)
+    else:
+        row = {c: None for c in frame.columns}
+        row.update({"Open": price, "High": price, "Low": price, "Close": price})
+        frame.loc[ts] = pd.Series(row)
+        frame = frame.sort_index()
+    return frame
+
+
 def _f(value: Any) -> float | None:
     if value is None:
         return None
@@ -539,9 +605,9 @@ def _persist_regime(conn, market: str, as_of: date, data: dict[str, Any]) -> Non
              PctAboveSma10, PctAboveSma20, PctAboveSma50, PctAboveSma200,
              PctSma20AboveSma50, PctSma50AboveSma200,
              BenchmarkYtdPct, Benchmark1wPct, Benchmark1mPct, Benchmark1yPct,
-             BenchmarkPctFrom52wHigh, VolatilityClose)
+             BenchmarkPctFrom52wHigh, VolatilityClose, IsIntraday)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ?,                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         as_of, data.get("condition_as_of"), data.get("breadth_as_of"),
         data.get("benchmark_symbol"), data.get("volatility_symbol"),
@@ -563,6 +629,7 @@ def _persist_regime(conn, market: str, as_of: date, data: dict[str, Any]) -> Non
         data.get("benchmark_ytd_pct"), data.get("benchmark_1w_pct"),
         data.get("benchmark_1m_pct"), data.get("benchmark_1y_pct"),
         data.get("benchmark_pct_from_52w_high"), data.get("volatility_close"),
+        1 if data.get("is_intraday") else 0,
     )
     conn.commit()
 
@@ -596,18 +663,37 @@ def run_market_regime_job(payload: dict) -> None:
         )
         tracker.publish()
 
-        # 1. Refresh benchmark + volatility index bars (best-effort per symbol).
+        # 1. Refresh benchmark + volatility index bars (best-effort per symbol). During market
+        #    hours, overlay each index's live last price onto today's provisional bar so the
+        #    condition/context reflect the live index level (breadth stays on stored closes).
         tracker.start("benchmark")
+        market_open = is_market_open(market)
+        local_now = market_local_now(market)
+        trading_date = local_now.date() if local_now is not None else None
+        live_applied = False
+
         bench_frame = _fetch_index_frame(benchmark_symbol)
+        if market_open and trading_date is not None:
+            live = _fetch_live_index_price(benchmark_symbol)
+            if live is not None:
+                bench_frame = _apply_live_price(bench_frame, trading_date, live)
+                live_applied = True
         if bench_frame is not None:
             _upsert_bench_bars(conn, _table(_BENCH_BARS, market), benchmark_symbol, bench_frame)
+
         vol_frame = None
         if volatility_symbol:
             vol_frame = _fetch_index_frame(volatility_symbol)
+            if market_open and trading_date is not None:
+                vlive = _fetch_live_index_price(volatility_symbol)
+                if vlive is not None:
+                    vol_frame = _apply_live_price(vol_frame, trading_date, vlive)
             if vol_frame is not None:
                 _upsert_bench_bars(conn, _table(_BENCH_BARS, market), volatility_symbol, vol_frame)
+
         detail = f"benchmark {'ok' if bench_frame is not None else 'unavailable'}, " \
-                 f"volatility {'ok' if vol_frame is not None else 'unavailable'}"
+                 f"volatility {'ok' if vol_frame is not None else 'unavailable'}" \
+                 f"{' (intraday live)' if live_applied else ''}"
         tracker.complete("benchmark", detail=detail)
 
         # 2. Compute the full regime: participation + benchmark condition + breadth + combine.
@@ -639,10 +725,16 @@ def run_market_regime_job(payload: dict) -> None:
         breadth = compute_breadth(facts)
         regime = combine_regime(condition["condition_label"], breadth["breadth_label"])
 
-        as_of = breadth_as_of or condition_as_of
+        # As-of is the freshest available component date; intraday this is the live condition
+        # date (today), which may lead a still-EOD breadth date (surfaced by the freshness lag).
+        candidate_dates = [d for d in (condition_as_of, breadth_as_of) if d is not None]
+        as_of = max(candidate_dates) if candidate_dates else None
         if as_of is None:
             raise ValueError(f"No ingested bars (universe or benchmark) for market {market}")
-        tracker.complete("breadth", detail=f"{participation['evaluated_count']} stocks · {regime['regime']}")
+        # A snapshot is intraday only when a live index price was actually overlaid this run.
+        is_intraday = bool(live_applied)
+        live_tag = " · intraday" if is_intraday else ""
+        tracker.complete("breadth", detail=f"{participation['evaluated_count']} stocks · {regime['regime']}{live_tag}")
 
         # 3. Persist the fully-computed regime snapshot (idempotent per as-of date).
         tracker.start("persist")
@@ -652,6 +744,7 @@ def run_market_regime_job(payload: dict) -> None:
             "volatility_close": vol_close,
             "evaluated_count": participation["evaluated_count"],
             "breadth_as_of": breadth_as_of,
+            "is_intraday": is_intraday,
             "signals_json": json.dumps(breadth["signals"]),
             "available": condition["condition_available"] and breadth["breadth_available"],
             **participation,
@@ -661,7 +754,7 @@ def run_market_regime_job(payload: dict) -> None:
             **regime,
         }
         _persist_regime(conn, market, as_of, snapshot)
-        tracker.complete("persist", detail=str(as_of))
+        tracker.complete("persist", detail=f"{as_of}{live_tag}")
 
         metrics = {
             "market": market,
