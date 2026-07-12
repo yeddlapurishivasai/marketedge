@@ -17,6 +17,7 @@ import ScannersPage from './pages/ScannersPage';
 import FundamentalsPage from './pages/FundamentalsPage';
 import BreakoutsPage from './pages/BreakoutsPage';
 import RegimePage, { RegimeBanner } from './pages/RegimePage';
+import AuthMenu from './auth/AuthMenu';
 import './styles.css';
 
 // Theme context
@@ -80,6 +81,7 @@ function NavBar() {
           <button className="btn btn-ghost" onClick={toggle} title="Toggle theme">
             {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
           </button>
+          <AuthMenu />
         </div>
       </div>
     </header>

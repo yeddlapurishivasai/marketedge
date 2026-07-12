@@ -1,3 +1,28 @@
+type TokenProvider = () => Promise<string | null>;
+
+let tokenProvider: TokenProvider | null = null;
+
+/**
+ * Registered by the auth layer (AuthProvider). When set, every API request
+ * carries an Authorization: Bearer <token> header. When null (auth disabled),
+ * requests are sent without a token.
+ */
+export function setTokenProvider(provider: TokenProvider | null): void {
+  tokenProvider = provider;
+}
+
+async function authFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  if (tokenProvider) {
+    const token = await tokenProvider();
+    if (token) {
+      const headers = new Headers(init.headers);
+      headers.set('Authorization', `Bearer ${token}`);
+      init = { ...init, headers };
+    }
+  }
+  return fetch(input, init);
+}
+
 export interface Sector {
   id: number;
   sectorName: string;
@@ -29,13 +54,13 @@ const BASE = '/api';
 
 export async function fetchSectors(market: Market, testSampleOnly = false): Promise<Sector[]> {
   const qs = testSampleOnly ? '?testSampleOnly=true' : '';
-  const res = await fetch(`${BASE}/${market}/sectors${qs}`);
+  const res = await authFetch(`${BASE}/${market}/sectors${qs}`);
   if (!res.ok) throw new Error('Failed to fetch sectors');
   return res.json();
 }
 
 export async function createSector(market: Market, sectorName: string): Promise<Sector> {
-  const res = await fetch(`${BASE}/${market}/sectors`, {
+  const res = await authFetch(`${BASE}/${market}/sectors`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sectorName })
@@ -45,7 +70,7 @@ export async function createSector(market: Market, sectorName: string): Promise<
 }
 
 export async function renameSector(market: Market, id: number, sectorName: string): Promise<void> {
-  const res = await fetch(`${BASE}/${market}/sectors/${id}`, {
+  const res = await authFetch(`${BASE}/${market}/sectors/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sectorName })
@@ -54,7 +79,7 @@ export async function renameSector(market: Market, id: number, sectorName: strin
 }
 
 export async function deleteSector(market: Market, id: number): Promise<void> {
-  const res = await fetch(`${BASE}/${market}/sectors/${id}`, { method: 'DELETE' });
+  const res = await authFetch(`${BASE}/${market}/sectors/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Cannot delete sector with stocks');
 }
 
@@ -67,13 +92,13 @@ export async function fetchStocks(
   if (params.sectorId) sp.set('sectorId', params.sectorId.toString());
   sp.set('page', (params.page || 1).toString());
   sp.set('pageSize', (params.pageSize || 50).toString());
-  const res = await fetch(`${BASE}/${market}/stocks?${sp}`);
+  const res = await authFetch(`${BASE}/${market}/stocks?${sp}`);
   if (!res.ok) throw new Error('Failed to fetch stocks');
   return res.json();
 }
 
 export async function createStock(market: Market, data: { symbol: string; companyName: string; sectorId: number; broadSector?: string; isFno?: boolean }): Promise<Stock> {
-  const res = await fetch(`${BASE}/${market}/stocks`, {
+  const res = await authFetch(`${BASE}/${market}/stocks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
@@ -83,7 +108,7 @@ export async function createStock(market: Market, data: { symbol: string; compan
 }
 
 export async function updateStock(market: Market, id: number, data: { companyName?: string; sectorId?: number; broadSector?: string; isFno?: boolean }): Promise<void> {
-  const res = await fetch(`${BASE}/${market}/stocks/${id}`, {
+  const res = await authFetch(`${BASE}/${market}/stocks/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
@@ -92,12 +117,12 @@ export async function updateStock(market: Market, id: number, data: { companyNam
 }
 
 export async function deleteStock(market: Market, id: number): Promise<void> {
-  const res = await fetch(`${BASE}/${market}/stocks/${id}`, { method: 'DELETE' });
+  const res = await authFetch(`${BASE}/${market}/stocks/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Failed to delete stock');
 }
 
 export async function moveStocks(market: Market, stockIds: number[], targetSectorId: number): Promise<void> {
-  const res = await fetch(`${BASE}/${market}/stocks/move`, {
+  const res = await authFetch(`${BASE}/${market}/stocks/move`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ stockIds, targetSectorId })
@@ -138,19 +163,19 @@ export async function fetchJobRuns(params?: { market?: string; jobType?: string;
   if (params?.jobType) sp.set('jobType', params.jobType);
   sp.set('page', (params?.page || 1).toString());
   sp.set('pageSize', (params?.pageSize || 20).toString());
-  const res = await fetch(`${BASE}/jobs?${sp}`);
+  const res = await authFetch(`${BASE}/jobs?${sp}`);
   if (!res.ok) throw new Error('Failed to fetch job runs');
   return res.json();
 }
 
 export async function fetchJobRun(id: number): Promise<JobRun> {
-  const res = await fetch(`${BASE}/jobs/${id}`);
+  const res = await authFetch(`${BASE}/jobs/${id}`);
   if (!res.ok) throw new Error('Failed to fetch job run');
   return res.json();
 }
 
 export async function cancelJobRun(id: number): Promise<void> {
-  const res = await fetch(`${BASE}/jobs/${id}/cancel`, { method: 'POST' });
+  const res = await authFetch(`${BASE}/jobs/${id}/cancel`, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to cancel job run');
 }
 
@@ -164,7 +189,7 @@ export interface TriggerIngestionRequest {
 }
 
 export async function triggerIngestion(market: Market, request: TriggerIngestionRequest): Promise<{ runId: number }> {
-  const res = await fetch(`${BASE}/${market}/ingestion/trigger`, {
+  const res = await authFetch(`${BASE}/${market}/ingestion/trigger`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request)
@@ -187,7 +212,7 @@ export interface TriggerAnalysisRequest {
 }
 
 export async function triggerAnalysis(market: Market, request?: TriggerAnalysisRequest): Promise<{ runId: number }> {
-  const res = await fetch(`${BASE}/${market}/analysis/trigger`, {
+  const res = await authFetch(`${BASE}/${market}/analysis/trigger`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request || {})
@@ -246,7 +271,7 @@ export interface Stage2Summary {
 }
 
 export async function fetchStage2Summary(market: Market): Promise<Stage2Summary> {
-  const res = await fetch(`${BASE}/${market}/analysis/summary`);
+  const res = await authFetch(`${BASE}/${market}/analysis/summary`);
   if (!res.ok) throw new Error('Failed to fetch summary');
   return res.json();
 }
@@ -255,7 +280,7 @@ export async function fetchStage2Stocks(market: Market, runId: number, params?: 
   const sp = new URLSearchParams();
   if (params?.classification) sp.set('classification', params.classification);
   if (params?.sectorId) sp.set('sectorId', params.sectorId.toString());
-  const res = await fetch(`${BASE}/${market}/analysis/runs/${runId}/stocks?${sp}`);
+  const res = await authFetch(`${BASE}/${market}/analysis/runs/${runId}/stocks?${sp}`);
   if (!res.ok) throw new Error('Failed to fetch stage 2 stocks');
   return res.json();
 }
@@ -272,7 +297,7 @@ export interface SectorRotation {
 }
 
 export async function fetchSectorRotation(market: Market, runId: number): Promise<SectorRotation[]> {
-  const res = await fetch(`${BASE}/${market}/analysis/runs/${runId}/sector-rotation`);
+  const res = await authFetch(`${BASE}/${market}/analysis/runs/${runId}/sector-rotation`);
   if (!res.ok) throw new Error('Failed to fetch sector rotation');
   return res.json();
 }
@@ -285,7 +310,7 @@ export interface Stage2History {
 }
 
 export async function fetchStage2History(market: Market, maxRuns = 10): Promise<Stage2History[]> {
-  const res = await fetch(`${BASE}/${market}/analysis/history?maxRuns=${maxRuns}`);
+  const res = await authFetch(`${BASE}/${market}/analysis/history?maxRuns=${maxRuns}`);
   if (!res.ok) throw new Error('Failed to fetch history');
   return res.json();
 }
@@ -297,7 +322,7 @@ export interface SectorRotationHistory {
 }
 
 export async function fetchRotationHistory(market: Market, maxRuns = 12): Promise<SectorRotationHistory[]> {
-  const res = await fetch(`${BASE}/${market}/analysis/rotation-history?maxRuns=${maxRuns}`);
+  const res = await authFetch(`${BASE}/${market}/analysis/rotation-history?maxRuns=${maxRuns}`);
   if (!res.ok) throw new Error('Failed to fetch rotation history');
   return res.json();
 }
@@ -397,26 +422,26 @@ export interface LookupBar {
 }
 
 export async function searchLookup(market: Market, q: string): Promise<LookupCandidate[]> {
-  const res = await fetch(`${BASE}/${market}/lookup/search?q=${encodeURIComponent(q)}`);
+  const res = await authFetch(`${BASE}/${market}/lookup/search?q=${encodeURIComponent(q)}`);
   if (!res.ok) throw new Error('Failed to search symbols');
   return res.json();
 }
 
 export async function fetchLookupDetail(market: Market, symbol: string): Promise<StockLookupDetail> {
-  const res = await fetch(`${BASE}/${market}/lookup/${encodeURIComponent(symbol)}`);
+  const res = await authFetch(`${BASE}/${market}/lookup/${encodeURIComponent(symbol)}`);
   if (res.status === 404) throw new Error(`No data found for '${symbol}' in ${market.toUpperCase()}`);
   if (!res.ok) throw new Error('Failed to load symbol detail');
   return res.json();
 }
 
 export async function fetchLookupBars(market: Market, symbol: string, timeframe: 'daily' | 'weekly'): Promise<LookupBar[]> {
-  const res = await fetch(`${BASE}/${market}/lookup/${encodeURIComponent(symbol)}/bars?timeframe=${timeframe}`);
+  const res = await authFetch(`${BASE}/${market}/lookup/${encodeURIComponent(symbol)}/bars?timeframe=${timeframe}`);
   if (!res.ok) throw new Error('Failed to load price bars');
   return res.json();
 }
 
 export async function refreshStockData(market: Market, symbol: string): Promise<{ runId: number }> {
-  const res = await fetch(`${BASE}/${market}/lookup/${encodeURIComponent(symbol)}/refresh-stock`, { method: 'POST' });
+  const res = await authFetch(`${BASE}/${market}/lookup/${encodeURIComponent(symbol)}/refresh-stock`, { method: 'POST' });
   if (!res.ok) throw new Error((await res.text()) || 'Failed to refresh stock');
   return res.json();
 }
@@ -456,13 +481,13 @@ export interface ScannerSchedule {
 }
 
 export async function fetchScanners(market: Market): Promise<ScannerInfo[]> {
-  const res = await fetch(`${BASE}/${market}/scanners`);
+  const res = await authFetch(`${BASE}/${market}/scanners`);
   if (!res.ok) throw new Error('Failed to load scanners');
   return res.json();
 }
 
 export async function triggerScanner(market: Market, body: { scannerName?: string | null; universe?: string; manageTrades?: boolean }): Promise<{ runId: number }> {
-  const res = await fetch(`${BASE}/${market}/scanners/trigger`, {
+  const res = await authFetch(`${BASE}/${market}/scanners/trigger`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
@@ -472,26 +497,26 @@ export async function triggerScanner(market: Market, body: { scannerName?: strin
 }
 
 export async function fetchScannerDates(market: Market, scannerName: string): Promise<string[]> {
-  const res = await fetch(`${BASE}/${market}/scanners/${encodeURIComponent(scannerName)}/dates`);
+  const res = await authFetch(`${BASE}/${market}/scanners/${encodeURIComponent(scannerName)}/dates`);
   if (!res.ok) throw new Error('Failed to load scan dates');
   return res.json();
 }
 
 export async function fetchScannerResults(market: Market, scannerName: string, date?: string): Promise<ScannerResult[]> {
   const qs = date ? `?date=${encodeURIComponent(date)}` : '';
-  const res = await fetch(`${BASE}/${market}/scanners/${encodeURIComponent(scannerName)}/results${qs}`);
+  const res = await authFetch(`${BASE}/${market}/scanners/${encodeURIComponent(scannerName)}/results${qs}`);
   if (!res.ok) throw new Error('Failed to load scanner results');
   return res.json();
 }
 
 export async function fetchScannerSchedule(market: Market): Promise<ScannerSchedule> {
-  const res = await fetch(`${BASE}/${market}/scanners/schedule`);
+  const res = await authFetch(`${BASE}/${market}/scanners/schedule`);
   if (!res.ok) throw new Error('Failed to load schedule');
   return res.json();
 }
 
 export async function updateScannerSchedule(market: Market, body: { enabled: boolean; intervalMinutes?: number }): Promise<ScannerSchedule> {
-  const res = await fetch(`${BASE}/${market}/scanners/schedule`, {
+  const res = await authFetch(`${BASE}/${market}/scanners/schedule`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
@@ -511,13 +536,13 @@ export interface JobSchedule {
 }
 
 export async function fetchFundamentalsSchedule(market: Market): Promise<JobSchedule> {
-  const res = await fetch(`${BASE}/${market}/ingestion/fundamentals-schedule`);
+  const res = await authFetch(`${BASE}/${market}/ingestion/fundamentals-schedule`);
   if (!res.ok) throw new Error('Failed to load fundamentals schedule');
   return res.json();
 }
 
 export async function updateFundamentalsSchedule(market: Market, body: { enabled: boolean; hourLocal?: number }): Promise<JobSchedule> {
-  const res = await fetch(`${BASE}/${market}/ingestion/fundamentals-schedule`, {
+  const res = await authFetch(`${BASE}/${market}/ingestion/fundamentals-schedule`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
@@ -527,13 +552,13 @@ export async function updateFundamentalsSchedule(market: Market, body: { enabled
 }
 
 export async function fetchStage2Schedule(market: Market): Promise<JobSchedule> {
-  const res = await fetch(`${BASE}/${market}/analysis/schedule`);
+  const res = await authFetch(`${BASE}/${market}/analysis/schedule`);
   if (!res.ok) throw new Error('Failed to load stage2 schedule');
   return res.json();
 }
 
 export async function updateStage2Schedule(market: Market, body: { enabled: boolean; hourLocal?: number }): Promise<JobSchedule> {
-  const res = await fetch(`${BASE}/${market}/analysis/schedule`, {
+  const res = await authFetch(`${BASE}/${market}/analysis/schedule`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
@@ -617,13 +642,13 @@ export type FundamentalScanner =
 
 export async function fetchFundamentals(market: Market, scanner: FundamentalScanner = 'all'): Promise<FundamentalRow[]> {
   const qs = scanner && scanner !== 'all' ? `?scanner=${encodeURIComponent(scanner)}` : '';
-  const res = await fetch(`${BASE}/${market}/fundamentals${qs}`);
+  const res = await authFetch(`${BASE}/${market}/fundamentals${qs}`);
   if (!res.ok) throw new Error('Failed to load fundamentals');
   return res.json();
 }
 
 export async function fetchFundamentalDetail(market: Market, symbol: string): Promise<FundamentalDetail> {
-  const res = await fetch(`${BASE}/${market}/fundamentals/${encodeURIComponent(symbol)}`);
+  const res = await authFetch(`${BASE}/${market}/fundamentals/${encodeURIComponent(symbol)}`);
   if (!res.ok) throw new Error('Failed to load fundamental detail');
   return res.json();
 }
@@ -669,7 +694,7 @@ export interface FundamentalIdeaRow {
 }
 
 export async function fetchFundamentalIdeas(market: Market): Promise<FundamentalIdeaRow[]> {
-  const res = await fetch(`${BASE}/${market}/fundamentals/ideas`);
+  const res = await authFetch(`${BASE}/${market}/fundamentals/ideas`);
   if (!res.ok) throw new Error('Failed to load fundamental ideas');
   return res.json();
 }
@@ -682,7 +707,7 @@ export async function triggerFundamentalsRefresh(
   market: Market,
   body: { force?: boolean; universe?: 'stage2' | 'all'; missingOnly?: boolean } = {},
 ): Promise<{ runId: number }> {
-  const res = await fetch(`${BASE}/${market}/fundamentals/trigger`, {
+  const res = await authFetch(`${BASE}/${market}/fundamentals/trigger`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ force: body.force ?? false, universe: body.universe ?? 'stage2', missingOnly: body.missingOnly ?? false }),
@@ -692,7 +717,7 @@ export async function triggerFundamentalsRefresh(
 }
 
 export async function saveFundamentalNote(market: Market, symbol: string, noteText: string): Promise<void> {
-  const res = await fetch(`${BASE}/${market}/fundamentals/${encodeURIComponent(symbol)}/note`, {
+  const res = await authFetch(`${BASE}/${market}/fundamentals/${encodeURIComponent(symbol)}/note`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ noteText })
@@ -757,13 +782,13 @@ export async function fetchBreakouts(
   if (params.status) sp.set('status', params.status);
   if (params.tradeType) sp.set('tradeType', params.tradeType);
   const qs = sp.toString();
-  const res = await fetch(`${BASE}/${market}/breakouts${qs ? '?' + qs : ''}`);
+  const res = await authFetch(`${BASE}/${market}/breakouts${qs ? '?' + qs : ''}`);
   if (!res.ok) throw new Error('Failed to fetch breakouts');
   return res.json();
 }
 
 export async function fetchBreakoutStats(market: Market): Promise<BreakoutStats> {
-  const res = await fetch(`${BASE}/${market}/breakouts/stats`);
+  const res = await authFetch(`${BASE}/${market}/breakouts/stats`);
   if (!res.ok) throw new Error('Failed to fetch breakout stats');
   return res.json();
 }
@@ -797,7 +822,7 @@ export async function fetchBreakoutPnl(
 ): Promise<BreakoutPnlSummary> {
   const sp = new URLSearchParams({ from, to });
   if (tradeType) sp.set('tradeType', tradeType);
-  const res = await fetch(`${BASE}/${market}/breakouts/pnl?${sp}`);
+  const res = await authFetch(`${BASE}/${market}/breakouts/pnl?${sp}`);
   if (!res.ok) throw new Error('Failed to fetch breakout P&L');
   return res.json();
 }
@@ -809,7 +834,7 @@ export async function fetchBreakoutsByDay(
 ): Promise<BreakoutDay> {
   const sp = new URLSearchParams({ date });
   if (tradeType) sp.set('tradeType', tradeType);
-  const res = await fetch(`${BASE}/${market}/breakouts/day?${sp}`);
+  const res = await authFetch(`${BASE}/${market}/breakouts/day?${sp}`);
   if (!res.ok) throw new Error('Failed to fetch day breakouts');
   return res.json();
 }
@@ -839,7 +864,7 @@ export async function fetchNearPivots(
   if (params.tradeType) sp.set('tradeType', params.tradeType);
   if (params.maxDistancePct != null) sp.set('maxDistancePct', String(params.maxDistancePct));
   const qs = sp.toString();
-  const res = await fetch(`${BASE}/${market}/breakouts/near-pivot${qs ? '?' + qs : ''}`);
+  const res = await authFetch(`${BASE}/${market}/breakouts/near-pivot${qs ? '?' + qs : ''}`);
   if (!res.ok) throw new Error('Failed to fetch near-pivot candidates');
   return res.json();
 }
@@ -859,7 +884,7 @@ export interface ScannerPerformance {
 }
 
 export async function fetchScannerPerformance(market: Market): Promise<ScannerPerformance[]> {
-  const res = await fetch(`${BASE}/${market}/scanners/performance`);
+  const res = await authFetch(`${BASE}/${market}/scanners/performance`);
   if (!res.ok) throw new Error('Failed to fetch scanner performance');
   return res.json();
 }
@@ -878,7 +903,7 @@ export interface ScoringWeight {
 }
 
 export async function fetchScoringWeights(market: Market): Promise<ScoringWeight[]> {
-  const res = await fetch(`${BASE}/${market}/scoring/weights`);
+  const res = await authFetch(`${BASE}/${market}/scoring/weights`);
   if (!res.ok) throw new Error('Failed to fetch scoring weights');
   return res.json();
 }
@@ -888,7 +913,7 @@ export async function updateScoringWeight(
   id: number,
   update: { weight?: number; manualOverride?: boolean }
 ): Promise<ScoringWeight> {
-  const res = await fetch(`${BASE}/${market}/scoring/weights/${id}`, {
+  const res = await authFetch(`${BASE}/${market}/scoring/weights/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(update),
@@ -906,7 +931,7 @@ export interface DatabaseInfo {
 }
 
 export async function fetchDatabaseInfo(): Promise<DatabaseInfo> {
-  const res = await fetch(`${BASE}/admin/database/info`);
+  const res = await authFetch(`${BASE}/admin/database/info`);
   if (!res.ok) throw new Error('Failed to fetch database info');
   return res.json();
 }
@@ -920,7 +945,7 @@ export interface DatabaseExport {
 
 // Trigger a server-side export; the .bacpac is uploaded to storage and a SAS download URL is returned.
 export async function exportDatabase(): Promise<DatabaseExport> {
-  const res = await fetch(`${BASE}/admin/database/export`, { method: 'POST' });
+  const res = await authFetch(`${BASE}/admin/database/export`, { method: 'POST' });
   if (!res.ok) throw new Error((await res.text()) || 'Export failed');
   return res.json();
 }
@@ -929,7 +954,7 @@ export async function importDatabase(file: File, targetDatabase?: string): Promi
   const fd = new FormData();
   fd.append('file', file);
   if (targetDatabase) fd.append('targetDatabase', targetDatabase);
-  const res = await fetch(`${BASE}/admin/database/import`, { method: 'POST', body: fd });
+  const res = await authFetch(`${BASE}/admin/database/import`, { method: 'POST', body: fd });
   if (!res.ok) throw new Error((await res.text()) || 'Import failed');
   return res.json();
 }
@@ -999,25 +1024,25 @@ export interface RegimeSchedule {
 }
 
 export async function fetchRegime(market: Market): Promise<MarketRegime> {
-  const res = await fetch(`${BASE}/${market}/regime`);
+  const res = await authFetch(`${BASE}/${market}/regime`);
   if (!res.ok) throw new Error('Failed to load market regime');
   return res.json();
 }
 
 export async function refreshRegime(market: Market): Promise<{ runId: number }> {
-  const res = await fetch(`${BASE}/${market}/regime/refresh`, { method: 'POST' });
+  const res = await authFetch(`${BASE}/${market}/regime/refresh`, { method: 'POST' });
   if (!res.ok) throw new Error((await res.text()) || 'Failed to refresh regime');
   return res.json();
 }
 
 export async function fetchRegimeSchedule(market: Market): Promise<RegimeSchedule> {
-  const res = await fetch(`${BASE}/${market}/regime/schedule`);
+  const res = await authFetch(`${BASE}/${market}/regime/schedule`);
   if (!res.ok) throw new Error('Failed to load regime schedule');
   return res.json();
 }
 
 export async function updateRegimeSchedule(market: Market, body: { enabled: boolean; hourLocal?: number }): Promise<RegimeSchedule> {
-  const res = await fetch(`${BASE}/${market}/regime/schedule`, {
+  const res = await authFetch(`${BASE}/${market}/regime/schedule`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)

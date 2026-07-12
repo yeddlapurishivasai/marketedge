@@ -8,6 +8,19 @@ namespace MarketEdge.Api.E2ETests;
 
 public class TestWebApplicationFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
+    static TestWebApplicationFactory()
+    {
+        // AddMarketEdgeAuth() reads AzureAd:Enabled eagerly while the host is being
+        // built (before Build()), so WebApplicationFactory's ConfigureAppConfiguration
+        // overrides land too late to influence it. An environment variable is picked up
+        // by WebApplication.CreateBuilder's AddEnvironmentVariables and therefore wins.
+        //
+        // Force auth OFF for the whole suite so tests never depend on a developer's local
+        // appsettings.Development.json (which may enable auth for manual login testing).
+        // The value is uniform, so this is safe under xUnit's parallel test execution.
+        Environment.SetEnvironmentVariable("AzureAd__Enabled", "false");
+    }
+
     private readonly string _dbName = $"MarketEdge_Test_{Guid.NewGuid():N}";
 
     public string ConnectionString =>
