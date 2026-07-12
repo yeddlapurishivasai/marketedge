@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@azure/msal-browser": "^5.17.0",
+    "@azure/msal-react": "^5.5.2",
     "lightweight-charts": "^5.2.0",
     "lucide-react": "^1.17.0",
     "react": "^19.2.6",

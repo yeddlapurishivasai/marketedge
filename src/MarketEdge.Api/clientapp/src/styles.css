@@ -1620,3 +1620,29 @@ body {
 .regime-signals th { text-align: left; color: var(--text-muted); font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--border); }
 .regime-signals td { padding: 4px 6px; border-bottom: 1px solid var(--border-light); }
 .regime-signal-th { color: var(--text-muted); }
+
+/* ── Auth ── */
+.auth-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+}
+.auth-menu {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 8px;
+  margin-left: 4px;
+  border-left: 1px solid var(--border);
+}
+.auth-user {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
