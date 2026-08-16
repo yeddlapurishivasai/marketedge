@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, Fragment } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { Market, Breakout, BreakoutStats, BreakoutProfile, ScannerPerformance, ScoringWeight, BreakoutPnlSummary, BreakoutDay, NearPivot } from '../api';
-import { fetchBreakouts, fetchBreakoutStats, fetchScannerPerformance, fetchScoringWeights, updateScoringWeight, fetchBreakoutPnl, fetchBreakoutsByDay, fetchNearPivots, triggerScanner, fetchJobRun } from '../api';
-import { ChevronLeft, ChevronDown, RefreshCw, Loader2, Activity, Target, Sliders, Crosshair, LineChart, Table } from 'lucide-react';
+import { fetchBreakouts, fetchBreakoutStats, fetchScannerPerformance, fetchScoringWeights, updateScoringWeight, fetchBreakoutPnl, fetchBreakoutsByDay, fetchNearPivots, triggerScanner, fetchJobRun, deleteBreakout, deleteAllBreakouts } from '../api';
+import { ChevronLeft, ChevronDown, RefreshCw, Loader2, Activity, Target, Sliders, Crosshair, LineChart, Table, Trash2 } from 'lucide-react';
 import { StockLookupModal, MiniSymbolChart } from './StockLookupPage';
 
 function fmtPct(v?: number | null): string {
@@ -596,6 +596,9 @@ function PositionsView({ market, profile }: { market: Market; profile: BreakoutP
   const [rows, setRows] = useState<Breakout[]>([]);
   const [stats, setStats] = useState<BreakoutStats | null>(null);
   const [loading, setLoading] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deletingAll, setDeletingAll] = useState(false);
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -609,6 +612,38 @@ function PositionsView({ market, profile }: { market: Market; profile: BreakoutP
   }, [market, status, profile]);
 
   useEffect(() => { load(); }, [load]);
+
+  const totalCount = (stats?.activeCount ?? 0) + (stats?.closedCount ?? 0);
+
+  const handleDelete = useCallback(async (b: Breakout) => {
+    if (!confirm(`Delete breakout ${b.ticker} (${b.tradeType} ${b.direction})? This cannot be undone.`)) return;
+    setActionMsg(null);
+    setDeletingId(b.id);
+    try {
+      await deleteBreakout(market, b.id);
+      load();
+    } catch {
+      setActionMsg(`Failed to delete ${b.ticker}.`);
+    } finally {
+      setDeletingId(null);
+    }
+  }, [market, load]);
+
+  const handleDeleteAll = useCallback(async () => {
+    const label = market === 'india' ? 'Indian' : 'US';
+    if (!confirm(`Delete ALL ${totalCount} breakout(s) for the ${label} market — both swing & positional, active & closed? This wipes the blotter and cannot be undone.`)) return;
+    setActionMsg(null);
+    setDeletingAll(true);
+    try {
+      const { deleted } = await deleteAllBreakouts(market);
+      setActionMsg(`Deleted ${deleted} breakout${deleted === 1 ? '' : 's'}.`);
+      load();
+    } catch {
+      setActionMsg('Failed to delete breakouts.');
+    } finally {
+      setDeletingAll(false);
+    }
+  }, [market, totalCount, load]);
 
   const closed = status === 'closed';
 
@@ -639,9 +674,17 @@ function PositionsView({ market, profile }: { market: Market; profile: BreakoutP
           <option value="closed">Closed</option>
           <option value="">All</option>
         </select>
-        <button className="btn btn-ghost btn-sm" onClick={load} style={{ marginLeft: 'auto' }}>
-          <RefreshCw size={14} /> Refresh
-        </button>
+        {actionMsg && <span className="cell-muted" style={{ alignSelf: 'center', fontSize: '0.8rem' }}>{actionMsg}</span>}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+          <button className="btn btn-danger btn-sm" onClick={handleDeleteAll}
+            disabled={deletingAll || totalCount === 0}
+            title="Delete every breakout in this market (both profiles, active & closed)">
+            {deletingAll ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />} Delete all
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={load}>
+            <RefreshCw size={14} /> Refresh
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -655,14 +698,17 @@ function PositionsView({ market, profile }: { market: Market; profile: BreakoutP
           </p>
         </div>
       ) : (
-        <BreakoutBlotter rows={rows} market={market} closed={closed} />
+        <BreakoutBlotter rows={rows} market={market} closed={closed} onDelete={handleDelete} deletingId={deletingId} />
       )}
     </>
   );
 }
 
 /** Shared breakout table with an expandable confidence-rationale row. */
-function BreakoutBlotter({ rows, market, closed }: { rows: Breakout[]; market: Market; closed: boolean }) {
+function BreakoutBlotter({ rows, market, closed, onDelete, deletingId }: {
+  rows: Breakout[]; market: Market; closed: boolean;
+  onDelete?: (b: Breakout) => void; deletingId?: number | null;
+}) {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [lookup, setLookup] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<keyof Breakout>('confidenceScore');
@@ -723,6 +769,7 @@ function BreakoutBlotter({ rows, market, closed }: { rows: Breakout[]; market: M
             {th('mfePct', 'MFE / MAE', 'right')}
             {th('scannerHitCount', 'Scanners', 'center')}
             {th('status', 'Status')}
+            {onDelete && <th style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>Actions</th>}
           </tr>
         </thead>
         <tbody>
@@ -763,10 +810,20 @@ function BreakoutBlotter({ rows, market, closed }: { rows: Breakout[]; market: M
                   ? <span className="cell-muted" style={{ fontSize: '0.8rem' }}>closed · {t.exitReason}</span>
                   : <span style={{ color: 'var(--success)', fontSize: '0.8rem' }}>active{t.movedToBe ? ' · BE+' : ''}</span>}
               </td>
+              {onDelete && (
+                <td className="cell-center">
+                  <button className="btn btn-ghost btn-sm" title="Delete this breakout"
+                    disabled={deletingId === t.id}
+                    onClick={() => onDelete(t)}
+                    style={{ color: 'var(--danger)', padding: '2px 6px' }}>
+                    {deletingId === t.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+                  </button>
+                </td>
+              )}
             </tr>
             {expanded === t.id && (
               <tr>
-                <td colSpan={15} style={{ background: 'var(--bg-subtle, rgba(127,127,127,0.06))' }}>
+                <td colSpan={onDelete ? 16 : 15} style={{ background: 'var(--bg-subtle, rgba(127,127,127,0.06))' }}>
                   <ConfidenceRationale breakout={t} />
                 </td>
               </tr>

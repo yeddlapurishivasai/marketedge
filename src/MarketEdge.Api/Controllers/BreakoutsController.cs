@@ -20,6 +20,24 @@ public class BreakoutsController : ControllerBase
         return Ok(await _breakouts.GetBreakoutsAsync(market, status, tradeType));
     }
 
+    [HttpDelete("api/{market}/breakouts/{id:int}")]
+    public async Task<IActionResult> DeleteBreakout(string market, int id)
+    {
+        if (!ValidMarket(market)) return BadRequest("Market must be 'india' or 'us'");
+        var deleted = await _breakouts.DeleteBreakoutAsync(market, id);
+        return deleted ? NoContent() : NotFound();
+    }
+
+    [HttpDelete("api/{market}/breakouts")]
+    public async Task<IActionResult> DeleteAllBreakouts(string market, [FromQuery] string? status = null,
+        [FromQuery] string? tradeType = null)
+    {
+        if (!ValidMarket(market)) return BadRequest("Market must be 'india' or 'us'");
+        tradeType = NormalizeTradeType(tradeType);
+        var deleted = await _breakouts.DeleteAllBreakoutsAsync(market, status, tradeType);
+        return Ok(new { deleted });
+    }
+
     [HttpGet("api/{market}/breakouts/stats")]
     public async Task<IActionResult> GetBreakoutStats(string market)
     {
