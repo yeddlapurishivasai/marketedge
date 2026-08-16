@@ -1281,6 +1281,18 @@ body {
 .ad-distributing { background: #fee2e2; color: #dc2626; }
 .ad-neutral { background: var(--border-light); color: var(--text-muted); }
 
+/* Squeeze Momentum state */
+.squeeze-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.sqz-on { background: #fef3c7; color: #b45309; }
+.sqz-fired { background: #dcfce7; color: #15803d; }
+
 [data-theme="dark"] .ad-accumulating { background: #052e16; color: #4ade80; }
 [data-theme="dark"] .ad-distributing { background: #450a0a; color: #f87171; }
 

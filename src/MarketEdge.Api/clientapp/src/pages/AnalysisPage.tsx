@@ -89,6 +89,15 @@ function SortableHeader({ label, sortKey, sort, onSort }: { label: string; sortK
   );
 }
 
+// Squeeze Momentum state: compressed ("on"), just released ("fired"), or expanded.
+function SqueezeBadge({ on, fired, updatedAt }: { on?: boolean; fired?: boolean; updatedAt?: string }) {
+  const asOf = updatedAt ? ` (as of ${new Date(updatedAt).toLocaleDateString()})` : '';
+  if (on == null && fired == null) return <span className="cell-muted">-</span>;
+  if (fired) return <span className="squeeze-badge sqz-fired" title={`Daily squeeze released${asOf}`}>Fired</span>;
+  if (on) return <span className="squeeze-badge sqz-on" title={`Volatility compressed — Bollinger inside Keltner on daily bars${asOf}`}>On</span>;
+  return <span className="cell-muted" title={asOf ? `No squeeze${asOf}` : undefined}>Off</span>;
+}
+
 // Convert symbol to TradingView format
 function toTradingViewSymbol(symbol: string, market: Market): string {
   if (market === 'india') {
@@ -313,7 +322,7 @@ export default function AnalysisPage() {
   const [rotation, setRotation] = useState<SectorRotation[]>([]);
   const [history, setHistory] = useState<Stage2History[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<'overview' | 'top25' | 'sectors' | 'rotation' | 'stocks'>('overview');
+  const [tab, setTab] = useState<'overview' | 'top25' | 'sectors' | 'rotation' | 'stocks' | 'fno'>('overview');
   const [triggering, setTriggering] = useState(false);
   const [showTriggerModal, setShowTriggerModal] = useState(false);
   const [minMcap, setMinMcap] = useState('');
@@ -328,6 +337,7 @@ export default function AnalysisPage() {
   const [latestRunId, setLatestRunId] = useState<number | null>(null);
   const [stocks, setStocks] = useState<StageAnalysisResult[]>([]);
   const [classFilter, setClassFilter] = useState('');
+  const [squeezeFilter, setSqueezeFilter] = useState('');
   const [stocksLoading, setStocksLoading] = useState(false);
   const [rotationHistory, setRotationHistory] = useState<SectorRotationHistory[]>([]);
   const [timelineIdx, setTimelineIdx] = useState(0);
@@ -416,19 +426,26 @@ export default function AnalysisPage() {
     setTriggering(false);
   };
 
-  const loadStocks = useCallback(async (classification?: string) => {
+  const loadStocks = useCallback(async (classification?: string, fnoOnly?: boolean, squeeze?: string) => {
     if (!latestRunId) return;
     setStocksLoading(true);
     try {
-      const data = await fetchStage2Stocks(m, latestRunId, { classification: classification || undefined });
+      const data = await fetchStage2Stocks(m, latestRunId, {
+        classification: classification || undefined,
+        fnoOnly,
+        squeeze: squeeze || undefined
+      });
       setStocks(data);
     } catch { /* ignore */ }
     setStocksLoading(false);
   }, [m, latestRunId]);
 
+  // The squeeze filter is only offered on the F&O tab, so it is ignored elsewhere.
   useEffect(() => {
-    if (tab === 'stocks' && latestRunId) loadStocks(classFilter);
-  }, [tab, classFilter, latestRunId, loadStocks]);
+    if ((tab === 'stocks' || tab === 'fno') && latestRunId) {
+      loadStocks(classFilter, tab === 'fno', tab === 'fno' ? squeezeFilter : '');
+    }
+  }, [tab, classFilter, squeezeFilter, latestRunId, loadStocks]);
 
   // Timeline animation
   useEffect(() => {
@@ -694,7 +711,7 @@ export default function AnalysisPage() {
 
           {/* Tabs */}
           <div className="analysis-tabs">
-            {(['overview', 'top25', 'sectors', 'rotation', 'stocks'] as const).map(t => (
+            {(['overview', 'top25', 'sectors', 'rotation', 'stocks', 'fno'] as const).map(t => (
               <button
                 key={t}
                 className={`analysis-tab ${tab === t ? 'active' : ''}`}
@@ -705,6 +722,7 @@ export default function AnalysisPage() {
                 {t === 'sectors' && 'By Sector'}
                 {t === 'rotation' && 'Sector Rotation'}
                 {t === 'stocks' && 'All Stocks'}
+                {t === 'fno' && 'F&O Stocks'}
               </button>
             ))}
           </div>
@@ -927,8 +945,8 @@ export default function AnalysisPage() {
             </div>
           )}
 
-          {/* All Stocks tab */}
-          {tab === 'stocks' && (
+          {/* All Stocks / F&O Stocks tabs */}
+          {(tab === 'stocks' || tab === 'fno') && (
             <>
               <div className="toolbar">
                 <Filter size={16} style={{ color: 'var(--text-muted)' }} />
@@ -943,6 +961,22 @@ export default function AnalysisPage() {
                   <option value="reentry">Re-Entries</option>
                   <option value="removed">Removed</option>
                 </select>
+                {tab === 'fno' && (
+                  <select
+                    className="select-input"
+                    value={squeezeFilter}
+                    onChange={e => setSqueezeFilter(e.target.value)}
+                  >
+                    <option value="">Any squeeze state</option>
+                    <option value="on">In squeeze</option>
+                    <option value="fired">Squeeze fired</option>
+                  </select>
+                )}
+                {tab === 'fno' && (
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                    Showing only stocks in the F&amp;O (derivatives) universe
+                  </span>
+                )}
               </div>
 
               {stocksLoading ? (
@@ -963,6 +997,9 @@ export default function AnalysisPage() {
                         <SortableHeader label="Quadrant" sortKey="quadrant" sort={stocksSort.sort} onSort={stocksSort.toggle} />
                         <SortableHeader label="A/D" sortKey="adClassification" sort={stocksSort.sort} onSort={stocksSort.toggle} />
                         <SortableHeader label="Class" sortKey="classification" sort={stocksSort.sort} onSort={stocksSort.toggle} />
+                        {tab === 'fno' && <th style={{ width: 90, textAlign: 'center' }}>Squeeze</th>}
+                        {tab === 'fno' && <SortableHeader label="Sqz Mom" sortKey="squeezeMomentum" sort={stocksSort.sort} onSort={stocksSort.toggle} />}
+                        {tab === 'stocks' && <th style={{ width: 70, textAlign: 'center' }}>F&amp;O</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -985,6 +1022,17 @@ export default function AnalysisPage() {
                           <td><span className={`quadrant-badge q-${s.quadrant}`}>{s.quadrant}</span></td>
                           <td><span className={`ad-badge ad-${s.adClassification}`}>{s.adClassification}</span></td>
                           <td><span className={`class-badge class-${s.classification}`}>{s.classification}</span></td>
+                          {tab === 'fno' && <td className="cell-center"><SqueezeBadge on={s.squeezeOn} fired={s.squeezeFired} updatedAt={s.squeezeUpdatedAt} /></td>}
+                          {tab === 'fno' && (
+                            <td style={{ color: (s.squeezeMomentum ?? 0) > 0 ? 'var(--success)' : 'var(--danger)' }}>
+                              {s.squeezeMomentum != null ? s.squeezeMomentum.toFixed(2) : '-'}
+                            </td>
+                          )}
+                          {tab === 'stocks' && (
+                            <td className="cell-center">
+                              {s.isFno ? <span className="badge badge-count">F&amp;O</span> : <span className="cell-muted">-</span>}
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>

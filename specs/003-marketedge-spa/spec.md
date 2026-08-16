@@ -140,8 +140,8 @@ and navigates to `/:market/jobs`.
 
 ### User Story 5 - Explore the Stage 2 analysis dashboard (Priority: P1)
 
-A user reviews the latest completed week's results across five tabs: Overview,
-Top 25, By Sector, Sector Rotation, and All Stocks — with summary stat cards,
+A user reviews the latest completed week's results across six tabs: Overview,
+Top 25, By Sector, Sector Rotation, All Stocks, and F&O Stocks — with summary stat cards,
 charts, sortable tables, classification filters, and an embedded TradingView chart
 per stock.
 
@@ -259,7 +259,8 @@ auto-refreshes every 5s and stops when none are active; cancel calls `cancelJobR
 - **FR-010**: The All Stocks tab MUST lazily fetch `fetchStage2Stocks` for the
   latest run, filtered by a classification selector
   (all/new/continuing/reentry/removed) and an optional sector filter, refetching on
-  change.
+  change. An F&O Stocks tab MUST render the same table restricted to the market's
+  F&O universe (`fnoOnly`).
 - **FR-011**: Each Stage 2 stock MUST be openable in a TradingView daily-chart
   modal using exchange-prefixed symbols (`BSE:` for India, `NASDAQ:` for US) with
   10/20/50 EMA and volume studies.

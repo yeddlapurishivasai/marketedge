@@ -64,6 +64,11 @@ public abstract class StageAnalysisResultBase
     public decimal? ADRatio { get; set; }
     public string? ADClassification { get; set; }
 
+    public bool? SqueezeOn { get; set; }
+    public bool? SqueezeFired { get; set; }
+    public decimal? SqueezeMomentum { get; set; }
+    public DateTime? SqueezeUpdatedAt { get; set; }
+
     public DateTime CreatedAt { get; set; }
 }
 

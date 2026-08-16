@@ -42,6 +42,14 @@ CREATE TABLE [dbo].[USStageAnalysisResults]
     [ADRatio] DECIMAL(5,4) NULL,
     [ADClassification] NVARCHAR(20) NULL,
 
+    -- Squeeze Momentum (Bollinger inside Keltner; linreg momentum histogram).
+    -- Computed on DAILY bars and refreshed by every scanner run, so it stays current
+    -- between weekly stage-2 runs. SqueezeUpdatedAt stamps the last refresh.
+    [SqueezeOn] BIT NULL,
+    [SqueezeFired] BIT NULL,
+    [SqueezeMomentum] DECIMAL(18,6) NULL,
+    [SqueezeUpdatedAt] DATETIME2 NULL,
+
     [CreatedAt] DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
 
     CONSTRAINT [PK_USStageAnalysisResults] PRIMARY KEY CLUSTERED ([Id]),

@@ -92,9 +92,11 @@ public class JobsController : ControllerBase
         string market,
         int runId,
         [FromQuery] string? classification = null,
-        [FromQuery] int? sectorId = null)
+        [FromQuery] int? sectorId = null,
+        [FromQuery] bool fnoOnly = false,
+        [FromQuery] string? squeeze = null)
     {
-        var stocks = await _jobService.GetStage2StocksAsync(runId, classification, sectorId);
+        var stocks = await _jobService.GetStage2StocksAsync(runId, classification, sectorId, fnoOnly, squeeze);
         return Ok(stocks);
     }
 

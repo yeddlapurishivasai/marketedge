@@ -251,6 +251,11 @@ export interface StageAnalysisResult {
   quadrant?: string;
   adRatio?: number;
   adClassification?: string;
+  squeezeOn?: boolean;
+  squeezeFired?: boolean;
+  squeezeMomentum?: number;
+  squeezeUpdatedAt?: string;
+  isFno?: boolean;
 }
 
 export interface SectorStage2Count {
@@ -276,10 +281,12 @@ export async function fetchStage2Summary(market: Market): Promise<Stage2Summary>
   return res.json();
 }
 
-export async function fetchStage2Stocks(market: Market, runId: number, params?: { classification?: string; sectorId?: number }): Promise<StageAnalysisResult[]> {
+export async function fetchStage2Stocks(market: Market, runId: number, params?: { classification?: string; sectorId?: number; fnoOnly?: boolean; squeeze?: string }): Promise<StageAnalysisResult[]> {
   const sp = new URLSearchParams();
   if (params?.classification) sp.set('classification', params.classification);
   if (params?.sectorId) sp.set('sectorId', params.sectorId.toString());
+  if (params?.fnoOnly) sp.set('fnoOnly', 'true');
+  if (params?.squeeze) sp.set('squeeze', params.squeeze);
   const res = await authFetch(`${BASE}/${market}/analysis/runs/${runId}/stocks?${sp}`);
   if (!res.ok) throw new Error('Failed to fetch stage 2 stocks');
   return res.json();

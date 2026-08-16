@@ -102,6 +102,11 @@ follow the documented rules (`contracts/algorithm.md`).
 7. **Given** all signals, **Then** `is_stage2` is true iff: latest Close > MA30,
    the 30-week SMA is rising (now > value 5 weeks ago), Close > MA10, MA10 > MA30,
    and `RSScore` is present and > 0.
+8. **Given** ≥21 *daily* bars in `{Market}Bars1D`, **Then** `SqueezeOn` (Bollinger 20/2
+   inside Keltner 20/1.5), `SqueezeFired` (on the previous day, off today),
+   `SqueezeMomentum` (linear-regression momentum histogram) and `SqueezeUpdatedAt` are
+   persisted; otherwise they are null. The squeeze is seeded by the stage-2 run and
+   refreshed by every scanner run, so it tracks the daily timeframe.
 
 ---
 
@@ -233,7 +238,8 @@ week, and restricting to the local test-sample universe for fast runs.
 - **FR-008**: `calculate_stage2` MUST return `None` for <30 weekly bars; otherwise
   compute `ClosePrice, MA10, MA30, RSScore, RS1w–RS3w, RSDelta1w–3w, MomentumScore,
   ROC1w–3w, Quadrant, ADRatio, ADClassification, is_stage2` per the algorithm in
-  `contracts/algorithm.md`.
+  `contracts/algorithm.md`. `SqueezeOn, SqueezeFired, SqueezeMomentum` are computed
+  separately by `compute_daily_squeeze` from daily bars and merged into the row.
 - **FR-009**: `is_stage2` MUST be true iff Close>MA30 ∧ 30wk SMA rising ∧ Close>MA10
   ∧ MA10>MA30 ∧ RSScore present ∧ RSScore>0.
 - **FR-010**: Each analyzed stock MUST be upserted immediately into the market's
@@ -268,7 +274,8 @@ week, and restricting to the local test-sample universe for fast runs.
 - **Per-stock analysis result** (dict → `{Indian|US}StageAnalysisResults` row):
   `run_id, week_number, symbol, company_name, sector_id, sector_name, market_cap,
   close_price, ma10, ma30, is_stage2, rs_score, rs_1w/2w/3w, rs_delta_1w/2w/3w,
-  momentum_score, roc_1w/2w/3w, quadrant, ad_ratio, ad_classification` plus
+  momentum_score, roc_1w/2w/3w, quadrant, ad_ratio, ad_classification,
+  squeeze_on, squeeze_fired, squeeze_momentum` plus
   post-processed `classification`, `rs_rank`, `weeks_in_stage2`.
 - **JobRun** (`JobRuns`): updated in place — `Status`, `Progress`, `Metrics`
   (JSON: `market`, `totalStocks`, `filteredStocks`, `stage2Count`,

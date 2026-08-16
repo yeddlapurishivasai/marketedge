@@ -83,8 +83,8 @@ trade lifecycle, pre-close gating, and PnL/day views.
 
 - An admin toggle enables a per-market weekend stage2 schedule.
 - A background service in the API checks every minute and **enqueues a full stage2 analysis
-  run once per exchange-local weekend day** (Saturday and Sunday), after the configured
-  `HourLocal` (default 20:00). Running over the weekend refreshes the week's stage2
+  run once per weekend, on the exchange-local Saturday**, after the configured
+  `HourLocal` (default 20:00). Running after Friday's close refreshes the week's stage2
   classification while markets are closed, off the weekday critical path.
 - Idempotent: `LastEnqueuedAt` (persisted, compared in the exchange-local timezone) prevents
   a second enqueue the same local day, and stage2 analysis already dedupes one in-flight run
@@ -130,6 +130,12 @@ trade lifecycle, pre-close gating, and PnL/day views.
   date dropdown and a results table; symbols open the existing Stock Lookup modal. Admin
   gets trigger buttons (per-scanner + Pre-Close Scan), the universe toggle, and the schedule
   on/off switch.
+
+- **FR-010** Every scan run also refreshes the daily Squeeze Momentum state
+  (`SqueezeOn`, `SqueezeFired`, `SqueezeMomentum`, `SqueezeUpdatedAt`) on the newest
+  stage-2 run's rows in `{Market}StageAnalysisResults`, reusing the daily series already
+  loaded for scanning. The refresh is best-effort and never fails the scan; the run's
+  metrics report `squeezeUpdated`.
 
 ## Out of scope / follow-ups
 

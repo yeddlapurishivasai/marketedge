@@ -51,6 +51,7 @@ def load_bars(conn, market: str, symbol: str, max_bars: int, end_date: date | No
     h: list[float] = []
     lo: list[float] = []
     c: list[float] = []
+    rc: list[float] = []
     v: list[float] = []
     for r in rows:
         close = r.AdjClose if r.AdjClose is not None else r.Close
@@ -59,8 +60,12 @@ def load_bars(conn, market: str, symbol: str, max_bars: int, end_date: date | No
         close = float(close)
         if math.isnan(close) or close <= 0:
             continue
+        raw_close = float(r.Close) if r.Close is not None else close
+        if math.isnan(raw_close) or raw_close <= 0:
+            raw_close = close
         dates.append(r.BarDate)
         c.append(close)
+        rc.append(raw_close)
         o.append(float(r.Open) if r.Open is not None else close)
         h.append(float(r.High) if r.High is not None else close)
         lo.append(float(r.Low) if r.Low is not None else close)
@@ -74,6 +79,7 @@ def load_bars(conn, market: str, symbol: str, max_bars: int, end_date: date | No
         low=np.asarray(lo, dtype=float),
         close=np.asarray(c, dtype=float),
         volume=np.asarray(v, dtype=float),
+        raw_close=np.asarray(rc, dtype=float),
     )
 
 
@@ -92,18 +98,33 @@ def _wilder(arr: np.ndarray, n: int) -> np.ndarray:
 class BarSeries:
     """A validated ascending OHLCV series with cached indicator arrays."""
 
-    def __init__(self, dates, open, high, low, close, volume):  # noqa: A002 - mirror OHLC names
+    def __init__(self, dates, open, high, low, close, volume, raw_close=None):  # noqa: A002 - mirror OHLC names
         self.dates = dates
         self.open = open
         self.high = high
         self.low = low
         self.close = close
         self.volume = volume
+        # Close is adjusted (AdjClose) while high/low are raw. Keep the raw close so
+        # indicators that mix the two (e.g. true-range based ones) can put highs/lows on
+        # the adjusted scale via adj_high()/adj_low().
+        self.raw_close = close if raw_close is None else raw_close
         self.n = len(close)
         self.last = self.n - 1
         self._turnover = close * volume
         self._tr = self._true_range()
         self._cache: dict[str, np.ndarray] = {}
+
+    def _adj_factor(self) -> np.ndarray:
+        raw = np.where(self.raw_close > 0, self.raw_close, np.nan)
+        factor = self.close / raw
+        return np.where(np.isfinite(factor), factor, 1.0)
+
+    def adj_high(self) -> np.ndarray:
+        return self._c("adjhigh", lambda: self.high * self._adj_factor())
+
+    def adj_low(self) -> np.ndarray:
+        return self._c("adjlow", lambda: self.low * self._adj_factor())
 
     def _true_range(self) -> np.ndarray:
         high, low, close = self.high, self.low, self.close

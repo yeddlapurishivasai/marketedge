@@ -70,6 +70,24 @@ Close), `volume` = Volume (0 if absent).
 - `ad_classification` = `accumulating` (`ad_ratio > 0.6`) / `distributing`
   (`ad_ratio < 0.4`) / `neutral` otherwise.
 
+### Squeeze Momentum (LazyBear TTM squeeze, **daily** bars, length 20)
+
+Unlike every other stage-2 signal (weekly bars), the squeeze is computed on daily bars
+read from `{Market}Bars1D` — see `compute_daily_squeeze()`. The stage-2 run seeds it,
+and every scanner run refreshes it (`scanners/runner.refresh_squeeze`), so the state is
+never more than one scan old.
+
+- Bollinger Bands: `basis = SMA(close, 20)`, `dev = 2.0 * stdev(close, 20)`.
+- Keltner Channels: `basis ± 1.5 * SMA(trueRange, 20)`.
+- `squeeze_on` = BB fully inside KC (`lowerBB > lowerKC and upperBB < upperKC`) —
+  volatility is compressed.
+- `squeeze_fired` = `squeeze_on` was true on the previous bar and is false now — the
+  expansion (release) signal.
+- `squeeze_momentum` = `linreg(close - avg(avg(highest(high,20), lowest(low,20)),
+  SMA(close,20)), 20)` evaluated at the latest bar; positive = upward pressure.
+- All three are `None` when fewer than 21 usable bars exist.
+- `SqueezeUpdatedAt` stamps the UTC time of the last refresh (stage-2 upsert or scan).
+
 ### Stage 2 decision
 
 ```

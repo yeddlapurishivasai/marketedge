@@ -13,7 +13,7 @@ public interface IJobService
     Task<int> TriggerStageAnalysisAsync(string market, TriggerAnalysisRequest? request);
     Task<bool> CancelRunAsync(int id);
     Task<Stage2SummaryDto?> GetLatestStage2SummaryAsync(string market);
-    Task<List<StageAnalysisResultDto>> GetStage2StocksAsync(int runId, string? classification = null, int? sectorId = null);
+    Task<List<StageAnalysisResultDto>> GetStage2StocksAsync(int runId, string? classification = null, int? sectorId = null, bool fnoOnly = false, string? squeeze = null);
     Task<List<SectorRotationDto>> GetSectorRotationAsync(int runId);
     Task<List<Stage2HistoryDto>> GetStage2HistoryAsync(string market, int maxRuns = 10);
     Task<List<SectorRotationHistoryDto>> GetSectorRotationHistoryAsync(string market, int maxRuns = 12);
@@ -273,7 +273,7 @@ public class JobService : IJobService
         return summary;
     }
 
-    public async Task<List<StageAnalysisResultDto>> GetStage2StocksAsync(int runId, string? classification = null, int? sectorId = null)
+    public async Task<List<StageAnalysisResultDto>> GetStage2StocksAsync(int runId, string? classification = null, int? sectorId = null, bool fnoOnly = false, string? squeeze = null)
     {
         // Determine market from the job run
         var job = await _db.JobRuns.FindAsync(runId);
@@ -298,12 +298,30 @@ public class JobService : IJobService
         if (sectorId.HasValue)
             query = query.Where(r => r.SectorId == sectorId.Value);
 
+        // F&O universe lives on the catalog table, not the analysis snapshot: restrict by symbol.
+        if (fnoOnly)
+        {
+            var fnoSymbols = job.Market == "india"
+                ? _db.IndianStocks.Where(s => s.IsFno).Select(s => s.Symbol)
+                : _db.USStocks.Where(s => s.IsFno).Select(s => s.Symbol);
+            query = query.Where(r => fnoSymbols.Contains(r.Symbol));
+        }
+
+        // Squeeze Momentum: 'on' = still compressed, 'fired' = released this week.
+        query = squeeze?.ToLowerInvariant() switch
+        {
+            "on" => query.Where(r => r.SqueezeOn == true),
+            "fired" => query.Where(r => r.SqueezeFired == true),
+            _ => query
+        };
+
         var dtos = await query
             .OrderByDescending(r => r.RSScore)
             .ThenByDescending(r => r.MomentumScore)
             .Select(r => MapResult(r))
             .ToListAsync();
         await PopulateRsRatingsAsync(job.Market, dtos);
+        await PopulateFnoFlagsAsync(job.Market, dtos);
         return dtos;
     }
 
@@ -502,6 +520,23 @@ public class JobService : IJobService
             if (map.TryGetValue(d.Symbol, out var rs)) d.RsRating = rs;
     }
 
+    /// <summary>
+    /// Flags which results are in the market's F&amp;O (derivatives) universe. The analysis
+    /// snapshot doesn't carry the flag, so it is looked up from the stock catalog by symbol.
+    /// </summary>
+    private async Task PopulateFnoFlagsAsync(string market, List<StageAnalysisResultDto> dtos)
+    {
+        if (dtos.Count == 0) return;
+        var symbols = dtos.Select(d => d.Symbol).Distinct().ToList();
+
+        var fnoSymbols = market == "india"
+            ? await _db.IndianStocks.Where(s => s.IsFno && symbols.Contains(s.Symbol)).Select(s => s.Symbol).ToListAsync()
+            : await _db.USStocks.Where(s => s.IsFno && symbols.Contains(s.Symbol)).Select(s => s.Symbol).ToListAsync();
+
+        var set = fnoSymbols.ToHashSet();
+        foreach (var d in dtos) d.IsFno = set.Contains(d.Symbol);
+    }
+
     private static StageAnalysisResultDto MapResult(StageAnalysisResultBase r)
     {
         return new StageAnalysisResultDto
@@ -533,7 +568,11 @@ public class JobService : IJobService
             ROC3w = r.ROC3w,
             Quadrant = r.Quadrant,
             ADRatio = r.ADRatio,
-            ADClassification = r.ADClassification
+            ADClassification = r.ADClassification,
+            SqueezeOn = r.SqueezeOn,
+            SqueezeFired = r.SqueezeFired,
+            SqueezeMomentum = r.SqueezeMomentum,
+            SqueezeUpdatedAt = r.SqueezeUpdatedAt
         };
     }
 

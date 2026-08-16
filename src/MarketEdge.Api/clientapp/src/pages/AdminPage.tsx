@@ -322,8 +322,8 @@ export default function AdminPage() {
 
       <JobScheduleCard
         title="Weekend Stage 2 Analysis"
-        cadence="Sat & Sun"
-        description="When enabled, a full stage 2 analysis runs once per weekend day (Saturday and Sunday) after the chosen exchange-local hour, refreshing the week's stage2 classification while markets are closed. Enabled by default."
+        cadence="Saturday"
+        description="When enabled, a full stage 2 analysis runs once per weekend, on Saturday, after the chosen exchange-local hour, refreshing the week's stage2 classification while markets are closed. Enabled by default."
         fetchFn={fetchStage2Schedule}
         updateFn={updateStage2Schedule}
       />

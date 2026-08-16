@@ -160,7 +160,9 @@ def save_single_result(conn: pyodbc.Connection, market: str, result: dict[str, A
             RSScore = ?, RSRank = ?, RS1w = ?, RS2w = ?, RS3w = ?,
             RSDelta1w = ?, RSDelta2w = ?, RSDelta3w = ?,
             MomentumScore = ?, ROC1w = ?, ROC2w = ?, ROC3w = ?,
-            Quadrant = ?, ADRatio = ?, ADClassification = ?
+            Quadrant = ?, ADRatio = ?, ADClassification = ?,
+            SqueezeOn = ?, SqueezeFired = ?, SqueezeMomentum = ?,
+            SqueezeUpdatedAt = ?
         WHEN NOT MATCHED THEN INSERT (
             RunId, WeekNumber, Symbol, CompanyName, SectorId, SectorName,
             ClosePrice, MA10, MA30, MarketCap,
@@ -168,8 +170,9 @@ def save_single_result(conn: pyodbc.Connection, market: str, result: dict[str, A
             RSScore, RSRank, RS1w, RS2w, RS3w,
             RSDelta1w, RSDelta2w, RSDelta3w,
             MomentumScore, ROC1w, ROC2w, ROC3w,
-            Quadrant, ADRatio, ADClassification
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            Quadrant, ADRatio, ADClassification,
+            SqueezeOn, SqueezeFired, SqueezeMomentum, SqueezeUpdatedAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """
 
     week_number = result["week_number"]
@@ -203,6 +206,12 @@ def save_single_result(conn: pyodbc.Connection, market: str, result: dict[str, A
         result.get("quadrant"),
         _clean(result.get("ad_ratio")),
         result.get("ad_classification"),
+        None if result.get("squeeze_on") is None else int(bool(result.get("squeeze_on"))),
+        None if result.get("squeeze_fired") is None else int(bool(result.get("squeeze_fired"))),
+        _clean(result.get("squeeze_momentum")),
+        # As-of stamp for the squeeze; NULL when no squeeze value was computed so the UI
+        # never shows a fresh timestamp against a blank/point-in-time signal.
+        None if result.get("squeeze_on") is None else result.get("squeeze_updated_at"),
     )
 
     params = (
