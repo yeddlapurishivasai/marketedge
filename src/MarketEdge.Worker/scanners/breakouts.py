@@ -13,8 +13,11 @@ Runs as part of every scanner job (the 15-minute scheduled run). On each run it:
      current stop,
    * closes a trade (capturing realised PnL%) when price violates the current stop.
 2. **Opens** new trades for symbols flagged by a scanner *this run* **only once price
-   actually breaks the pivot** -- above the prior resistance (highest high) for longs.
-   A scanner hit alone is just a setup. One swing (10-bar pivot, 6% stop) and one
+   actually breaks the pivot** -- above the prior resistance (highest high) for longs --
+   **and only when the stock actually based below that pivot first** (see :func:`_has_base`:
+   the pivot must be an aged high, not a fresh high printed on a straight run-up, and the
+   consolidation's pullback must stay contained). A scanner hit alone is just a setup.
+   One swing (10-bar pivot, 6% stop) and one
    positional (20-bar base, 10%-floor stop that later trails the 20-EMA) per qualifying
    breakout -- except a *scored* setup whose blended ConfidenceScore is below the floor
    (< _MIN_CONFIDENCE) is rejected; unscored setups (no fundamental idea yet) still open so
@@ -66,6 +69,22 @@ _SWING_BREAKOUT_LOOKBACK = 10
 _POS_BREAKOUT_LOOKBACK = 20
 _VOL_AVG = 20             # average-volume lookback for breakout confirmation
 _VOL_MULT = 1.5           # breakout bar volume must be >= this x average volume
+
+# Base-quality gate: clearing the prior N-bar high is only a real breakout if the stock
+# actually *based* below that high first -- otherwise a name in a straight run-up prints a
+# fresh N-bar closing high almost every day and would trigger endlessly with no consolidation.
+# Two conditions define an acceptable base ahead of the break:
+#   1. Pivot age -- the pivot (the highest high of the lookback window) must have printed at
+#      least this many bars before the breakout bar, so price spent time holding *below* it
+#      rather than making the high yesterday on the way up.
+#   2. Base depth -- the consolidation's pullback away from the pivot (how far below the
+#      resistance the base dipped, as a %% of the pivot) must stay within a ceiling, so a deep
+#      V-shaped recovery back to an old high is not mistaken for a tight base.
+# Positional trades break a longer base, so they require an older pivot. Tune here; set the
+# min-age to 0 to disable the age gate, or the depth ceiling to a large number to disable it.
+_SWING_MIN_BASE_BARS = 3    # swing pivot high must be >= 3 bars old
+_POS_MIN_BASE_BARS = 5      # positional pivot high must be >= 5 bars old
+_MAX_BASE_DEPTH_PCT = 25.0  # base pullback from the pivot may not exceed this %%
 
 # Quality floor: a *scored* setup is only tradeable if its blended confidence is at least
 # this -- a scored break below it is rejected. Unscored setups (no canonical fundamental
@@ -213,6 +232,70 @@ def _pivot_distance(series, direction: str, lookback: int) -> float | None:
             return None
         dist = (close - pivot) / pivot * 100.0
     return None if dist < 0 else (pivot, dist)
+
+
+def _base_metrics(series, direction: str, lookback: int, idx: int | None = None):
+    """Describe the base sitting in the ``lookback`` bars *before* ``idx`` (default latest).
+
+    Returns ``(pivot, pivot_age, depth_pct)`` or ``None`` when there isn't enough history:
+
+    * ``pivot``      -- the level the breakout must clear: the highest high of the prior
+                        ``lookback`` bars for longs, the lowest low for shorts (the tested
+                        bar itself is excluded, mirroring :func:`_is_breakout`).
+    * ``pivot_age``  -- how many bars back the pivot printed. ``1`` means the immediately
+                        prior bar made the extreme (a fresh high on a straight run-up);
+                        larger means price has been consolidating on the far side of the
+                        pivot for a while (a base).
+    * ``depth_pct``  -- how far the consolidation pulled *away* from the pivot, as a percent
+                        of the pivot: the drop below resistance for longs (``(pivot - lowest
+                        low)/pivot``) or the pop above support for shorts. A tight base has a
+                        contained depth; a deep V-recovery does not.
+    """
+    if series is None:
+        return None
+    if idx is None:
+        idx = series.last
+    if idx < lookback:
+        return None
+    highs = series.high[idx - lookback:idx]
+    lows = series.low[idx - lookback:idx]
+    if direction == "long":
+        pivot = float(np.nanmax(highs))
+        if math.isnan(pivot) or pivot <= 0:
+            return None
+        pivot_age = lookback - int(np.nanargmax(highs))
+        trough = float(np.nanmin(lows))
+        depth = (pivot - trough) / pivot * 100.0
+    else:
+        pivot = float(np.nanmin(lows))
+        if math.isnan(pivot) or pivot <= 0:
+            return None
+        pivot_age = lookback - int(np.nanargmin(lows))
+        peak = float(np.nanmax(highs))
+        depth = (peak - pivot) / pivot * 100.0
+    if math.isnan(depth):
+        return None
+    return pivot, pivot_age, depth
+
+
+def _has_base(series, direction: str, lookback: int, min_base_bars: int,
+              max_depth_pct: float, idx: int | None = None) -> bool:
+    """True when a genuine consolidation precedes the break at ``idx``.
+
+    A confirmed price+volume break is only *tradeable* if the pivot it cleared is at least
+    ``min_base_bars`` bars old (price based below it, rather than printing the high on the way
+    up) **and** the base's pullback from the pivot stayed within ``max_depth_pct`` (a contained
+    consolidation, not a deep V-recovery back to an old high). Missing history -> no base.
+    """
+    metrics = _base_metrics(series, direction, lookback, idx)
+    if metrics is None:
+        return False
+    _pivot, pivot_age, depth = metrics
+    if pivot_age < min_base_bars:
+        return False
+    if depth > max_depth_pct:
+        return False
+    return True
 
 
 def _refresh_near_pivots(conn, market: str, scan_date: date, candidates: list[tuple]) -> int:
@@ -505,7 +588,7 @@ def run_breakout_engine(conn, market: str, scan_date: date,
         f"SELECT COUNT(*) AS c FROM dbo.{_t(market)} WHERE Status='closed' AND CAST(UpdatedAt AS DATE)=CAST(GETUTCDATE() AS DATE)"
     ).fetchone()
 
-    opened = setups = skipped_low_conf = 0
+    opened = setups = skipped_low_conf = skipped_no_base = 0
     near_pivots: list[tuple] = []
     for sym, info in flagged.items():
         scanners = info.get("scanners", [])
@@ -528,6 +611,7 @@ def run_breakout_engine(conn, market: str, scan_date: date,
             if (sym, trade_type) in active_keys:
                 continue  # already active -> tagged during management, no new entry
             lookback = _SWING_BREAKOUT_LOOKBACK if trade_type == "swing" else _POS_BREAKOUT_LOOKBACK
+            min_base = _SWING_MIN_BASE_BARS if trade_type == "swing" else _POS_MIN_BASE_BARS
 
             if not _is_breakout(series, direction, lookback):
                 setups += 1  # flagged but no confirmed break yet -> wait
@@ -540,6 +624,12 @@ def run_breakout_engine(conn, market: str, scan_date: date,
                         round(rel_vol, 4) if rel_vol is not None else None,
                         1 if (rel_vol is not None and rel_vol >= _VOL_MULT) else 0, scan_date,
                     ))
+                continue
+            # Price cleared the pivot on volume -- but only trade it if the stock actually
+            # based below that pivot first (an aged pivot + a contained pullback). A fresh
+            # N-bar high made on a straight run-up has no base and is skipped here.
+            if not _has_base(series, direction, lookback, min_base, _MAX_BASE_DEPTH_PCT):
+                skipped_no_base += 1
                 continue
             if manage_trades:
                 trade = _open_trade(conn, market, sym, info.get("company"), trade_type, direction,
@@ -557,5 +647,6 @@ def run_breakout_engine(conn, market: str, scan_date: date,
         "nearPivots": near,
         "setupsWaiting": setups,
         "skippedLowConfidence": skipped_low_conf,
+        "skippedNoBase": skipped_no_base,
         "closedToday": int(closed_now.c) if closed_now else 0,
     }

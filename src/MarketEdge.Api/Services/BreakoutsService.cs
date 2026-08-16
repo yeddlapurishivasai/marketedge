@@ -8,6 +8,8 @@ namespace MarketEdge.Api.Services;
 public interface IBreakoutsService
 {
     Task<List<BreakoutDto>> GetBreakoutsAsync(string market, string? status, string? tradeType);
+    Task<bool> DeleteBreakoutAsync(string market, int id);
+    Task<int> DeleteAllBreakoutsAsync(string market, string? status, string? tradeType);
     Task<BreakoutStatsDto> GetBreakoutStatsAsync(string market);
     Task<BreakoutPnlSummaryDto> GetBreakoutPnlAsync(string market, DateTime from, DateTime to, string? tradeType);
     Task<BreakoutDayDto> GetBreakoutsByDayAsync(string market, DateTime date, string? tradeType);
@@ -41,6 +43,28 @@ public class BreakoutsService : IBreakoutsService
         if (!string.IsNullOrWhiteSpace(tradeType)) q = q.Where(t => t.TradeType == tradeType);
         var rows = await q.OrderByDescending(t => t.UpdatedAt).Take(500).ToListAsync();
         return rows.Select(ToBreakoutDto).ToList();
+    }
+
+    public Task<bool> DeleteBreakoutAsync(string market, int id)
+        => market == "india" ? DeleteBreakout<IndianBreakout>(id) : DeleteBreakout<USBreakout>(id);
+
+    private async Task<bool> DeleteBreakout<T>(int id) where T : BreakoutBase
+    {
+        var deleted = await BreakoutSet<T>().Where(t => t.Id == id).ExecuteDeleteAsync();
+        return deleted > 0;
+    }
+
+    public Task<int> DeleteAllBreakoutsAsync(string market, string? status, string? tradeType)
+        => market == "india"
+            ? DeleteAllBreakouts<IndianBreakout>(status, tradeType)
+            : DeleteAllBreakouts<USBreakout>(status, tradeType);
+
+    private async Task<int> DeleteAllBreakouts<T>(string? status, string? tradeType) where T : BreakoutBase
+    {
+        var q = BreakoutSet<T>().AsQueryable();
+        if (!string.IsNullOrWhiteSpace(status)) q = q.Where(t => t.Status == status);
+        if (!string.IsNullOrWhiteSpace(tradeType)) q = q.Where(t => t.TradeType == tradeType);
+        return await q.ExecuteDeleteAsync();
     }
 
     public Task<BreakoutStatsDto> GetBreakoutStatsAsync(string market)

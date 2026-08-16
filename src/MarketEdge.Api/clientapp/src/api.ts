@@ -787,6 +787,24 @@ export async function fetchBreakouts(
   return res.json();
 }
 
+export async function deleteBreakout(market: Market, id: number): Promise<void> {
+  const res = await authFetch(`${BASE}/${market}/breakouts/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to delete breakout');
+}
+
+export async function deleteAllBreakouts(
+  market: Market,
+  params: { status?: string; tradeType?: string } = {}
+): Promise<{ deleted: number }> {
+  const sp = new URLSearchParams();
+  if (params.status) sp.set('status', params.status);
+  if (params.tradeType) sp.set('tradeType', params.tradeType);
+  const qs = sp.toString();
+  const res = await authFetch(`${BASE}/${market}/breakouts${qs ? '?' + qs : ''}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to delete breakouts');
+  return res.json();
+}
+
 export async function fetchBreakoutStats(market: Market): Promise<BreakoutStats> {
   const res = await authFetch(`${BASE}/${market}/breakouts/stats`);
   if (!res.ok) throw new Error('Failed to fetch breakout stats');
