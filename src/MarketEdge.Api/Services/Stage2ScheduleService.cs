@@ -4,11 +4,11 @@ using Microsoft.EntityFrameworkCore;
 namespace MarketEdge.Api.Services;
 
 /// <summary>
-/// Enqueues a full stage2 analysis run over the weekend (Saturday and Sunday nights) for any
-/// market whose <see cref="Models.Stage2Schedule"/> is enabled. Fires once per exchange-local
-/// weekend day after the configured <c>HourLocal</c> (default 20:00). Running over the weekend
-/// keeps the week's stage2 classification fresh while markets are closed, without competing with
-/// the intraday pre-close scan or the nightly fundamentals refresh on weekdays.
+/// Enqueues a full stage2 analysis run once per weekend (Saturday night) for any market whose
+/// <see cref="Models.Stage2Schedule"/> is enabled. Fires once per exchange-local Saturday after
+/// the configured <c>HourLocal</c> (default 20:00). Running after Friday's close keeps the week's
+/// stage2 classification fresh while markets are closed, without competing with the intraday
+/// pre-close scan or the nightly fundamentals refresh on weekdays.
 /// Idempotent: <c>LastEnqueuedAt</c> (persisted) prevents a second enqueue the same local day,
 /// and stage2 analysis already dedupes one in-flight run per (week, market).
 /// </summary>
@@ -55,8 +55,8 @@ public class Stage2ScheduleService : BackgroundService
             var local = MarketHours.NowLocal(market);
             if (local is not DateTimeOffset now) continue;
 
-            // Weekend only (Saturday + Sunday), and only once the exchange-local hour has passed.
-            if (now.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday)) continue;
+            // Once per weekend: Saturday only, and only once the exchange-local hour has passed.
+            if (now.DayOfWeek is not DayOfWeek.Saturday) continue;
             if (now.Hour < schedule.HourLocal) continue;
 
             // Once per exchange-local calendar day: compare last enqueue in the same local tz.
@@ -76,7 +76,7 @@ public class Stage2ScheduleService : BackgroundService
             schedule.LastEnqueuedAt = DateTime.UtcNow;
             schedule.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
-            _logger.LogInformation("Scheduled weekend stage2 analysis enqueued for {Market}", market);
+            _logger.LogInformation("Scheduled Saturday stage2 analysis enqueued for {Market}", market);
         }
     }
 }

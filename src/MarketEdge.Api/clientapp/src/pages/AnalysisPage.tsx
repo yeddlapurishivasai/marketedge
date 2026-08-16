@@ -313,7 +313,7 @@ export default function AnalysisPage() {
   const [rotation, setRotation] = useState<SectorRotation[]>([]);
   const [history, setHistory] = useState<Stage2History[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<'overview' | 'top25' | 'sectors' | 'rotation' | 'stocks'>('overview');
+  const [tab, setTab] = useState<'overview' | 'top25' | 'sectors' | 'rotation' | 'stocks' | 'fno'>('overview');
   const [triggering, setTriggering] = useState(false);
   const [showTriggerModal, setShowTriggerModal] = useState(false);
   const [minMcap, setMinMcap] = useState('');
@@ -416,18 +416,18 @@ export default function AnalysisPage() {
     setTriggering(false);
   };
 
-  const loadStocks = useCallback(async (classification?: string) => {
+  const loadStocks = useCallback(async (classification?: string, fnoOnly?: boolean) => {
     if (!latestRunId) return;
     setStocksLoading(true);
     try {
-      const data = await fetchStage2Stocks(m, latestRunId, { classification: classification || undefined });
+      const data = await fetchStage2Stocks(m, latestRunId, { classification: classification || undefined, fnoOnly });
       setStocks(data);
     } catch { /* ignore */ }
     setStocksLoading(false);
   }, [m, latestRunId]);
 
   useEffect(() => {
-    if (tab === 'stocks' && latestRunId) loadStocks(classFilter);
+    if ((tab === 'stocks' || tab === 'fno') && latestRunId) loadStocks(classFilter, tab === 'fno');
   }, [tab, classFilter, latestRunId, loadStocks]);
 
   // Timeline animation
@@ -694,7 +694,7 @@ export default function AnalysisPage() {
 
           {/* Tabs */}
           <div className="analysis-tabs">
-            {(['overview', 'top25', 'sectors', 'rotation', 'stocks'] as const).map(t => (
+            {(['overview', 'top25', 'sectors', 'rotation', 'stocks', 'fno'] as const).map(t => (
               <button
                 key={t}
                 className={`analysis-tab ${tab === t ? 'active' : ''}`}
@@ -705,6 +705,7 @@ export default function AnalysisPage() {
                 {t === 'sectors' && 'By Sector'}
                 {t === 'rotation' && 'Sector Rotation'}
                 {t === 'stocks' && 'All Stocks'}
+                {t === 'fno' && 'F&O Stocks'}
               </button>
             ))}
           </div>
@@ -927,8 +928,8 @@ export default function AnalysisPage() {
             </div>
           )}
 
-          {/* All Stocks tab */}
-          {tab === 'stocks' && (
+          {/* All Stocks / F&O Stocks tabs */}
+          {(tab === 'stocks' || tab === 'fno') && (
             <>
               <div className="toolbar">
                 <Filter size={16} style={{ color: 'var(--text-muted)' }} />
@@ -943,6 +944,11 @@ export default function AnalysisPage() {
                   <option value="reentry">Re-Entries</option>
                   <option value="removed">Removed</option>
                 </select>
+                {tab === 'fno' && (
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                    Showing only stocks in the F&amp;O (derivatives) universe
+                  </span>
+                )}
               </div>
 
               {stocksLoading ? (
@@ -963,6 +969,7 @@ export default function AnalysisPage() {
                         <SortableHeader label="Quadrant" sortKey="quadrant" sort={stocksSort.sort} onSort={stocksSort.toggle} />
                         <SortableHeader label="A/D" sortKey="adClassification" sort={stocksSort.sort} onSort={stocksSort.toggle} />
                         <SortableHeader label="Class" sortKey="classification" sort={stocksSort.sort} onSort={stocksSort.toggle} />
+                        {tab === 'stocks' && <th style={{ width: 70, textAlign: 'center' }}>F&amp;O</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -985,6 +992,11 @@ export default function AnalysisPage() {
                           <td><span className={`quadrant-badge q-${s.quadrant}`}>{s.quadrant}</span></td>
                           <td><span className={`ad-badge ad-${s.adClassification}`}>{s.adClassification}</span></td>
                           <td><span className={`class-badge class-${s.classification}`}>{s.classification}</span></td>
+                          {tab === 'stocks' && (
+                            <td className="cell-center">
+                              {s.isFno ? <span className="badge badge-count">F&amp;O</span> : <span className="cell-muted">-</span>}
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>

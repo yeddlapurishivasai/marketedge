@@ -83,8 +83,8 @@ trade lifecycle, pre-close gating, and PnL/day views.
 
 - An admin toggle enables a per-market weekend stage2 schedule.
 - A background service in the API checks every minute and **enqueues a full stage2 analysis
-  run once per exchange-local weekend day** (Saturday and Sunday), after the configured
-  `HourLocal` (default 20:00). Running over the weekend refreshes the week's stage2
+  run once per weekend, on the exchange-local Saturday**, after the configured
+  `HourLocal` (default 20:00). Running after Friday's close refreshes the week's stage2
   classification while markets are closed, off the weekday critical path.
 - Idempotent: `LastEnqueuedAt` (persisted, compared in the exchange-local timezone) prevents
   a second enqueue the same local day, and stage2 analysis already dedupes one in-flight run

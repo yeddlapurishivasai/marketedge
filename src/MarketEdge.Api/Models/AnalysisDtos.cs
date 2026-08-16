@@ -92,6 +92,8 @@ public class StageAnalysisResultDto
     public string? Quadrant { get; set; }
     public decimal? ADRatio { get; set; }
     public string? ADClassification { get; set; }
+    /// <summary>True when the symbol is in the market's F&amp;O (derivatives) universe.</summary>
+    public bool IsFno { get; set; }
 }
 
 // --- Sector Rotation ---

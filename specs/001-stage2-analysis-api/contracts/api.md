@@ -20,7 +20,7 @@ All payloads are JSON. **UI is out of scope** — these are the raw HTTP contrac
 |--------|-------|--------------|---------|--------|
 | POST | `/api/{market}/analysis/trigger` | body `TriggerAnalysisRequest?` | `200` `{ runId: int }` | `400` bad market / bad or future `weekNumber` |
 | GET | `/api/{market}/analysis/summary` | — | `200` `Stage2SummaryDto` | `400` bad market; `404` no completed run |
-| GET | `/api/{market}/analysis/runs/{runId}/stocks` | `classification?`, `sectorId?` | `200` `StageAnalysisResultDto[]` | — (empty list if run unknown) |
+| GET | `/api/{market}/analysis/runs/{runId}/stocks` | `classification?`, `sectorId?`, `fnoOnly?` | `200` `StageAnalysisResultDto[]` | — (empty list if run unknown) |
 | GET | `/api/{market}/analysis/runs/{runId}/sector-rotation` | — | `200` `SectorRotationDto[]` | — |
 | GET | `/api/{market}/analysis/history` | `maxRuns=10` | `200` `Stage2HistoryDto[]` | `400` bad market |
 | GET | `/api/{market}/analysis/rotation-history` | `maxRuns=12` | `200` `SectorRotationHistoryDto[]` | `400` bad market |

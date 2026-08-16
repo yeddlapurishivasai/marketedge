@@ -38,7 +38,7 @@ Shell: `NavBar` (brand link to `/`, theme toggle). Theme persisted in
 | `cancelJobRun(id)` | POST `/jobs/{id}/cancel` |
 | `triggerAnalysis(market, request?)` | POST `/{market}/analysis/trigger` |
 | `fetchStage2Summary(market)` | GET `/{market}/analysis/summary` |
-| `fetchStage2Stocks(market, runId, {classification,sectorId})` | GET `/{market}/analysis/runs/{runId}/stocks?...` |
+| `fetchStage2Stocks(market, runId, {classification,sectorId,fnoOnly})` | GET `/{market}/analysis/runs/{runId}/stocks?...` |
 | `fetchSectorRotation(market, runId)` | GET `/{market}/analysis/runs/{runId}/sector-rotation` |
 | `fetchStage2History(market, maxRuns=10)` | GET `/{market}/analysis/history?maxRuns=` |
 | `fetchRotationHistory(market, maxRuns=12)` | GET `/{market}/analysis/rotation-history?maxRuns=` |
@@ -49,8 +49,8 @@ Client view types mirror the API DTOs: `Sector`, `Stock`, `PagedResult<T>`,
 
 ## Analysis page tabs (`AnalysisPage.tsx`)
 
-`tab ∈ {overview, top25, sectors, rotation, stocks}` (labels: Overview, Top 25,
-By Sector, Sector Rotation, All Stocks).
+`tab ∈ {overview, top25, sectors, rotation, stocks, fno}` (labels: Overview, Top 25,
+By Sector, Sector Rotation, All Stocks, F&O Stocks).
 
 - **overview**: summary stat cards (Total, Stage 2, New/Re-Entry/Continuing/
   Removed); per-sector Stage 2 bar chart (top 20); Stage 2 line chart over history
@@ -63,7 +63,10 @@ By Sector, Sector Rotation, All Stocks).
   accumulating/distributing); timeline play/pause + range slider over
   `rotationHistory` (1.5 s/frame, stops at last frame).
 - **stocks**: lazily fetched for `latestRunId`; classification filter
-  (all/new/continuing/reentry/removed) + optional sector filter → refetch.
+  (all/new/continuing/reentry/removed) + optional sector filter → refetch. Rows show
+  an F&O badge from `isFno`.
+- **fno**: same table and filters as **stocks**, fetched with `fnoOnly: true` so only
+  symbols in the market's F&O (derivatives) universe are listed.
 
 Sort hook: 3-state per column — first click desc, second asc, third clears; nulls
 sorted last; strings via `localeCompare`.
