@@ -253,6 +253,58 @@ def persist_results(conn, market: str, scanner_name: str, scan_date: date, run_i
     return len(rows)
 
 
+def refresh_squeeze(conn, market: str, series_cache: dict[str, Any]) -> int:
+    """Recompute the daily Squeeze Momentum state and update the latest stage-2 rows.
+
+    Stage-2 analysis is weekly, but the squeeze is a daily-timeframe signal — so every
+    scanner run (which already has each symbol's daily series loaded) refreshes
+    ``SqueezeOn``/``SqueezeFired``/``SqueezeMomentum`` on the newest run's rows in
+    ``{Market}StageAnalysisResults``. Best-effort: never aborts a scan.
+    """
+    from stage_analysis import squeeze_state
+
+    stage = _table(_STAGE, market)
+    # Target the *latest week*, which is what the API reads (results are keyed by
+    # WeekNumber). MAX(RunId) would be wrong: a backfill run for an older week stamps
+    # its RunId onto that week's rows, and a retry run only covers a subset of symbols.
+    # WeekNumber is 'YYYY-Www', so MAX() orders correctly across year boundaries.
+    week = conn.cursor().execute(f"SELECT MAX(WeekNumber) FROM dbo.{stage}").fetchval()
+    if not week:
+        return 0
+
+    rows: list[tuple] = []
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for symbol, series in series_cache.items():
+        if series is None:
+            continue
+        state = squeeze_state(series.adj_high(), series.adj_low(), series.close)
+        # Require both flags and momentum so the batch has a stable parameter type
+        # (fast_executemany infers binding types from the first row).
+        if state["squeeze_on"] is None or state["squeeze_momentum"] is None:
+            continue
+        rows.append((
+            int(bool(state["squeeze_on"])),
+            int(bool(state["squeeze_fired"])),
+            float(round(state["squeeze_momentum"], 6)),
+            now,
+            week,
+            symbol,
+        ))
+    if not rows:
+        return 0
+
+    cur = conn.cursor()
+    cur.fast_executemany = True
+    cur.executemany(
+        f"""UPDATE dbo.{stage}
+            SET SqueezeOn = ?, SqueezeFired = ?, SqueezeMomentum = ?, SqueezeUpdatedAt = ?
+            WHERE WeekNumber = ? AND Symbol = ?""",
+        rows,
+    )
+    conn.commit()
+    return len(rows)
+
+
 def run_scanner_job(payload: dict) -> None:
     market = str(payload["market"]).lower()
     run_id = int(payload["runId"])
@@ -354,6 +406,14 @@ def run_scanner_job(payload: dict) -> None:
             persist_results(conn, market, d.name, scan_date, run_id, rows)
             per_scanner[d.name] = len(rows)
             total_hits += len(rows)
+
+        # Daily squeeze refresh for the stage-2 result rows (advisory, never aborts).
+        squeeze_updated = 0
+        try:
+            squeeze_updated = refresh_squeeze(conn, market, series_cache)
+            logger.info("Scanner run %s: squeeze refreshed for %s symbols", run_id, squeeze_updated)
+        except Exception:  # noqa: BLE001 - squeeze refresh must never abort the scan
+            logger.exception("Scanner run %s: squeeze refresh failed", run_id)
         tracker.complete("persist", detail=f"{total_hits} hits")
 
         # --- Paper-breakout engine ---
@@ -396,6 +456,7 @@ def run_scanner_job(payload: dict) -> None:
             "technicalRefreshed": tech_refreshed,
             "scanners": len(defs),
             "totalHits": total_hits,
+            "squeezeUpdated": squeeze_updated,
             "perScanner": per_scanner,
             "scanDate": str(scan_date),
             "breakouts": breakout_metrics,

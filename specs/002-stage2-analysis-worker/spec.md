@@ -102,9 +102,11 @@ follow the documented rules (`contracts/algorithm.md`).
 7. **Given** all signals, **Then** `is_stage2` is true iff: latest Close > MA30,
    the 30-week SMA is rising (now > value 5 weeks ago), Close > MA10, MA10 > MA30,
    and `RSScore` is present and > 0.
-8. **Given** ≥21 weekly bars, **Then** `SqueezeOn` (Bollinger 20/2 inside Keltner
-   20/1.5), `SqueezeFired` (on last week, off this week) and `SqueezeMomentum`
-   (linear-regression momentum histogram) are persisted; otherwise they are null.
+8. **Given** ≥21 *daily* bars in `{Market}Bars1D`, **Then** `SqueezeOn` (Bollinger 20/2
+   inside Keltner 20/1.5), `SqueezeFired` (on the previous day, off today),
+   `SqueezeMomentum` (linear-regression momentum histogram) and `SqueezeUpdatedAt` are
+   persisted; otherwise they are null. The squeeze is seeded by the stage-2 run and
+   refreshed by every scanner run, so it tracks the daily timeframe.
 
 ---
 
@@ -235,9 +237,9 @@ week, and restricting to the local test-sample universe for fast runs.
   base data is produced by the ingestion pipeline (`specs/005-data-ingestion/`).
 - **FR-008**: `calculate_stage2` MUST return `None` for <30 weekly bars; otherwise
   compute `ClosePrice, MA10, MA30, RSScore, RS1w–RS3w, RSDelta1w–3w, MomentumScore,
-  ROC1w–3w, Quadrant, ADRatio, ADClassification, SqueezeOn, SqueezeFired,
-  SqueezeMomentum, is_stage2` per the algorithm in
-  `contracts/algorithm.md`.
+  ROC1w–3w, Quadrant, ADRatio, ADClassification, is_stage2` per the algorithm in
+  `contracts/algorithm.md`. `SqueezeOn, SqueezeFired, SqueezeMomentum` are computed
+  separately by `compute_daily_squeeze` from daily bars and merged into the row.
 - **FR-009**: `is_stage2` MUST be true iff Close>MA30 ∧ 30wk SMA rising ∧ Close>MA10
   ∧ MA10>MA30 ∧ RSScore present ∧ RSScore>0.
 - **FR-010**: Each analyzed stock MUST be upserted immediately into the market's

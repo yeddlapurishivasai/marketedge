@@ -571,7 +571,8 @@ public class JobService : IJobService
             ADClassification = r.ADClassification,
             SqueezeOn = r.SqueezeOn,
             SqueezeFired = r.SqueezeFired,
-            SqueezeMomentum = r.SqueezeMomentum
+            SqueezeMomentum = r.SqueezeMomentum,
+            SqueezeUpdatedAt = r.SqueezeUpdatedAt
         };
     }
 

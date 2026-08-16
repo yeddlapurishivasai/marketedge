@@ -326,27 +326,35 @@ def _linreg_last(series: pd.Series, length: int) -> float | None:
     return float(value) if pd.notna(value) else None
 
 
-def calculate_squeeze(
-    frame: pd.DataFrame,
+def squeeze_state(
+    high,
+    low,
+    close,
     length: int = SQUEEZE_LENGTH,
     bb_mult: float = SQUEEZE_BB_MULT,
     kc_mult: float = SQUEEZE_KC_MULT,
 ) -> dict:
-    """LazyBear "Squeeze Momentum" state for the latest bar of an OHLC frame.
+    """LazyBear "Squeeze Momentum" state at the last bar of an OHLC series.
 
     Bollinger Bands (``length``/``bb_mult``) inside Keltner Channels
     (``length``/``kc_mult``, true-range based) means volatility is compressed — the
     squeeze is *on*. The squeeze has *fired* when it was on for the previous bar and is
     off now, which is the actionable expansion signal. ``squeeze_momentum`` is the
     linear-regression momentum histogram value: positive = upward pressure.
+
+    ``high``/``low``/``close`` may be pandas Series or numpy arrays. MarketEdge feeds
+    this daily bars (see ``compute_daily_squeeze``) so the state refreshes every
+    trading day rather than only on the weekly stage-2 run.
     """
     empty = {"squeeze_on": None, "squeeze_fired": None, "squeeze_momentum": None}
-    if frame is None or frame.empty or "Close" not in frame.columns:
+    if close is None or len(close) == 0:
         return empty
 
-    close = frame["Close"].astype(float)
-    high = frame["High"].astype(float) if "High" in frame.columns else close
-    low = frame["Low"].astype(float) if "Low" in frame.columns else close
+    close = pd.Series(close, dtype="float64").reset_index(drop=True)
+    high = close if high is None else pd.Series(high, dtype="float64").reset_index(drop=True)
+    low = close if low is None else pd.Series(low, dtype="float64").reset_index(drop=True)
+    if len(high) != len(close) or len(low) != len(close):
+        return empty
     if len(close.dropna()) < length + 1:
         return empty
 
@@ -379,6 +387,47 @@ def calculate_squeeze(
         "squeeze_fired": squeeze_fired,
         "squeeze_momentum": momentum,
     }
+
+
+EMPTY_SQUEEZE = {"squeeze_on": None, "squeeze_fired": None, "squeeze_momentum": None}
+
+# Daily history pulled for the squeeze: comfortably more than the 21 bars the
+# indicator needs, so gaps/holidays never starve it.
+SQUEEZE_DAILY_BARS = 120
+
+
+def calculate_squeeze(
+    frame: pd.DataFrame,
+    length: int = SQUEEZE_LENGTH,
+    bb_mult: float = SQUEEZE_BB_MULT,
+    kc_mult: float = SQUEEZE_KC_MULT,
+) -> dict:
+    """Squeeze state for the latest bar of an OHLC DataFrame (yfinance shape)."""
+    if frame is None or frame.empty or "Close" not in frame.columns:
+        return dict(EMPTY_SQUEEZE)
+    close = frame["Close"].astype(float)
+    high = frame["High"].astype(float) if "High" in frame.columns else close
+    low = frame["Low"].astype(float) if "Low" in frame.columns else close
+    return squeeze_state(high, low, close, length=length, bb_mult=bb_mult, kc_mult=kc_mult)
+
+
+def compute_daily_squeeze(conn, market: str, symbol: str, end_date=None) -> dict:
+    """Squeeze state from *daily* bars in ``{Market}Bars1D`` (never raises).
+
+    The stage-2 analysis itself runs on weekly bars, but the squeeze is a daily-timeframe
+    signal that is refreshed by every scanner run — so it is always computed from the
+    daily bar table to keep both writers consistent.
+    """
+    try:
+        from scanners.indicators import load_bars
+
+        series = load_bars(conn, market, symbol, SQUEEZE_DAILY_BARS, end_date=end_date)
+        if series is None or series.n < SQUEEZE_LENGTH + 1:
+            return dict(EMPTY_SQUEEZE)
+        return squeeze_state(series.adj_high(), series.adj_low(), series.close)
+    except Exception as exc:  # noqa: BLE001 - squeeze is advisory, never fail the run
+        logger.debug("Daily squeeze failed for %s/%s: %s", market, symbol, exc)
+        return dict(EMPTY_SQUEEZE)
 
 
 def calculate_stage2(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> dict | None:
@@ -520,8 +569,6 @@ def calculate_stage2(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> 
         and rs_score > 0
     )
 
-    squeeze = calculate_squeeze(stock_frame)
-
     return {
         "close_price": float(close.iloc[-1]),
         "ma10": ma10,
@@ -541,9 +588,6 @@ def calculate_stage2(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> 
         "quadrant": quadrant,
         "ad_ratio": ad_ratio,
         "ad_classification": ad_classification,
-        "squeeze_on": squeeze["squeeze_on"],
-        "squeeze_fired": squeeze["squeeze_fired"],
-        "squeeze_momentum": squeeze["squeeze_momentum"],
     }
 
 

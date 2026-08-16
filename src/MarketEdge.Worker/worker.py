@@ -29,6 +29,7 @@ from db import (
 from stage_analysis import (
     calculate_stage2,
     classify_stocks,
+    compute_daily_squeeze,
     compute_rs_ranks,
     fetch_benchmark_data,
     fetch_benchmark_weekly_from_daily,
@@ -270,6 +271,15 @@ def process_message(message_content: str) -> None:
         as_of_end = week_exclusive_end(week_number)
         if as_of_end is not None and as_of_end > date.today():
             as_of_end = None  # current/ongoing week — fetch through today (live)
+        # load_bars() filters BarDate <= end_date, so step back off the exclusive bound.
+        squeeze_as_of = (as_of_end - timedelta(days=1)) if as_of_end is not None else None
+        # Stamp the squeeze with the date it was computed as-of, not "now", so a
+        # point-in-time backfill never claims today's freshness.
+        squeeze_stamp = (
+            datetime.combine(squeeze_as_of, datetime.min.time())
+            if squeeze_as_of is not None
+            else _utcnow()
+        )
         logger.info(
             "Run %s is for week %s (%s)",
             run_id, week_number,
@@ -479,6 +489,10 @@ def process_message(message_content: str) -> None:
                     "market_cap": mc,
                     "weeks_in_stage2": 0,
                     **analysis,
+                    # Squeeze is a daily-timeframe signal refreshed by every scanner run;
+                    # seed it here from the same daily bars so it is never blank/stale.
+                    **compute_daily_squeeze(conn, market, symbol, end_date=squeeze_as_of),
+                    "squeeze_updated_at": squeeze_stamp,
                 }
                 if result["is_stage2"]:
                     current_stage2_symbols.add(symbol)

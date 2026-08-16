@@ -240,7 +240,8 @@ plus week-over-week history for Stage 2 counts and sector rotation.
   `MomentumScore`, `ROC1w`–`ROC3w`. Rotation: `Quadrant`
   (`leading`/`weakening`/`lagging`/`improving`). Accumulation/distribution:
   `ADRatio`, `ADClassification` (`accumulating`/`distributing`/`neutral`). Squeeze
-  Momentum: `SqueezeOn`, `SqueezeFired`, `SqueezeMomentum`.
+  Momentum: `SqueezeOn`, `SqueezeFired`, `SqueezeMomentum`, `SqueezeUpdatedAt`
+  (daily timeframe; refreshed by every scanner run, not just the weekly stage-2 run).
 - **DTOs**: `JobRunDto`, `TriggerAnalysisRequest`, `StageAnalysisResultDto`,
   `Stage2SummaryDto`, `SectorStage2CountDto`, `SectorRotationDto`,
   `Stage2HistoryDto`, `SectorRotationHistoryDto` — the only shapes returned to

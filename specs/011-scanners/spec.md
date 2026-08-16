@@ -131,6 +131,12 @@ trade lifecycle, pre-close gating, and PnL/day views.
   gets trigger buttons (per-scanner + Pre-Close Scan), the universe toggle, and the schedule
   on/off switch.
 
+- **FR-010** Every scan run also refreshes the daily Squeeze Momentum state
+  (`SqueezeOn`, `SqueezeFired`, `SqueezeMomentum`, `SqueezeUpdatedAt`) on the newest
+  stage-2 run's rows in `{Market}StageAnalysisResults`, reusing the daily series already
+  loaded for scanning. The refresh is best-effort and never fails the scan; the run's
+  metrics report `squeezeUpdated`.
+
 ## Out of scope / follow-ups
 
 - `EPISODIC_PIVOT` (EDGAR) — deferred placeholder.

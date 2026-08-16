@@ -67,6 +67,7 @@ public abstract class StageAnalysisResultBase
     public bool? SqueezeOn { get; set; }
     public bool? SqueezeFired { get; set; }
     public decimal? SqueezeMomentum { get; set; }
+    public DateTime? SqueezeUpdatedAt { get; set; }
 
     public DateTime CreatedAt { get; set; }
 }

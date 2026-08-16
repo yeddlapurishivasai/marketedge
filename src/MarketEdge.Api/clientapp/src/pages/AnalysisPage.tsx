@@ -90,11 +90,12 @@ function SortableHeader({ label, sortKey, sort, onSort }: { label: string; sortK
 }
 
 // Squeeze Momentum state: compressed ("on"), just released ("fired"), or expanded.
-function SqueezeBadge({ on, fired }: { on?: boolean; fired?: boolean }) {
+function SqueezeBadge({ on, fired, updatedAt }: { on?: boolean; fired?: boolean; updatedAt?: string }) {
+  const asOf = updatedAt ? ` (as of ${new Date(updatedAt).toLocaleDateString()})` : '';
   if (on == null && fired == null) return <span className="cell-muted">-</span>;
-  if (fired) return <span className="squeeze-badge sqz-fired" title="Squeeze released this week">Fired</span>;
-  if (on) return <span className="squeeze-badge sqz-on" title="Volatility compressed — Bollinger inside Keltner">On</span>;
-  return <span className="cell-muted">Off</span>;
+  if (fired) return <span className="squeeze-badge sqz-fired" title={`Daily squeeze released${asOf}`}>Fired</span>;
+  if (on) return <span className="squeeze-badge sqz-on" title={`Volatility compressed — Bollinger inside Keltner on daily bars${asOf}`}>On</span>;
+  return <span className="cell-muted" title={asOf ? `No squeeze${asOf}` : undefined}>Off</span>;
 }
 
 // Convert symbol to TradingView format
@@ -1021,7 +1022,7 @@ export default function AnalysisPage() {
                           <td><span className={`quadrant-badge q-${s.quadrant}`}>{s.quadrant}</span></td>
                           <td><span className={`ad-badge ad-${s.adClassification}`}>{s.adClassification}</span></td>
                           <td><span className={`class-badge class-${s.classification}`}>{s.classification}</span></td>
-                          {tab === 'fno' && <td className="cell-center"><SqueezeBadge on={s.squeezeOn} fired={s.squeezeFired} /></td>}
+                          {tab === 'fno' && <td className="cell-center"><SqueezeBadge on={s.squeezeOn} fired={s.squeezeFired} updatedAt={s.squeezeUpdatedAt} /></td>}
                           {tab === 'fno' && (
                             <td style={{ color: (s.squeezeMomentum ?? 0) > 0 ? 'var(--success)' : 'var(--danger)' }}>
                               {s.squeezeMomentum != null ? s.squeezeMomentum.toFixed(2) : '-'}

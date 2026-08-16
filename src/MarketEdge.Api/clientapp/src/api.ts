@@ -254,6 +254,7 @@ export interface StageAnalysisResult {
   squeezeOn?: boolean;
   squeezeFired?: boolean;
   squeezeMomentum?: number;
+  squeezeUpdatedAt?: string;
   isFno?: boolean;
 }
 

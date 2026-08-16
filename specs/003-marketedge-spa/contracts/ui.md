@@ -67,7 +67,9 @@ By Sector, Sector Rotation, All Stocks, F&O Stocks).
   an F&O badge from `isFno`.
 - **fno**: same table and filters as **stocks**, fetched with `fnoOnly: true` so only
   symbols in the market's F&O (derivatives) universe are listed. Adds a squeeze filter
-  (any / `on` / `fired`) plus Squeeze state and Sqz Mom columns.
+  (any / `on` / `fired`) plus Squeeze state and Sqz Mom columns. The squeeze reflects the
+  daily timeframe and is refreshed by every scanner run; the badge tooltip shows the
+  `squeezeUpdatedAt` as-of date.
 
 Sort hook: 3-state per column — first click desc, second asc, third clears; nulls
 sorted last; strings via `localeCompare`.
