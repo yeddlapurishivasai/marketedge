@@ -200,9 +200,11 @@ plus week-over-week history for Stage 2 counts and sector rotation.
   `Stage2SummaryDto` over the latest completed run's week, or `404` if none.
 - **FR-009**: The API MUST expose
   `GET /api/{market}/analysis/runs/{runId}/stocks` supporting `classification`,
-  `sectorId` and `fnoOnly` filters with the documented Stage 2 / removed semantics, ordered by
-  `RSScore` then `MomentumScore` descending. `fnoOnly=true` restricts results to symbols
-  flagged `IsFno` in the market's stock catalog; every row carries an `isFno` flag.
+  `sectorId`, `fnoOnly` and `squeeze` filters with the documented Stage 2 / removed
+  semantics, ordered by `RSScore` then `MomentumScore` descending. `fnoOnly=true`
+  restricts results to symbols flagged `IsFno` in the market's stock catalog and every
+  row carries an `isFno` flag; `squeeze=on|fired` restricts to rows whose `SqueezeOn` /
+  `SqueezeFired` flag is set.
 - **FR-010**: The API MUST expose
   `GET /api/{market}/analysis/runs/{runId}/sector-rotation` aggregating per-sector
   average RS metrics, quadrant, and accumulation/distribution counts over rows with
@@ -237,7 +239,8 @@ plus week-over-week history for Stage 2 counts and sector rotation.
   `RSScore`, `RSRank`, `RS1w`–`RS3w`, `RSDelta1w`–`RSDelta3w`. Momentum:
   `MomentumScore`, `ROC1w`–`ROC3w`. Rotation: `Quadrant`
   (`leading`/`weakening`/`lagging`/`improving`). Accumulation/distribution:
-  `ADRatio`, `ADClassification` (`accumulating`/`distributing`/`neutral`).
+  `ADRatio`, `ADClassification` (`accumulating`/`distributing`/`neutral`). Squeeze
+  Momentum: `SqueezeOn`, `SqueezeFired`, `SqueezeMomentum`.
 - **DTOs**: `JobRunDto`, `TriggerAnalysisRequest`, `StageAnalysisResultDto`,
   `Stage2SummaryDto`, `SectorStage2CountDto`, `SectorRotationDto`,
   `Stage2HistoryDto`, `SectorRotationHistoryDto` — the only shapes returned to

@@ -92,6 +92,12 @@ public class StageAnalysisResultDto
     public string? Quadrant { get; set; }
     public decimal? ADRatio { get; set; }
     public string? ADClassification { get; set; }
+    /// <summary>Squeeze Momentum: Bollinger Bands inside Keltner Channels on the weekly bar.</summary>
+    public bool? SqueezeOn { get; set; }
+    /// <summary>The squeeze was on last week and released this week (expansion signal).</summary>
+    public bool? SqueezeFired { get; set; }
+    /// <summary>Linear-regression momentum histogram value; positive = upward pressure.</summary>
+    public decimal? SqueezeMomentum { get; set; }
     /// <summary>True when the symbol is in the market's F&amp;O (derivatives) universe.</summary>
     public bool IsFno { get; set; }
 }

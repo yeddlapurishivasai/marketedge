@@ -5,6 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 
+import numpy as np
 import pandas as pd
 import yfinance as yf
 
@@ -305,6 +306,81 @@ def fetch_market_caps(symbols: list[str], market: str, batch_delay: float = 2.0)
     return results
 
 
+SQUEEZE_LENGTH = 20
+SQUEEZE_BB_MULT = 2.0
+SQUEEZE_KC_MULT = 1.5
+
+
+def _linreg_last(series: pd.Series, length: int) -> float | None:
+    """Value of the least-squares regression line at the most recent point.
+
+    Equivalent to Pine's ``linreg(source, length, 0)`` used by the Squeeze Momentum
+    indicator: fit a line over the last ``length`` samples and read it at the last bar.
+    """
+    window = series.dropna().tail(length)
+    if len(window) < length:
+        return None
+    x = np.arange(len(window), dtype="float64")
+    slope, intercept = np.polyfit(x, window.to_numpy(dtype="float64"), 1)
+    value = intercept + slope * (len(window) - 1)
+    return float(value) if pd.notna(value) else None
+
+
+def calculate_squeeze(
+    frame: pd.DataFrame,
+    length: int = SQUEEZE_LENGTH,
+    bb_mult: float = SQUEEZE_BB_MULT,
+    kc_mult: float = SQUEEZE_KC_MULT,
+) -> dict:
+    """LazyBear "Squeeze Momentum" state for the latest bar of an OHLC frame.
+
+    Bollinger Bands (``length``/``bb_mult``) inside Keltner Channels
+    (``length``/``kc_mult``, true-range based) means volatility is compressed — the
+    squeeze is *on*. The squeeze has *fired* when it was on for the previous bar and is
+    off now, which is the actionable expansion signal. ``squeeze_momentum`` is the
+    linear-regression momentum histogram value: positive = upward pressure.
+    """
+    empty = {"squeeze_on": None, "squeeze_fired": None, "squeeze_momentum": None}
+    if frame is None or frame.empty or "Close" not in frame.columns:
+        return empty
+
+    close = frame["Close"].astype(float)
+    high = frame["High"].astype(float) if "High" in frame.columns else close
+    low = frame["Low"].astype(float) if "Low" in frame.columns else close
+    if len(close.dropna()) < length + 1:
+        return empty
+
+    basis = close.rolling(length).mean()
+    dev = close.rolling(length).std(ddof=0) * bb_mult
+    upper_bb, lower_bb = basis + dev, basis - dev
+
+    prev_close = close.shift(1)
+    true_range = pd.concat(
+        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
+    ).max(axis=1)
+    range_ma = true_range.rolling(length).mean()
+    upper_kc, lower_kc = basis + range_ma * kc_mult, basis - range_ma * kc_mult
+
+    valid = basis.notna() & range_ma.notna()
+    squeeze_series = ((lower_bb > lower_kc) & (upper_bb < upper_kc)) & valid
+    if not bool(valid.iloc[-1]):
+        return empty
+
+    squeeze_on = bool(squeeze_series.iloc[-1])
+    squeeze_fired = bool(
+        len(squeeze_series) >= 2 and bool(squeeze_series.iloc[-2]) and not squeeze_on
+    )
+
+    midline = ((high.rolling(length).max() + low.rolling(length).min()) / 2 + basis) / 2
+    momentum = _linreg_last(close - midline, length)
+
+    return {
+        "squeeze_on": squeeze_on,
+        "squeeze_fired": squeeze_fired,
+        "squeeze_momentum": momentum,
+    }
+
+
 def calculate_stage2(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> dict | None:
     if stock_data is None or stock_data.empty or len(stock_data) < 30:
         return None
@@ -444,6 +520,8 @@ def calculate_stage2(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> 
         and rs_score > 0
     )
 
+    squeeze = calculate_squeeze(stock_frame)
+
     return {
         "close_price": float(close.iloc[-1]),
         "ma10": ma10,
@@ -463,6 +541,9 @@ def calculate_stage2(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> 
         "quadrant": quadrant,
         "ad_ratio": ad_ratio,
         "ad_classification": ad_classification,
+        "squeeze_on": squeeze["squeeze_on"],
+        "squeeze_fired": squeeze["squeeze_fired"],
+        "squeeze_momentum": squeeze["squeeze_momentum"],
     }
 
 

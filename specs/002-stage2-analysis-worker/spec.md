@@ -102,6 +102,9 @@ follow the documented rules (`contracts/algorithm.md`).
 7. **Given** all signals, **Then** `is_stage2` is true iff: latest Close > MA30,
    the 30-week SMA is rising (now > value 5 weeks ago), Close > MA10, MA10 > MA30,
    and `RSScore` is present and > 0.
+8. **Given** ≥21 weekly bars, **Then** `SqueezeOn` (Bollinger 20/2 inside Keltner
+   20/1.5), `SqueezeFired` (on last week, off this week) and `SqueezeMomentum`
+   (linear-regression momentum histogram) are persisted; otherwise they are null.
 
 ---
 
@@ -232,7 +235,8 @@ week, and restricting to the local test-sample universe for fast runs.
   base data is produced by the ingestion pipeline (`specs/005-data-ingestion/`).
 - **FR-008**: `calculate_stage2` MUST return `None` for <30 weekly bars; otherwise
   compute `ClosePrice, MA10, MA30, RSScore, RS1w–RS3w, RSDelta1w–3w, MomentumScore,
-  ROC1w–3w, Quadrant, ADRatio, ADClassification, is_stage2` per the algorithm in
+  ROC1w–3w, Quadrant, ADRatio, ADClassification, SqueezeOn, SqueezeFired,
+  SqueezeMomentum, is_stage2` per the algorithm in
   `contracts/algorithm.md`.
 - **FR-009**: `is_stage2` MUST be true iff Close>MA30 ∧ 30wk SMA rising ∧ Close>MA10
   ∧ MA10>MA30 ∧ RSScore present ∧ RSScore>0.
@@ -268,7 +272,8 @@ week, and restricting to the local test-sample universe for fast runs.
 - **Per-stock analysis result** (dict → `{Indian|US}StageAnalysisResults` row):
   `run_id, week_number, symbol, company_name, sector_id, sector_name, market_cap,
   close_price, ma10, ma30, is_stage2, rs_score, rs_1w/2w/3w, rs_delta_1w/2w/3w,
-  momentum_score, roc_1w/2w/3w, quadrant, ad_ratio, ad_classification` plus
+  momentum_score, roc_1w/2w/3w, quadrant, ad_ratio, ad_classification,
+  squeeze_on, squeeze_fired, squeeze_momentum` plus
   post-processed `classification`, `rs_rank`, `weeks_in_stage2`.
 - **JobRun** (`JobRuns`): updated in place — `Status`, `Progress`, `Metrics`
   (JSON: `market`, `totalStocks`, `filteredStocks`, `stage2Count`,

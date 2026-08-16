@@ -13,7 +13,7 @@ public interface IJobService
     Task<int> TriggerStageAnalysisAsync(string market, TriggerAnalysisRequest? request);
     Task<bool> CancelRunAsync(int id);
     Task<Stage2SummaryDto?> GetLatestStage2SummaryAsync(string market);
-    Task<List<StageAnalysisResultDto>> GetStage2StocksAsync(int runId, string? classification = null, int? sectorId = null, bool fnoOnly = false);
+    Task<List<StageAnalysisResultDto>> GetStage2StocksAsync(int runId, string? classification = null, int? sectorId = null, bool fnoOnly = false, string? squeeze = null);
     Task<List<SectorRotationDto>> GetSectorRotationAsync(int runId);
     Task<List<Stage2HistoryDto>> GetStage2HistoryAsync(string market, int maxRuns = 10);
     Task<List<SectorRotationHistoryDto>> GetSectorRotationHistoryAsync(string market, int maxRuns = 12);
@@ -273,7 +273,7 @@ public class JobService : IJobService
         return summary;
     }
 
-    public async Task<List<StageAnalysisResultDto>> GetStage2StocksAsync(int runId, string? classification = null, int? sectorId = null, bool fnoOnly = false)
+    public async Task<List<StageAnalysisResultDto>> GetStage2StocksAsync(int runId, string? classification = null, int? sectorId = null, bool fnoOnly = false, string? squeeze = null)
     {
         // Determine market from the job run
         var job = await _db.JobRuns.FindAsync(runId);
@@ -306,6 +306,14 @@ public class JobService : IJobService
                 : _db.USStocks.Where(s => s.IsFno).Select(s => s.Symbol);
             query = query.Where(r => fnoSymbols.Contains(r.Symbol));
         }
+
+        // Squeeze Momentum: 'on' = still compressed, 'fired' = released this week.
+        query = squeeze?.ToLowerInvariant() switch
+        {
+            "on" => query.Where(r => r.SqueezeOn == true),
+            "fired" => query.Where(r => r.SqueezeFired == true),
+            _ => query
+        };
 
         var dtos = await query
             .OrderByDescending(r => r.RSScore)
@@ -529,7 +537,8 @@ public class JobService : IJobService
         foreach (var d in dtos) d.IsFno = set.Contains(d.Symbol);
     }
 
-    private static StageAnalysisResultDto MapResult(StageAnalysisResultBase r)    {
+    private static StageAnalysisResultDto MapResult(StageAnalysisResultBase r)
+    {
         return new StageAnalysisResultDto
         {
             Id = r.Id,
@@ -559,7 +568,10 @@ public class JobService : IJobService
             ROC3w = r.ROC3w,
             Quadrant = r.Quadrant,
             ADRatio = r.ADRatio,
-            ADClassification = r.ADClassification
+            ADClassification = r.ADClassification,
+            SqueezeOn = r.SqueezeOn,
+            SqueezeFired = r.SqueezeFired,
+            SqueezeMomentum = r.SqueezeMomentum
         };
     }
 

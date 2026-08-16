@@ -38,7 +38,7 @@ Shell: `NavBar` (brand link to `/`, theme toggle). Theme persisted in
 | `cancelJobRun(id)` | POST `/jobs/{id}/cancel` |
 | `triggerAnalysis(market, request?)` | POST `/{market}/analysis/trigger` |
 | `fetchStage2Summary(market)` | GET `/{market}/analysis/summary` |
-| `fetchStage2Stocks(market, runId, {classification,sectorId,fnoOnly})` | GET `/{market}/analysis/runs/{runId}/stocks?...` |
+| `fetchStage2Stocks(market, runId, {classification,sectorId,fnoOnly,squeeze})` | GET `/{market}/analysis/runs/{runId}/stocks?...` |
 | `fetchSectorRotation(market, runId)` | GET `/{market}/analysis/runs/{runId}/sector-rotation` |
 | `fetchStage2History(market, maxRuns=10)` | GET `/{market}/analysis/history?maxRuns=` |
 | `fetchRotationHistory(market, maxRuns=12)` | GET `/{market}/analysis/rotation-history?maxRuns=` |
@@ -66,7 +66,8 @@ By Sector, Sector Rotation, All Stocks, F&O Stocks).
   (all/new/continuing/reentry/removed) + optional sector filter → refetch. Rows show
   an F&O badge from `isFno`.
 - **fno**: same table and filters as **stocks**, fetched with `fnoOnly: true` so only
-  symbols in the market's F&O (derivatives) universe are listed.
+  symbols in the market's F&O (derivatives) universe are listed. Adds a squeeze filter
+  (any / `on` / `fired`) plus Squeeze state and Sqz Mom columns.
 
 Sort hook: 3-state per column — first click desc, second asc, third clears; nulls
 sorted last; strings via `localeCompare`.

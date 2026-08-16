@@ -42,6 +42,11 @@ CREATE TABLE [dbo].[IndianStageAnalysisResults]
     [ADRatio] DECIMAL(5,4) NULL,
     [ADClassification] NVARCHAR(20) NULL,
 
+    -- Squeeze Momentum (Bollinger inside Keltner; linreg momentum histogram)
+    [SqueezeOn] BIT NULL,
+    [SqueezeFired] BIT NULL,
+    [SqueezeMomentum] DECIMAL(18,6) NULL,
+
     [CreatedAt] DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
 
     CONSTRAINT [PK_IndianStageAnalysisResults] PRIMARY KEY CLUSTERED ([Id]),
