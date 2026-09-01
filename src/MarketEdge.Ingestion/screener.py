@@ -342,42 +342,76 @@ def _parse_quarters(doc, symbol: str, consolidated: bool) -> ScreenerQuarterly |
         return None
 
     n = len(quarter_labels)
+    # Column dates drive every lookup below. Screener's quarterly table is NOT guaranteed to
+    # be a contiguous run of quarters — small/irregular reporters and recently-listed names
+    # can have gaps or fewer columns — so a positional "4 columns back = year ago" offset is
+    # wrong. It silently returns either None (when the table is short) or, worse, a real
+    # number from the WRONG quarter, manufacturing a plausible-looking but fake YoY move.
+    # Everything is therefore matched on the parsed quarter-end date instead.
+    col_dates = [_quarter_end(lbl) for lbl in quarter_labels]
 
-    def at(key: str, back: int) -> float | None:
-        """Value ``back`` quarters from the latest (0 = latest, 1 = prev Q, 4 = year ago)."""
+    latest_idx = None
+    for i in range(min(len(col_dates), n) - 1, -1, -1):
+        if col_dates[i] is not None:
+            latest_idx = i
+            break
+    if latest_idx is None:
+        return None
+    latest_date = col_dates[latest_idx]
+
+    def _shift_months(d: date, months: int) -> date:
+        total = d.year * 12 + (d.month - 1) + months
+        y, m = divmod(total, 12)
+        m += 1
+        return date(y, 12, 31) if m == 12 else date.fromordinal(date(y, m + 1, 1).toordinal() - 1)
+
+    def _index_for(target: date, tol_days: int = 45) -> int | None:
+        """Column whose quarter-end is nearest ``target``, or None if none is close enough."""
+        best = best_delta = None
+        for i, d in enumerate(col_dates):
+            if d is None or i >= n:
+                continue
+            delta = abs((d - target).days)
+            if delta <= tol_days and (best_delta is None or delta < best_delta):
+                best, best_delta = i, delta
+        return best
+
+    idx_latest = latest_idx
+    idx_prev_q = _index_for(_shift_months(latest_date, -3))
+    idx_yoy_q = _index_for(_shift_months(latest_date, -12))
+
+    def at(key: str, idx: int | None) -> float | None:
         series = rows.get(key)
-        if not series:
+        if not series or idx is None:
             return None
-        idx = min(len(series), n) - 1 - back
         return series[idx] if 0 <= idx < len(series) else None
 
-    def money(key: str, back: int) -> float | None:
-        v = at(key, back)
+    def money(key: str, idx: int | None) -> float | None:
+        v = at(key, idx)
         return None if v is None else v * CRORE
 
     out = ScreenerQuarterly(symbol=symbol, consolidated=consolidated)
-    out.latest_quarter_end = _quarter_end(quarter_labels[min(len(quarter_labels), n) - 1])
-    out.revenue = money("revenue", 0)
-    out.revenue_prev_q = money("revenue", 1)
-    out.revenue_yoy_q = money("revenue", 4)
-    out.operating_profit = money("operating_profit", 0)
-    out.operating_profit_prev_q = money("operating_profit", 1)
-    out.operating_profit_yoy_q = money("operating_profit", 4)
-    out.opm = at("opm", 0)
-    out.opm_prev_q = at("opm", 1)
-    out.opm_yoy_q = at("opm", 4)
-    out.net_profit = money("net_profit", 0)
-    out.net_profit_prev_q = money("net_profit", 1)
-    out.net_profit_yoy_q = money("net_profit", 4)
+    out.latest_quarter_end = latest_date
+    out.revenue = money("revenue", idx_latest)
+    out.revenue_prev_q = money("revenue", idx_prev_q)
+    out.revenue_yoy_q = money("revenue", idx_yoy_q)
+    out.operating_profit = money("operating_profit", idx_latest)
+    out.operating_profit_prev_q = money("operating_profit", idx_prev_q)
+    out.operating_profit_yoy_q = money("operating_profit", idx_yoy_q)
+    out.opm = at("opm", idx_latest)
+    out.opm_prev_q = at("opm", idx_prev_q)
+    out.opm_yoy_q = at("opm", idx_yoy_q)
+    out.net_profit = money("net_profit", idx_latest)
+    out.net_profit_prev_q = money("net_profit", idx_prev_q)
+    out.net_profit_yoy_q = money("net_profit", idx_yoy_q)
 
     eps_quarters: list[tuple[date, float]] = []
-    for back in range(4):
-        val = at("eps", back)
-        idx = min(len(quarter_labels), n) - 1 - back
-        if val is None or idx < 0:
-            continue
-        qend = _quarter_end(quarter_labels[idx])
-        if qend is not None:
+    for i in range(min(len(col_dates), n) - 1, -1, -1):
+        if len(eps_quarters) >= 4:
+            break
+        val = at("eps", i)
+        qend = col_dates[i]
+        if val is not None and qend is not None:
             eps_quarters.append((qend, val))
     out.eps_quarters = eps_quarters
 

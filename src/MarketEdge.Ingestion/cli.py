@@ -1035,15 +1035,33 @@ def _try_earnings_fundamentals(conn, market, symbol, ticker, as_of) -> bool:
                 used_yfinance_financials = True
             return value
 
-        revenue = _fill(revenue, rev_labels, 0)
-        op_profit = _fill(op_profit, op_labels, 0)
-        net_profit = _fill(net_profit, ni_labels, 0)
-        revenue_pq = _fill(revenue_pq, rev_labels, 1)
-        op_profit_pq = _fill(op_profit_pq, op_labels, 1)
-        net_profit_pq = _fill(net_profit_pq, ni_labels, 1)
-        revenue_yo = _fill(revenue_yo, rev_labels, 4)
-        op_profit_yo = _fill(op_profit_yo, op_labels, 4)
-        net_profit_yo = _fill(net_profit_yo, ni_labels, 4)
+        # Period-set atomicity: a metric's (current, prev-Q, year-ago) triplet must come from
+        # ONE source. Screener reports consolidated INR crore off the filed results; Yahoo's
+        # quarterly_income_stmt uses its own consolidation basis and revenue definition, so
+        # pairing Screener's current quarter with Yahoo's year-ago quarter yields an invalid
+        # comparison — that is exactly how E2E got a fake +122pp OPM expansion (+797% op
+        # profit), which then inflated its score via the 0.35 OPM/op-profit share of
+        # FUND_WEIGHTS. So yfinance only fills a metric it can supply *wholly*.
+        def _fill_metric(cur, pq, yo, labels):
+            if cur is not None and yo is not None:
+                return cur, pq, yo  # Screener already supplied a comparable set.
+            if cur is not None and yo is None:
+                # Screener has the current quarter but no year-ago: drop to yfinance for the
+                # whole triplet if it can cover it, else keep Screener's current quarter with
+                # no YoY (a missing expansion scores neutral, a fake one does not).
+                y_cur = _row_value(stmt, labels, 0)
+                y_yo = _row_value(stmt, labels, 4)
+                if y_cur is not None and y_yo is not None:
+                    used_yfinance_financials = True
+                    return y_cur, _row_value(stmt, labels, 1), y_yo
+                return cur, pq, None
+            return _fill(cur, labels, 0), _fill(pq, labels, 1), _fill(yo, labels, 4)
+
+        revenue, revenue_pq, revenue_yo = _fill_metric(revenue, revenue_pq, revenue_yo, rev_labels)
+        op_profit, op_profit_pq, op_profit_yo = _fill_metric(
+            op_profit, op_profit_pq, op_profit_yo, op_labels)
+        net_profit, net_profit_pq, net_profit_yo = _fill_metric(
+            net_profit, net_profit_pq, net_profit_yo, ni_labels)
         if latest_q_end is None:
             try:
                 latest_q_end = stmt.columns[0].date()
