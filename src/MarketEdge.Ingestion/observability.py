@@ -210,18 +210,27 @@ def configure_logging(service_name: str, market: str | None = None, level: int |
 
 
 def _try_configure_otel(service_name, environment, level, file_logger, default_attrs) -> bool:
-    """Wire the OpenTelemetry logging pipeline. Returns False if OTel is unavailable."""
+    """Wire the OpenTelemetry logging pipeline. Returns False if OTel is unavailable.
+
+    Any failure here (missing package, or an SDK release that changes the exporter
+    contract) must degrade to the plain-stdlib fallback rather than take the process
+    down — logging is never worth crashing the ingestion CLI over.
+    """
     try:
-        from opentelemetry._logs import set_logger_provider
-        from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-        from opentelemetry.sdk._logs.export import (
-            LogExporter,
-            LogExportResult,
-            SimpleLogRecordProcessor,
-        )
-        from opentelemetry.sdk.resources import Resource
+        return _configure_otel(service_name, environment, level, file_logger, default_attrs)
     except Exception:  # noqa: BLE001 - OTel not installed / incompatible
         return False
+
+
+def _configure_otel(service_name, environment, level, file_logger, default_attrs) -> bool:
+    from opentelemetry._logs import set_logger_provider
+    from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+    from opentelemetry.sdk._logs.export import (
+        LogExporter,
+        LogExportResult,
+        SimpleLogRecordProcessor,
+    )
+    from opentelemetry.sdk.resources import Resource
 
     class _NdjsonFileExporter(LogExporter):
         def __init__(self, sink_logger, attrs):
@@ -242,12 +251,21 @@ def _try_configure_otel(service_name, environment, level, file_logger, default_a
             except Exception:  # noqa: BLE001 - never let logging crash the app
                 return LogExportResult.FAILURE
 
-        def shutdown(self):
+        def _flush_sink(self):
             for handler in self._sink.handlers:
                 try:
                     handler.flush()
                 except Exception:  # noqa: BLE001
                     pass
+
+        def shutdown(self):
+            self._flush_sink()
+
+        # Abstract on newer opentelemetry-sdk releases; exports are synchronous here
+        # (SimpleLogRecordProcessor), so there is never anything buffered to drain.
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            self._flush_sink()
+            return True
 
     resource = Resource.create(
         {

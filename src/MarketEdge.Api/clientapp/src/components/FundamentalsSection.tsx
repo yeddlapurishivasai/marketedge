@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
-import type { Market, FundamentalRow, FundamentalSignals, EpsQuarter } from '../api';
-import { fetchFundamentalDetail, saveFundamentalNote } from '../api';
-import { Radar, TrendingUp, TrendingDown, Minus, Loader2 } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import type { Market, FundamentalRow, FundamentalSignals, EpsQuarter, FundamentalIdeaRow } from '../api';
+import { fetchFundamentalDetail, saveFundamentalNote, recalculateSymbolFundamentals, fetchJobRun } from '../api';
+import { Radar, TrendingUp, TrendingDown, Minus, Loader2, RefreshCw } from 'lucide-react';
 
 function fmtPct(v?: number | null): string {
   if (v == null) return '—';
@@ -178,35 +178,139 @@ function AutoSignalsBlock({ signals, market }: { signals: FundamentalSignals | n
 }
 
 /**
+ * Fundamental confidence score for the stock popup. Shows the headline 0-100 blend plus
+ * the per-metric breakdown that produced it, all read straight from the idea row the
+ * worker scored (confidence.py) — the UI does no scoring maths of its own.
+ *
+ * Only long/neutral are surfaced: shorting is a Stage 4 setup and this is Stage 2 data.
+ */
+function ScoreBlock({ idea }: { idea: FundamentalIdeaRow }) {
+  const score = idea.fundamentalConfidence;
+  const side = idea.side === 'short' ? 'neutral' : idea.side;
+  const tone = side === 'long' ? 'var(--success)' : 'var(--text-muted)';
+  const parts: Array<[string, number | null | undefined]> = [
+    ['EPS beat', idea.epsBeatConfidence],
+    ['OPM expansion', idea.opmExpansionConfidence],
+    ['Op. profit expansion', idea.operatingProfitExpansionConfidence],
+    ['Analyst rating', idea.analystRatingConfidence],
+    ['Target upside', idea.targetUpsideConfidence],
+  ];
+  const present = parts.filter(([, v]) => v != null);
+
+  return (
+    <div className="card" style={{ marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: '2rem', fontWeight: 700, color: tone, lineHeight: 1 }}>
+          {score == null ? '—' : score.toFixed(1)}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontSize: '0.78rem', fontWeight: 600 }}>Fundamental confidence / 100</span>
+          <span className="cell-muted" style={{ fontSize: '0.74rem' }}>
+            {side ? <span style={{ color: tone, fontWeight: 600, textTransform: 'capitalize' }}>{side}</span> : '—'}
+            {idea.directionScore != null && <> · direction {idea.directionScore > 0 ? '+' : ''}{idea.directionScore}</>}
+            {idea.isStage2 === true && <> · Stage 2</>}
+          </span>
+        </div>
+        <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
+          <div style={{ fontSize: '0.74rem' }} className="cell-muted">Overall (with technical)</div>
+          <div style={{ fontWeight: 600 }}>
+            {idea.overallConfidence == null ? '—' : idea.overallConfidence.toFixed(1)}
+          </div>
+        </div>
+      </div>
+
+      {present.length > 0 && (
+        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {present.map(([label, v]) => (
+            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: '0.76rem', width: 150, flexShrink: 0 }}>{label}</span>
+              <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'var(--border)', overflow: 'hidden' }}>
+                <div style={{ width: `${Math.max(0, Math.min(100, v as number))}%`, height: '100%', background: tone }} />
+              </div>
+              <span className="cell-muted" style={{ fontSize: '0.74rem', width: 40, textAlign: 'right' }}>
+                {(v as number).toFixed(0)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="cell-muted" style={{ fontSize: '0.72rem', marginTop: 10 }}>
+        Scored from the {fmtDate(idea.earningsDate)} result
+      </div>
+    </div>
+  );
+}
+
+/**
  * Reported-fundamentals block for the unified stock detail view: quarterly financials,
  * reported-EPS history (last 4 quarters), auto-detected signals and the per-stock AI note.
  * Self-loads from the fundamentals endpoint; renders nothing if the symbol has no row.
  */
 export function FundamentalsSection({ market, symbol }: { market: Market; symbol: string }) {
   const [row, setRow] = useState<FundamentalRow | null>(null);
+  const [idea, setIdea] = useState<FundamentalIdeaRow | null>(null);
   const [note, setNote] = useState('');
   const [signals, setSignals] = useState<FundamentalSignals | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [recalcState, setRecalcState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [recalcMsg, setRecalcMsg] = useState<string | null>(null);
+  const cancelledRef = useRef(false);
+
+  const load = useCallback(async () => {
+    try {
+      const d = await fetchFundamentalDetail(market, symbol);
+      if (cancelledRef.current) return;
+      setRow(d.row);
+      setIdea(d.idea ?? null);
+      setNote(d.note ?? '');
+      setSignals(d.signals ?? null);
+    } catch {
+      if (!cancelledRef.current) setRow(null);
+    }
+  }, [market, symbol]);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const d = await fetchFundamentalDetail(market, symbol);
-        if (cancelled) return;
-        setRow(d.row);
-        setNote(d.note ?? '');
-        setSignals(d.signals ?? null);
-      } catch {
-        if (!cancelled) setRow(null);
+    cancelledRef.current = false;
+    setLoading(true);
+    setRecalcState('idle');
+    setRecalcMsg(null);
+    load().finally(() => { if (!cancelledRef.current) setLoading(false); });
+    return () => { cancelledRef.current = true; };
+  }, [load]);
+
+  // Kick off a single-symbol fundamentals job and poll it to completion, then reload the
+  // detail so the freshly scored numbers replace what's on screen. The job runs on the
+  // shared worker queue, so it can sit queued behind a market-wide run for a while.
+  const recalculate = async () => {
+    setRecalcState('running');
+    setRecalcMsg('Queued…');
+    try {
+      const { runId } = await recalculateSymbolFundamentals(market, symbol);
+      const deadline = Date.now() + 10 * 60 * 1000;
+      for (;;) {
+        if (cancelledRef.current) return;
+        await new Promise(r => setTimeout(r, 3000));
+        if (Date.now() > deadline) throw new Error('Timed out waiting for the refresh to finish');
+        const job = await fetchJobRun(runId);
+        if (cancelledRef.current) return;
+        if (job.status === 'completed') break;
+        if (job.status === 'failed' || job.status === 'cancelled') {
+          throw new Error(`Refresh ${job.status}`);
+        }
+        setRecalcMsg(job.status === 'running' ? `Refreshing… ${job.progress ?? 0}%` : 'Queued…');
       }
-      if (!cancelled) setLoading(false);
-    })();
-    return () => { cancelled = true; };
-  }, [market, symbol]);
+      await load();
+      if (cancelledRef.current) return;
+      setRecalcState('done');
+      setRecalcMsg('Updated');
+    } catch (e) {
+      if (cancelledRef.current) return;
+      setRecalcState('error');
+      setRecalcMsg(e instanceof Error ? e.message : 'Refresh failed');
+    }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -228,14 +332,43 @@ export function FundamentalsSection({ market, symbol }: { market: Market; symbol
   if (!row) return null;
 
   const epsSurprise = `${row.lastReportedEps == null ? '—' : curSym(market) + fmtNum(row.lastReportedEps)} (${fmtPct(row.lastEpsSurprisePct)})`;
+  const recalcBusy = recalcState === 'running';
 
   return (
     <>
       <div className="lookup-section">
-        <h2 className="section-title">
+        <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           Fundamentals
           {row.latestQuarterEnd && <span className="pill">Q end {fmtDate(row.latestQuarterEnd)}</span>}
+          <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            {recalcMsg && (
+              <span
+                className="cell-muted"
+                style={{
+                  fontSize: '0.74rem', fontWeight: 400,
+                  color: recalcState === 'error' ? 'var(--danger)'
+                    : recalcState === 'done' ? 'var(--success)' : undefined,
+                }}
+              >
+                {recalcMsg}
+              </span>
+            )}
+            <button
+              className="btn btn-outline btn-sm"
+              disabled={recalcBusy}
+              onClick={recalculate}
+              title="Re-fetch this stock's fundamentals now (Screener.in first for India, then Yahoo) and rescore it"
+            >
+              {recalcBusy
+                ? <Loader2 size={14} className="spin-icon" />
+                : <RefreshCw size={14} />}
+              {' '}Recalculate
+            </button>
+          </span>
         </h2>
+
+        {idea && <ScoreBlock idea={idea} />}
+
         <div className="card prop-grid">
           <Prop label="Last earnings date" value={fmtDate(row.lastEarningsDate)} />
           <Prop label="Next earnings date" value={fmtDate(row.nextEarningsDate)} />

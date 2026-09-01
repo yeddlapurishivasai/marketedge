@@ -435,6 +435,7 @@ def upsert_earnings_fundamentals(conn: pyodbc.Connection, market: str, row: dict
         "EpsQ3Date", "EpsQ3Estimate", "EpsQ3Actual", "EpsQ3SurprisePct",
         "EpsQ4Date", "EpsQ4Estimate", "EpsQ4Actual", "EpsQ4SurprisePct",
         "TrailingPe", "ForwardPe",
+        "ReportedSource", "ReportedFetchedAt",
     )
     keys = (
         "as_of_date", "latest_quarter_end",
@@ -450,12 +451,18 @@ def upsert_earnings_fundamentals(conn: pyodbc.Connection, market: str, row: dict
         "eps_q3_date", "eps_q3_estimate", "eps_q3_actual", "eps_q3_surprise_pct",
         "eps_q4_date", "eps_q4_estimate", "eps_q4_actual", "eps_q4_surprise_pct",
         "trailing_pe", "forward_pe",
+        "reported_source", "reported_fetched_at",
     )
     # Earnings-announcement dates and reported-EPS history come from yfinance's flaky,
     # rate-limited get_earnings_dates endpoint (separate from quarterly_income_stmt). On a
     # run where it returns nothing, these incoming values are NULL while the income-statement
     # financials still write — so we must NOT clobber previously-captured values with NULL.
     # Preserve the existing column value when the incoming value is NULL (COALESCE-on-null).
+    #
+    # The reported-financials block is preserved for the same reason plus one more: when a
+    # symbol's Screener data is still current the caller deliberately skips the whole
+    # reported refresh and sends NULLs, so COALESCE is what keeps the stored Screener
+    # numbers (and their provenance) intact instead of blanking them every night.
     preserve_on_null = {
         "LastEarningsDate", "PrevEarningsDate", "NextEarningsDate", "LastReportedEps", "LastEpsSurprisePct",
         "EpsQ1Date", "EpsQ1Estimate", "EpsQ1Actual", "EpsQ1SurprisePct",
@@ -463,6 +470,14 @@ def upsert_earnings_fundamentals(conn: pyodbc.Connection, market: str, row: dict
         "EpsQ3Date", "EpsQ3Estimate", "EpsQ3Actual", "EpsQ3SurprisePct",
         "EpsQ4Date", "EpsQ4Estimate", "EpsQ4Actual", "EpsQ4SurprisePct",
         "TrailingPe", "ForwardPe",
+        "LatestQuarterEnd",
+        "Revenue", "RevenuePrevQ", "RevenueYoyQ", "RevenueGrowthYoyPct",
+        "OperatingProfit", "OperatingProfitPrevQ", "OperatingProfitYoyQ",
+        "Opm", "OpmPrevQ", "OpmYoyQ",
+        "NetProfit", "NetProfitPrevQ", "NetProfitYoyQ", "NetMarginPct",
+        "EarningsGrowthYoyPct", "EarningsGrowthQoqPct",
+        "EarningsIncreasing", "OperatingProfitTrend", "OpmTrend",
+        "ReportedSource", "ReportedFetchedAt",
     }
     set_clause = ", ".join(
         f"{c} = COALESCE(?, tgt.{c})" if c in preserve_on_null else f"{c} = ?"
@@ -482,6 +497,26 @@ def upsert_earnings_fundamentals(conn: pyodbc.Connection, market: str, row: dict
     cursor = conn.cursor()
     cursor.execute(merge, params)
     conn.commit()
+
+
+def get_reported_source_state(
+    conn: pyodbc.Connection, market: str, ticker: str
+) -> tuple[str | None, Any, Any] | None:
+    """(ReportedSource, ReportedFetchedAt, LastEarningsDate) for a ticker, or None.
+
+    Drives the Screener refresh decision in the ingestion CLI: reported financials only
+    change when results are announced, so a symbol fetched recently with no announcement
+    since can skip the network entirely.
+    """
+    t = tables_for(market)
+    row = conn.cursor().execute(
+        f"SELECT ReportedSource, ReportedFetchedAt, LastEarningsDate "
+        f"FROM dbo.{t['earnings']} WHERE Ticker = ?",
+        ticker,
+    ).fetchone()
+    if row is None:
+        return None
+    return (row[0], row[1], row[2])
 
 
 def refresh_fundamental_idea(conn: pyodbc.Connection, market: str, ticker: str) -> None:

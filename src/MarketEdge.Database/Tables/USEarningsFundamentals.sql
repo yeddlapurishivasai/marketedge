@@ -61,6 +61,12 @@ CREATE TABLE [dbo].[USEarningsFundamentals]
     [TrailingPe]            DECIMAL(18,4) NULL,
     [ForwardPe]             DECIMAL(18,4) NULL,
 
+    -- Provenance for the REPORTED financials above. Kept identical to the Indian table so
+    -- the shared upsert in the ingestion layer can use one column list for both markets.
+    -- In practice this is always 'yfinance' for US: Screener.in only covers NSE listings.
+    [ReportedSource]        NVARCHAR(16)  NULL,
+    [ReportedFetchedAt]     DATETIME2     NULL,
+
     [UpdatedAt]             DATETIME2     NOT NULL CONSTRAINT [DF_USEarningsFundamentals_UpdatedAt] DEFAULT GETUTCDATE(),
 
     CONSTRAINT [PK_USEarningsFundamentals] PRIMARY KEY CLUSTERED ([Ticker]),

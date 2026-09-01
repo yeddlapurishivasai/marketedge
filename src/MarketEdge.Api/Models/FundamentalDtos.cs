@@ -43,7 +43,11 @@ public record EpsQuarter(
 public record FundamentalDetail(
     FundamentalRow Row,
     string? Note,
-    FundamentalSignals? Signals);
+    FundamentalSignals? Signals,
+    // Scored idea for this stock (confidence breakdown + direction/side), so the stock
+    // popup can show the fundamental score alongside the raw reported metrics. Null when
+    // the stock has no non-stale idea yet.
+    FundamentalIdeaRow? Idea = null);
 
 // Auto-detected catalyst signals (read-only). SignalsText is the compact, token-friendly
 // blob fed to the AI workflow; News is the structured headline list for UI display.

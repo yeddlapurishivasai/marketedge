@@ -61,6 +61,17 @@ CREATE TABLE [dbo].[IndianEarningsFundamentals]
     [TrailingPe]            DECIMAL(18,4) NULL,
     [ForwardPe]             DECIMAL(18,4) NULL,
 
+    -- Provenance for the REPORTED financials above (revenue / operating profit / net
+    -- profit and their derived margins). 'screener' = scraped from Screener.in (primary
+    -- for India), 'yfinance' = quarterly_income_stmt fallback, 'mixed' = Screener with
+    -- yfinance filling gaps. ReportedFetchedAt is the last successful Screener fetch and
+    -- drives the refresh-skip cache: reported numbers only move when results are
+    -- announced, so a recent fetch with no announcement since needs no network call.
+    -- Analyst-derived fields (EPS estimates, surprises, targets, ratings) are always
+    -- yfinance — Screener publishes none of them.
+    [ReportedSource]        NVARCHAR(16)  NULL,
+    [ReportedFetchedAt]     DATETIME2     NULL,
+
     [UpdatedAt]             DATETIME2     NOT NULL CONSTRAINT [DF_IndianEarningsFundamentals_UpdatedAt] DEFAULT GETUTCDATE(),
 
     CONSTRAINT [PK_IndianEarningsFundamentals] PRIMARY KEY CLUSTERED ([Ticker]),

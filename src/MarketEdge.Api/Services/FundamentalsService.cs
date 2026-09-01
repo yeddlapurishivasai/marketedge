@@ -65,50 +65,7 @@ public class FundamentalsService : IFundamentalsService
                 catalog.TryGetValue(r.Ticker.ToUpperInvariant(), out var meta);
                 var sym = meta?.Symbol ?? r.Ticker;
                 bool? isStage2 = stage2.TryGetValue(sym.ToUpperInvariant(), out var s2) ? s2 : (bool?)null;
-
-                // Direction/side + the bearish short mirror are computed once by the worker
-                // (confidence.py) and embedded in ConfidenceRationaleJson; the API only reads
-                // them back here — no fundamental weights or scoring math live in C#.
-                var pj = ParseIdeaRationale(r.ConfidenceRationaleJson);
-
-                return new FundamentalIdeaRow(
-                    meta?.Symbol ?? r.Ticker,
-                    meta?.CompanyName ?? r.Ticker,
-                    meta?.BroadSector,
-                    meta?.Industry,
-                    r.EarningsDate,
-                    r.EpsBeatPct,
-                    r.OpmExpansionYoyPct,
-                    r.OperatingProfitExpansionYoyPct,
-                    r.LatestRatingFirm,
-                    r.LatestRatingGrade,
-                    r.LatestRatingAction,
-                    r.LatestRatingDate,
-                    r.TargetLowPrice,
-                    r.TargetMeanPrice,
-                    r.TargetHighPrice,
-                    r.EpsBeatConfidence,
-                    r.OpmExpansionConfidence,
-                    r.OperatingProfitExpansionConfidence,
-                    r.AnalystRatingConfidence,
-                    r.TargetUpsideConfidence,
-                    r.FundamentalConfidence,
-                    r.TechnicalConfidence,
-                    r.OverallConfidence,
-                    r.DaysSinceEarnings,
-                    r.DaysSinceRating,
-                    r.ConfidenceRationaleJson,
-                    isStage2,
-                    pj.Direction,
-                    pj.Side,
-                    pj.EpsBeatShort,
-                    pj.OpmExpansionShort,
-                    pj.OpExpansionShort,
-                    pj.RatingShort,
-                    pj.FundamentalShort,
-                    pj.OverallShort,
-                    pj.ShortJson,
-                    r.UpdatedAt);
+                return MapIdea(r, meta, isStage2);
             })
             .Where(r => want is null || want == "all" || r.Side == want)
             .OrderByDescending(r => r.EarningsDate)
@@ -116,6 +73,52 @@ public class FundamentalsService : IFundamentalsService
             .ToList();
 
         return mapped;
+    }
+
+    // Direction/side + the bearish short mirror are computed once by the worker
+    // (confidence.py) and embedded in ConfidenceRationaleJson; the API only reads them
+    // back here — no fundamental weights or scoring math live in C#.
+    private static FundamentalIdeaRow MapIdea(FundamentalIdeaBase r, StockMeta? meta, bool? isStage2)
+    {
+        var pj = ParseIdeaRationale(r.ConfidenceRationaleJson);
+        return new FundamentalIdeaRow(
+            meta?.Symbol ?? r.Ticker,
+            meta?.CompanyName ?? r.Ticker,
+            meta?.BroadSector,
+            meta?.Industry,
+            r.EarningsDate,
+            r.EpsBeatPct,
+            r.OpmExpansionYoyPct,
+            r.OperatingProfitExpansionYoyPct,
+            r.LatestRatingFirm,
+            r.LatestRatingGrade,
+            r.LatestRatingAction,
+            r.LatestRatingDate,
+            r.TargetLowPrice,
+            r.TargetMeanPrice,
+            r.TargetHighPrice,
+            r.EpsBeatConfidence,
+            r.OpmExpansionConfidence,
+            r.OperatingProfitExpansionConfidence,
+            r.AnalystRatingConfidence,
+            r.TargetUpsideConfidence,
+            r.FundamentalConfidence,
+            r.TechnicalConfidence,
+            r.OverallConfidence,
+            r.DaysSinceEarnings,
+            r.DaysSinceRating,
+            r.ConfidenceRationaleJson,
+            isStage2,
+            pj.Direction,
+            pj.Side,
+            pj.EpsBeatShort,
+            pj.OpmExpansionShort,
+            pj.OpExpansionShort,
+            pj.RatingShort,
+            pj.FundamentalShort,
+            pj.OverallShort,
+            pj.ShortJson,
+            r.UpdatedAt);
     }
 
     // Latest-run Stage-2 flag per symbol, used to tag fundamental ideas for the Long
@@ -172,7 +175,25 @@ public class FundamentalsService : IFundamentalsService
                 today, null, null, null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null, null, false, Array.Empty<EpsQuarter>());
 
-        return new FundamentalDetail(dtoRow, note?.NoteText, ToSignals(signalsRow));
+        // The scored "idea" for this stock (confidence breakdown + direction), so the stock
+        // popup can show the fundamental score next to the raw reported metrics. Latest
+        // non-stale idea only — same rows the Fundamentals page lists.
+        FundamentalIdeaBase? ideaRow = IsUs(market)
+            ? await _db.USFundamentalIdeas.Where(i => !i.IsStale && i.Ticker.ToUpper() == upper)
+                .OrderByDescending(i => i.EarningsDate).FirstOrDefaultAsync()
+            : await _db.IndianFundamentalIdeas.Where(i => !i.IsStale && i.Ticker.ToUpper() == upper)
+                .OrderByDescending(i => i.EarningsDate).FirstOrDefaultAsync();
+
+        FundamentalIdeaRow? idea = null;
+        if (ideaRow != null)
+        {
+            var stage2 = await LoadStage2Async(market);
+            var sym = meta?.Symbol ?? ideaRow.Ticker;
+            bool? isStage2 = stage2.TryGetValue(sym.ToUpperInvariant(), out var s2) ? s2 : (bool?)null;
+            idea = MapIdea(ideaRow, meta, isStage2);
+        }
+
+        return new FundamentalDetail(dtoRow, note?.NoteText, ToSignals(signalsRow), idea);
     }
 
     private static FundamentalSignals? ToSignals(StockSignalsBase? s)
@@ -332,12 +353,19 @@ public class FundamentalsService : IFundamentalsService
 
     // Direction/side + bearish short-mirror scores read straight from the worker-produced
     // rationale JSON (confidence.py). Old rows lacking these keys parse to all-null, which
-    // simply hides them from the long/short tabs until the next fundamentals refresh.
+    // simply hides them from the long/neutral tabs until the next fundamentals refresh.
     private readonly record struct IdeaRationale(
         int? Direction, string? Side,
         decimal? EpsBeatShort, decimal? OpmExpansionShort, decimal? OpExpansionShort,
         decimal? RatingShort, decimal? FundamentalShort, decimal? OverallShort,
         string? ShortJson);
+
+    // Fundamentals surfaces long/neutral only — shorting is a Stage 4 setup and this data is
+    // the Stage 2 universe. Rows written before that rule (and any future run with shorts
+    // re-enabled upstream) still carry "side":"short", so collapse it to neutral on read
+    // rather than waiting for a full re-ingest. The bearish scores themselves are preserved.
+    private static string? NormalizeSide(string? side) =>
+        string.Equals(side, "short", StringComparison.OrdinalIgnoreCase) ? "neutral" : side;
 
     private static IdeaRationale ParseIdeaRationale(string? json)
     {
@@ -347,8 +375,8 @@ public class FundamentalsService : IFundamentalsService
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
             int? dir = ReadInt(root, "direction");
-            string? side = root.TryGetProperty("side", out var s) && s.ValueKind == JsonValueKind.String
-                ? s.GetString() : null;
+            string? side = NormalizeSide(root.TryGetProperty("side", out var s) && s.ValueKind == JsonValueKind.String
+                ? s.GetString() : null);
             if (!root.TryGetProperty("short", out var sh) || sh.ValueKind != JsonValueKind.Object)
                 return new IdeaRationale(dir, side, null, null, null, null, null, null, null);
             return new IdeaRationale(

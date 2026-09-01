@@ -3,6 +3,7 @@ yfinance==0.2.*
 pandas==2.*
 numpy==2.*
 lxml==5.*
+requests==2.*
 python-dotenv==1.*
-opentelemetry-api==1.*
-opentelemetry-sdk==1.*
+opentelemetry-api==1.43.*
+opentelemetry-sdk==1.43.*

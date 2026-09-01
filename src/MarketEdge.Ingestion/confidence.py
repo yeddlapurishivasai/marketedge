@@ -1,16 +1,17 @@
-"""Confidence scoring for fundamental ideas (Wilson lower-bound, age-decayed).
+"""Confidence scoring for fundamental ideas (Wilson lower-bound on frequency metrics).
 
 Every fundamental metric on an idea is turned into a 0..100 *confidence* score:
 
 1. The raw metric is normalised to a 0..1 strength ``phat`` via a saturating curve
    (e.g. a 25%+ EPS beat = 1.0; a miss = 0.0).
-2. ``phat`` and an evidence count ``n`` (how many metrics the stock actually has data
-   for) feed a Wilson score lower bound. More available metrics -> larger ``n`` ->
-   tighter interval -> higher confidence; a lone metric is penalised.
-3. The Wilson ``z`` widens with the age of the underlying signal,
-   ``z = z0 * (1 + days / halflife)``. A fresh result keeps ``z`` near ``z0``; as the
-   result (or analyst update) ages, ``z`` grows, the interval widens and confidence
-   decays smoothly over weeks rather than collapsing.
+2. Magnitude metrics score their strength directly. Genuine k-of-n *frequency* metrics
+   (the EPS beat/miss rate over the last reported quarters) instead take a Wilson score
+   lower bound, so a 2-of-2 record stays humble next to a 8-of-8 one.
+
+There is deliberately NO age decay: a metric's strength is a property of the reported
+numbers, not of how long ago they were filed, and the age we had available was unreliable
+(see ``recency``). Staleness is handled by ``IsStale`` and by a new quarter superseding
+the idea row.
 
 The per-metric confidences are blended with fixed weights into a single
 ``FundamentalConfidence``. ``TechnicalConfidence`` is the Wilson lower bound of the
@@ -27,7 +28,6 @@ from typing import Any
 
 # --- tunables ----------------------------------------------------------------
 Z0 = 1.28          # ~90% one-sided base z (matches the stock scoring engine)
-HALFLIFE = 30.0    # days; age at which z has grown by one z0-equivalent step
 
 # Saturation thresholds: the metric value that maps to ~full strength. The three
 # *ratio* metrics (epsBeat / epsForecast / opExpansion) use soft_norm() — a smooth
@@ -69,6 +69,14 @@ DIRECTION_WEIGHTS = {
 LONG_MIN = 20
 SHORT_MAX = -20
 
+# Fundamentals currently emits long/neutral only. A bearish direction score buckets to
+# Neutral rather than Short: shorting is a Stage 4 setup, and the fundamentals universe is
+# Stage 2 (basing/advancing), where a short is not actionable. The bearish scoring machinery
+# below (compute_short_confidence / SHORT_MAX) is deliberately kept intact and still
+# persisted in the rationale, so the Stage 4 scanner can turn shorts on via
+# ``side(score, allow_short=True)`` without recomputing anything.
+EMIT_SHORT_SIDE = False
+
 # Overall = fundamental + technical blend (renormalised when one side is missing).
 OVERALL_FUND_WEIGHT = 0.60
 OVERALL_TECH_WEIGHT = 0.40
@@ -98,12 +106,19 @@ def wilson_lb(phat: float, n: float, z: float) -> float:
 
 
 def recency(days: int | float | None) -> float:
-    """Recency multiplier in (0, 1]: a fresh signal keeps its full strength and decays
-    hyperbolically with age — HALFLIFE / (HALFLIFE + days). At days == HALFLIFE a metric
-    is worth half its strength. (Replaces the old Wilson lower-bound penalty, which used
-    the metric count as a bogus sample size and capped even a perfect metric near 75.)"""
-    d = 0.0 if days is None or days < 0 else float(days)
-    return HALFLIFE / (HALFLIFE + d)
+    """Deprecated no-op kept only so older callers don't break: always 1.0.
+
+    Age decay was removed. It was doing more harm than good: the multiplier keyed off
+    ``DaysSinceEarnings``, which is derived from ``COALESCE(LastEarningsDate,
+    LatestQuarterEnd)``. For the long tail of NSE names yfinance has no announcement date,
+    so the age was measured from the QUARTER END instead — systematically over-aging every
+    such stock by the reporting lag (E2E: 63 days off 30-Jun instead of 42 off its 21-Jul
+    result, cutting its score to 30/(30+63) = 0.32 of strength). A metric's strength is a
+    property of the reported numbers, not of how long ago they were filed, so the score is
+    now the undecayed strength and staleness is handled where it belongs: by IsStale and by
+    a new quarter superseding the idea row.
+    """
+    return 1.0
 
 
 def soft_norm(value: float | None, full: float) -> float | None:
@@ -233,11 +248,20 @@ def direction_score(eps_beat_pct: float | None, opm_expansion_pp: float | None,
     return int(round(100.0 * num / wsum))
 
 
-def side(score: int | None) -> str | None:
-    """long / short / neutral from a signed score (None when score is None)."""
+def side(score: int | None, allow_short: bool = EMIT_SHORT_SIDE) -> str | None:
+    """long / neutral from a signed score (None when score is None).
+
+    Bearish scores bucket to ``neutral`` unless ``allow_short`` is set — fundamentals runs
+    over the Stage 2 universe, where a short isn't an actionable setup. The Stage 4 scanner
+    passes ``allow_short=True`` to get the full long/short/neutral split.
+    """
     if score is None:
         return None
-    return "long" if score > LONG_MIN else "short" if score < SHORT_MAX else "neutral"
+    if score > LONG_MIN:
+        return "long"
+    if allow_short and score < SHORT_MAX:
+        return "short"
+    return "neutral"
 
 
 def compute_short_confidence(
@@ -265,11 +289,11 @@ def compute_short_confidence(
     conf: dict[str, float] = {}
     metrics: list[dict[str, Any]] = []
     for key, phat, days in phats:
-        c = round(100.0 * phat * recency(days), 2)
+        c = round(100.0 * phat, 2)
         conf[key] = c
         metrics.append({
             "metric": key, "phat": round(phat, 4), "n": n,
-            "days": days, "recency": round(recency(days), 4), "confidence": c,
+            "days": days, "confidence": c,
         })
 
     # Bearish twin of the beat-rate: the *miss* frequency over the last reported quarters
@@ -281,7 +305,7 @@ def compute_short_confidence(
         conf["epsBeatRate"] = mr_conf
         metrics.append({
             "metric": "epsBeatRate", "phat": round(mr_phat, 4), "n": brn,
-            "days": None, "recency": 1.0, "confidence": mr_conf,
+            "days": None, "confidence": mr_conf,
             "misses": misses, "quarters": brn,
         })
 
@@ -311,8 +335,9 @@ def compute_short_confidence(
 
 
 def _metric_conf(phat: float, days: int | None) -> float:
-    """Metric confidence (0..100): raw 0..1 strength decayed by the signal's age."""
-    return round(100.0 * phat * recency(days), 2)
+    """Metric confidence (0..100) — the raw 0..1 strength, undecayed. ``days`` is carried
+    through for display only and no longer affects the score (see ``recency``)."""
+    return round(100.0 * phat, 2)
 
 
 def technical_confidence(own_wins: int, own_total: int,
@@ -360,9 +385,9 @@ def compute_confidence(
 ) -> dict[str, Any]:
     """Compute all confidence scores + rationale for one idea row.
 
-    Earnings-based metrics age with ``days_since_earnings``; analyst rating and target
-    upside age with ``days_since_rating``. Each metric's 0..1 strength is decayed by a
-    recency multiplier (see ``recency``); ``n`` is just how many metrics had data.
+    Earnings-based metrics carry ``days_since_earnings``; analyst rating and target
+    upside carry ``days_since_rating``. Both are recorded in the rationale for display
+    only and do NOT affect the score. ``n`` is just how many metrics had data.
     """
     phats: dict[str, float] = {}
     upside_pct: float | None = None
@@ -400,13 +425,12 @@ def compute_confidence(
             "phat": round(phat, 4),
             "n": n,
             "days": days,
-            "recency": round(recency(days), 4),
             "confidence": conf,
         })
 
     # EPS-beat *consistency*: a genuine k-of-n frequency (beats over the last reported
     # quarters), so it gets the Wilson lower bound (small samples stay humble) instead of
-    # the magnitude path above. It's a track record, so it doesn't age (recency = 1).
+    # the magnitude path above.
     beats, _misses, br_n = _beat_miss_counts(eps_quarter_surprises)
     if br_n > 0:
         br_phat = beats / br_n
@@ -417,7 +441,6 @@ def compute_confidence(
             "phat": round(br_phat, 4),
             "n": br_n,
             "days": None,
-            "recency": 1.0,
             "confidence": br_conf,
             "beats": beats,
             "quarters": br_n,

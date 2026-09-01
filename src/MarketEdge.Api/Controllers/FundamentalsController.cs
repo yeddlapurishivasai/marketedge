@@ -66,6 +66,27 @@ public class FundamentalsController : ControllerBase
         return detail == null ? NotFound() : Ok(detail);
     }
 
+    /// <summary>
+    /// Recalculates fundamentals for a single stock. Enqueues a fundamentals job scoped to
+    /// just this symbol (Screener.in primary for India's reported financials, yfinance for
+    /// the analyst inputs and as fallback), bypassing the earnings-window filter. Returns
+    /// the run id so the caller can poll job progress.
+    /// </summary>
+    [HttpPost("{symbol}/recalculate")]
+    public async Task<IActionResult> Recalculate(string market, string symbol)
+    {
+        if (!IsValidMarket(market)) return BadRequest("Market must be 'india' or 'us'");
+        try
+        {
+            var runId = await _ingestion.TriggerSymbolFundamentalsAsync(market, symbol, triggeredBy: "manual-symbol");
+            return Ok(new { runId });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+    }
+
     [HttpPut("{symbol}/note")]
     public async Task<IActionResult> SaveNote(string market, string symbol, [FromBody] SaveNoteRequest body)
     {
