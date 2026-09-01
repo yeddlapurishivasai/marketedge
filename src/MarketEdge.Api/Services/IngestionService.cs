@@ -20,6 +20,7 @@ public interface IIngestionService
     Task<int> TriggerAsync(string market, TriggerIngestionRequest request);
     Task<int> RefreshStockAsync(string market, string symbol);
     Task<int> TriggerFundamentalsAsync(string market, string triggeredBy = "manual", bool force = false, string universe = "stage2", bool missingOnly = false);
+    Task<int> TriggerSymbolFundamentalsAsync(string market, string symbol, string triggeredBy = "manual");
     Task<JobScheduleDto> GetFundamentalsScheduleAsync(string market);
     Task<JobScheduleDto> UpdateFundamentalsScheduleAsync(string market, UpdateJobScheduleRequest request);
 }
@@ -245,6 +246,55 @@ public class IngestionService : IIngestionService
             universe,
             force,
             missingOnly,
+            triggeredBy,
+            timestamp = now,
+        });
+
+        return job.Id;
+    }
+
+    public async Task<int> TriggerSymbolFundamentalsAsync(string market, string symbol, string triggeredBy = "manual")
+    {
+        if (market != "india" && market != "us")
+            throw new ArgumentException("Market must be 'india' or 'us'.");
+
+        var ticker = (symbol ?? string.Empty).Trim().ToUpperInvariant();
+        if (string.IsNullOrEmpty(ticker))
+            throw new ArgumentException("Symbol is required.");
+
+        // Unlike the market-wide refresh this is NOT deduplicated against an in-flight run:
+        // a per-stock recalculate is cheap (one symbol) and the user explicitly asked for
+        // fresh numbers, so making them wait behind a full universe run would defeat it.
+        var now = DateTime.UtcNow;
+        var job = new JobRun
+        {
+            JobType = FundamentalsJobType,
+            Market = market,
+            WeekNumber = GetIsoWeekNumber(now),
+            Status = "queued",
+            Progress = 0,
+            Parameters = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["market"] = market,
+                ["symbols"] = new[] { ticker },
+                ["steps"] = new[] { "fundamentals" },
+                ["force"] = true,
+                ["triggeredBy"] = triggeredBy,
+            }),
+            CreatedAt = now,
+        };
+        _db.JobRuns.Add(job);
+        await _db.SaveChangesAsync();
+
+        // An explicit symbols list makes the worker skip universe resolution and refresh
+        // only this ticker; force bypasses the earnings-window filter.
+        await EnqueueAsync(new
+        {
+            jobType = "fundamentals",
+            market,
+            runId = job.Id,
+            symbols = new[] { ticker },
+            force = true,
             triggeredBy,
             timestamp = now,
         });

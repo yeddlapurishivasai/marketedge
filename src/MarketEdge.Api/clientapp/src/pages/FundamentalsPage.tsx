@@ -103,10 +103,12 @@ function RatingCell({ r }: { r: FundamentalIdeaRow }) {
   );
 }
 
-// Long/short/neutral bucketing + direction-aware confidence are computed by the worker
-// (confidence.py) and surfaced by the API: r.side is the worker-computed bucket and the
-// confidence columns are already oriented to that side (mirrored for shorts).
-type IdeaSide = 'long' | 'short' | 'neutral';
+// Long/neutral bucketing + direction-aware confidence are computed by the worker
+// (confidence.py) and surfaced by the API: r.side is the worker-computed bucket.
+// Shorts are intentionally not surfaced here — shorting is a Stage 4 setup and this page
+// screens the Stage 2 universe. The bearish scores are still computed and stored, so the
+// Stage 4 scanner can surface them later without a re-ingest.
+type IdeaSide = 'long' | 'neutral';
 
 // --- Confidence breakdown modal ----------------------------------------------
 interface RationaleMetric { metric: string; phat: number; n: number; days: number | null; recency: number; confidence: number; }
@@ -278,10 +280,10 @@ export default function FundamentalsPage() {
   };
 
   const filtered = rows.filter(r => {
-    // Side (long / short / neutral) comes from the API (server-side dead-band on directionScore).
+    // Side (long / neutral) comes from the API (server-side dead-band on directionScore).
     if (r.side !== quality) return false;
-    // Stage-2 sub-filter — not applicable to shorts (a short isn't a Stage-2 setup).
-    if (stageOnly && quality !== 'short' && r.isStage2 !== true) return false;
+    // Stage-2 sub-filter.
+    if (stageOnly && r.isStage2 !== true) return false;
     // Symbol / company text search.
     if (query.trim()) {
       const q = query.trim().toLowerCase();
@@ -295,30 +297,15 @@ export default function FundamentalsPage() {
     return true;
   });
 
-  // Which side's confidence to surface: in the Short view every confidence column
-  // shows the bearish (short) score; otherwise the bullish (long) score.
-  const confSide: 'long' | 'short' = quality === 'short' ? 'short' : 'long';
-  const SHORT_FIELD: Partial<Record<SortKey, keyof FundamentalIdeaRow>> = {
-    fundamentalConfidence: 'fundamentalConfidenceShort',
-    epsBeatConfidence: 'epsBeatConfidenceShort',
-    opmExpansionConfidence: 'opmExpansionConfidenceShort',
-    operatingProfitExpansionConfidence: 'operatingProfitExpansionConfidenceShort',
-    analystRatingConfidence: 'analystRatingConfidenceShort',
-    // targetUpsideConfidence has no bearish twin (target upside needs a live price)
-  };
+  // Only bullish confidence is surfaced while shorts are out of scope.
+  const confSide: 'long' = 'long';
   const CONF_KEYS = new Set<SortKey>([
     'fundamentalConfidence',
     'epsBeatConfidence', 'opmExpansionConfidence', 'operatingProfitExpansionConfidence',
     'analystRatingConfidence', 'targetUpsideConfidence',
   ]);
-  const confValue = (r: FundamentalIdeaRow, key: SortKey): number | null => {
-    if (confSide === 'short') {
-      if (key === 'targetUpsideConfidence') return null;
-      const sf = SHORT_FIELD[key];
-      if (sf) return (r[sf] as number | null) ?? null;
-    }
-    return (r[key] as number | null) ?? null;
-  };
+  const confValue = (r: FundamentalIdeaRow, key: SortKey): number | null =>
+    (r[key] as number | null) ?? null;
 
   const sorted = [...filtered].sort((a, b) => {
     const isConf = CONF_KEYS.has(sortKey);
@@ -417,15 +404,13 @@ export default function FundamentalsPage() {
       <div className="card" style={{ padding: 18, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
           <h2 className="section-title" style={{ margin: 0 }}>
-            {quality === 'short' ? 'Short ideas' : quality === 'long' ? 'Long ideas' : 'Neutral'}
+            {quality === 'long' ? 'Long ideas' : 'Neutral'}
           </h2>
           <span className="badge">{filtered.length}</span>
           <span className="cell-muted" style={{ fontSize: '0.78rem' }}>
-            {quality === 'short'
-              ? 'Bearish fundamentals (EPS miss / margin contraction / sell rating) — short candidates.'
-              : quality === 'long'
+            {quality === 'long'
               ? 'Bullish fundamentals (beat / expansion / buy rating) — long candidates.'
-              : 'Mixed/flat fundamentals — neither a clear long nor short.'}
+              : 'Mixed, flat or bearish fundamentals — not a long. Shorts arrive with the Stage 4 scanner.'}
           </span>
           <div style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             {/* Symbol / company search */}
@@ -453,32 +438,29 @@ export default function FundamentalsPage() {
               </select>
             </label>
 
-            {/* Stage-2 sub-filter — hidden for shorts (not applicable). */}
-            {quality !== 'short' && (
-              <div style={{ display: 'inline-flex', gap: 0, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-                {([[false, 'All'], [true, 'Stage 2']] as Array<[boolean, string]>).map(([key, label]) => (
-                  <button
-                    key={String(key)}
-                    onClick={() => setStageOnly(key)}
-                    className="btn btn-sm"
-                    style={{
-                      border: 'none', borderRadius: 0,
-                      background: stageOnly === key ? 'var(--accent)' : 'transparent',
-                      color: stageOnly === key ? '#fff' : 'var(--text)',
-                      fontWeight: stageOnly === key ? 600 : 500,
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
+            {/* Stage-2 sub-filter */}
+            <div style={{ display: 'inline-flex', gap: 0, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+              {([[false, 'All'], [true, 'Stage 2']] as Array<[boolean, string]>).map(([key, label]) => (
+                <button
+                  key={String(key)}
+                  onClick={() => setStageOnly(key)}
+                  className="btn btn-sm"
+                  style={{
+                    border: 'none', borderRadius: 0,
+                    background: stageOnly === key ? 'var(--accent)' : 'transparent',
+                    color: stageOnly === key ? '#fff' : 'var(--text)',
+                    fontWeight: stageOnly === key ? 600 : 500,
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
 
-            {/* Long / Short / Neutral */}
+            {/* Long / Neutral (Short lands with the Stage 4 scanner) */}
             <div style={{ display: 'inline-flex', gap: 0, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
               {([
                 ['long', 'Long'],
-                ['short', 'Short'],
                 ['neutral', 'Neutral'],
               ] as Array<[IdeaSide, string]>).map(([key, label]) => (
                 <button
@@ -512,8 +494,7 @@ export default function FundamentalsPage() {
         ) : (
           <>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 8 }}>
-              Showing <strong style={{ color: confSide === 'short' ? 'var(--danger, #d9534f)' : 'var(--success, #2e7d32)' }}>{confSide}</strong> confidence scores
-              {confSide === 'short' && ' — higher = stronger conviction the stock falls'}
+              Showing <strong style={{ color: 'var(--success, #2e7d32)' }}>long</strong> confidence scores
             </div>
             <div className="table-scroll">
             <table className="table" style={{ tableLayout: 'fixed', width: '100%', minWidth: 980 }}>

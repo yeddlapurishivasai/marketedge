@@ -638,6 +638,9 @@ export interface FundamentalDetail {
   row: FundamentalRow;
   note?: string | null;
   signals?: FundamentalSignals | null;
+  // Scored idea (confidence breakdown + direction) for this stock. Null until the
+  // fundamentals job has produced a non-stale idea row for it.
+  idea?: FundamentalIdeaRow | null;
 }
 
 export type FundamentalScanner =
@@ -723,8 +726,15 @@ export async function triggerFundamentalsRefresh(
   return res.json();
 }
 
-export async function saveFundamentalNote(market: Market, symbol: string, noteText: string): Promise<void> {
-  const res = await authFetch(`${BASE}/${market}/fundamentals/${encodeURIComponent(symbol)}/note`, {
+export async function recalculateSymbolFundamentals(market: Market, symbol: string): Promise<{ runId: number }> {
+  const res = await authFetch(`${BASE}/${market}/fundamentals/${encodeURIComponent(symbol)}/recalculate`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error((await res.text()) || 'Failed to recalculate fundamentals');
+  return res.json();
+}
+
+export async function saveFundamentalNote(market: Market, symbol: string, noteText: string): Promise<void> {  const res = await authFetch(`${BASE}/${market}/fundamentals/${encodeURIComponent(symbol)}/note`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ noteText })

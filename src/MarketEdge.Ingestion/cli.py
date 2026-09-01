@@ -34,6 +34,7 @@ import pandas as pd
 
 import db
 import fetch
+import screener
 from config import Config
 from observability import configure_logging
 
@@ -509,6 +510,8 @@ def cmd_ingest_fundamentals(args) -> int:
         return 1
 
     started = time.monotonic()
+    # Clear the Screener circuit-breaker / call-budget counters so each run starts fresh.
+    screener.reset_run_state()
     counts = {
         "analyst_ok": 0, "analyst_failed": 0,
         "eps_rows": 0, "eps_failed": 0,
@@ -583,12 +586,14 @@ def cmd_ingest_fundamentals(args) -> int:
 
         reporter.update(len(symbols))
         duration = round(time.monotonic() - started, 1)
+        scr_stats = screener.stats()
         logger.info(
             "Fundamentals run complete",
             extra={
                 "market": args.market,
                 "duration_s": duration,
                 **counts,
+                **{f"screener_{k}": v for k, v in scr_stats.items()},
             },
         )
         logger.info(
@@ -601,6 +606,12 @@ def cmd_ingest_fundamentals(args) -> int:
             counts["earnings_ok"], counts["earnings_skipped"],
             counts["signals_ok"], counts["signals_skipped"], duration,
         )
+        if screener.is_enabled(args.market):
+            logger.info(
+                "Screener.in: %s calls | %s ok | %s throttled | %s errors | %s breaker trip(s)",
+                scr_stats["calls"], scr_stats["hits"], scr_stats["blocked"],
+                scr_stats["errors"], scr_stats["breaker_trips"],
+            )
     finally:
         conn.close()
     return 0
@@ -922,42 +933,131 @@ def _calendar_next_earnings(ticker, as_of):
     return min(candidates) if candidates else None
 
 
-def _try_earnings_fundamentals(conn, market, symbol, ticker, as_of) -> bool:
-    """Compute reported quarterly earnings fundamentals from yfinance and upsert.
+def _screener_refresh_due(conn, market: str, symbol: str) -> bool:
+    """True when Screener should be called for ``symbol`` this run.
 
-    Reads ``quarterly_income_stmt`` (Total Revenue / Operating Income / Net Income) for
-    current / previous-quarter / year-ago-quarter columns, plus ``get_earnings_dates`` for
-    the last two reported announcement dates. Best-effort; returns True if a row was written.
+    Reported financials only move when a company announces results, so a symbol whose
+    stored Screener data is recent AND predates no new announcement is skipped entirely.
+    This is what keeps a nightly run cheap: after the first backfill only the handful of
+    symbols that just reported hit the network, instead of all ~2,285. Any doubt (no row,
+    unknown source, DB hiccup) resolves to True so we fetch rather than serve stale data.
     """
     try:
-        stmt = ticker.quarterly_income_stmt
+        state = db.get_reported_source_state(conn, market, symbol)
     except Exception as exc:  # noqa: BLE001
-        logger.debug("No quarterly income stmt for %s: %s", symbol, exc)
-        stmt = None
+        logger.debug("Screener cache check failed for %s: %s", symbol, exc)
+        return True
+    if not state:
+        return True
+    source, fetched_at, last_earnings = state
+    if source != "screener" or fetched_at is None:
+        return True
+    age_days = (datetime.now(timezone.utc) - _as_utc(fetched_at)).days
+    if age_days >= Config.SCREENER_CACHE_DAYS:
+        return True
+    # Results announced since we last fetched -> the numbers changed.
+    if last_earnings is not None and last_earnings >= _as_utc(fetched_at).date():
+        return True
+    return False
 
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _try_earnings_fundamentals(conn, market, symbol, ticker, as_of) -> bool:
+    """Compute reported quarterly earnings fundamentals and upsert.
+
+    Reported financials (revenue / operating profit / net profit, current + previous +
+    year-ago quarter) use **field-level source precedence**: Screener.in is primary for
+    India, yfinance's ``quarterly_income_stmt`` fills whatever Screener couldn't supply.
+    Everything analyst-derived — EPS estimates, surprises, announcement dates, forward
+    P/E — stays yfinance-only, because Screener publishes none of it. Best-effort;
+    returns True if a row was written.
+    """
     revenue = op_profit = net_profit = None
     revenue_pq = op_profit_pq = net_profit_pq = None
     revenue_yo = op_profit_yo = net_profit_yo = None
     latest_q_end = None
+    screener_eps: list[tuple] = []
+    used_screener = False
 
+    # A symbol whose stored Screener financials are still current needs no reported-
+    # financials refresh at all this run — not from Screener and not from Yahoo. Leaving every
+    # reported field None makes the upsert preserve what is already stored (see
+    # ``preserve_on_null`` in db.upsert_earnings_fundamentals); re-fetching from Yahoo
+    # instead would quietly overwrite good Screener numbers with weaker ones.
+    refresh_reported = True
+    if screener.is_enabled(market):
+        refresh_reported = _screener_refresh_due(conn, market, symbol)
+
+    # --- Reported financials, primary source: Screener.in (India only) ------------------
+    # Returns None for every failure mode (disabled, budget spent, breaker open, blocked,
+    # unparseable), so this silently degrades to the yfinance path below.
+    if refresh_reported and screener.is_enabled(market):
+        scr = screener.fetch_quarterly(symbol)
+        if scr is not None:
+            revenue, revenue_pq, revenue_yo = scr.revenue, scr.revenue_prev_q, scr.revenue_yoy_q
+            op_profit = scr.operating_profit
+            op_profit_pq, op_profit_yo = scr.operating_profit_prev_q, scr.operating_profit_yoy_q
+            net_profit, net_profit_pq = scr.net_profit, scr.net_profit_prev_q
+            net_profit_yo = scr.net_profit_yoy_q
+            latest_q_end = scr.latest_quarter_end
+            # (date, estimate, actual, surprise) — Screener has no estimate/surprise.
+            screener_eps = [(d, None, v, None) for d, v in scr.eps_quarters]
+            used_screener = True
+
+    # --- Reported financials, fallback: yfinance quarterly income statement -------------
+    # Skipped entirely when Screener already supplied a complete set; it is Yahoo's
+    # flakiest endpoint, so not calling it is both faster and more reliable.
+    stmt = None
+    if refresh_reported and any(v is None for v in
+                                (revenue, op_profit, net_profit, revenue_yo, net_profit_yo)):
+        try:
+            stmt = ticker.quarterly_income_stmt
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("No quarterly income stmt for %s: %s", symbol, exc)
+            stmt = None
+
+    used_yfinance_financials = False
     if stmt is not None and hasattr(stmt, "columns") and len(stmt.columns) > 0:
         rev_labels = ["Total Revenue", "Operating Revenue"]
         op_labels = ["Operating Income", "Operating Income Or Loss"]
         ni_labels = ["Net Income", "Net Income Common Stockholders",
                      "Net Income Continuous Operations"]
-        revenue = _row_value(stmt, rev_labels, 0)
-        op_profit = _row_value(stmt, op_labels, 0)
-        net_profit = _row_value(stmt, ni_labels, 0)
-        revenue_pq = _row_value(stmt, rev_labels, 1)
-        op_profit_pq = _row_value(stmt, op_labels, 1)
-        net_profit_pq = _row_value(stmt, ni_labels, 1)
-        revenue_yo = _row_value(stmt, rev_labels, 4)
-        op_profit_yo = _row_value(stmt, op_labels, 4)
-        net_profit_yo = _row_value(stmt, ni_labels, 4)
-        try:
-            latest_q_end = stmt.columns[0].date()
-        except Exception:  # noqa: BLE001
-            latest_q_end = None
+
+        def _fill(current, labels, col_idx):
+            nonlocal used_yfinance_financials
+            if current is not None:
+                return current
+            value = _row_value(stmt, labels, col_idx)
+            if value is not None:
+                used_yfinance_financials = True
+            return value
+
+        revenue = _fill(revenue, rev_labels, 0)
+        op_profit = _fill(op_profit, op_labels, 0)
+        net_profit = _fill(net_profit, ni_labels, 0)
+        revenue_pq = _fill(revenue_pq, rev_labels, 1)
+        op_profit_pq = _fill(op_profit_pq, op_labels, 1)
+        net_profit_pq = _fill(net_profit_pq, ni_labels, 1)
+        revenue_yo = _fill(revenue_yo, rev_labels, 4)
+        op_profit_yo = _fill(op_profit_yo, op_labels, 4)
+        net_profit_yo = _fill(net_profit_yo, ni_labels, 4)
+        if latest_q_end is None:
+            try:
+                latest_q_end = stmt.columns[0].date()
+            except Exception:  # noqa: BLE001
+                latest_q_end = None
+
+    if used_screener and used_yfinance_financials:
+        reported_source = "mixed"
+    elif used_screener:
+        reported_source = "screener"
+    elif used_yfinance_financials:
+        reported_source = "yfinance"
+    else:
+        reported_source = None
 
     # Earnings announcement dates + reported-EPS history (reported quarters only).
     last_date = prev_date = last_eps = last_surprise = next_date = None
@@ -1008,8 +1108,15 @@ def _try_earnings_fundamentals(conn, market, symbol, ticker, as_of) -> bool:
                 last_eps = hist[0][2]
             if last_surprise is None:
                 last_surprise = hist[0][3]
+    #   2b. Screener.in reported EPS (India) — real reported actuals keyed by quarter end,
+    #       so it outranks the income-statement scrape below. Carries no estimate/surprise,
+    #       which is why it can only ever fill the actual-EPS slots.
+    if not eps_quarters and screener_eps:
+        eps_quarters = screener_eps[:4]
+        if last_eps is None:
+            last_eps = screener_eps[0][2]
     if not eps_quarters:
-        stmt_eps = _income_stmt_eps_quarters(stmt)
+        stmt_eps = _income_stmt_eps_quarters(stmt) if stmt is not None else []
         if stmt_eps:
             eps_quarters = stmt_eps[:4]
             if last_eps is None:
@@ -1093,6 +1200,8 @@ def _try_earnings_fundamentals(conn, market, symbol, ticker, as_of) -> bool:
         "next_earnings_date": next_date,
         "last_reported_eps": last_eps, "last_eps_surprise_pct": last_surprise,
         "trailing_pe": trailing_pe, "forward_pe": forward_pe,
+        "reported_source": reported_source,
+        "reported_fetched_at": datetime.now(timezone.utc) if used_screener else None,
         **eps_hist,
     }
     try:

@@ -372,16 +372,26 @@ def run_stock_refresh_job(payload: dict) -> None:
 
 
 def run_fundamentals_job(payload: dict) -> None:
-    """Nightly fundamentals-only refresh for the stage2 universe.
+    """Fundamentals-only refresh for the stage2 universe, or for an explicit symbol list.
 
     Resolves the same stage2 symbol set the pre-close scan uses, then runs only the
     ``fundamentals`` ingestion step for those symbols (analyst snapshots, EPS forecasts,
     earnings fundamentals, market cap). Bars and the technical snapshot are intentionally
     left to the pre-close scan; this job just keeps fundamentals current overnight.
+
+    When the payload carries an explicit ``symbols`` list — the per-stock "Recalculate
+    fundamentals" action in the stock popup — universe resolution is skipped entirely and
+    only those symbols are refreshed, with ``force`` set so the earnings-window filter
+    can't short-circuit an explicitly requested refresh.
     """
     market = str(payload["market"]).lower()
     run_id = int(payload["runId"])
     universe = (payload.get("universe") or "stage2").lower()
+    requested = payload.get("symbols")
+    explicit_symbols = (
+        [str(s).strip().upper() for s in requested if str(s).strip()]
+        if isinstance(requested, (list, tuple)) else []
+    )
 
     cli = _resolve_cli()
     cli_dir = os.path.dirname(cli)
@@ -399,12 +409,18 @@ def run_fundamentals_job(payload: dict) -> None:
         tracker.publish()
 
         tracker.start("resolve")
-        from scanners.runner import load_universe
-        meta_rows = load_universe(conn, market, universe)
-        symbols = [m["symbol"] for m in meta_rows]
-        logger.info("Fundamentals run %s: market=%s universe=%s symbols=%s",
-                    run_id, market, universe, len(symbols))
-        tracker.complete("resolve", detail=f"{len(symbols)} symbols")
+        if explicit_symbols:
+            symbols = explicit_symbols
+            logger.info("Fundamentals run %s: market=%s explicit symbols=%s",
+                        run_id, market, ",".join(symbols))
+            tracker.complete("resolve", detail=f"{len(symbols)} requested symbol(s)")
+        else:
+            from scanners.runner import load_universe
+            meta_rows = load_universe(conn, market, universe)
+            symbols = [m["symbol"] for m in meta_rows]
+            logger.info("Fundamentals run %s: market=%s universe=%s symbols=%s",
+                        run_id, market, universe, len(symbols))
+            tracker.complete("resolve", detail=f"{len(symbols)} symbols")
 
         if not symbols:
             metrics = {"market": market, "universe": universe, "symbols": 0,
@@ -414,7 +430,10 @@ def run_fundamentals_job(payload: dict) -> None:
                               metrics=metrics, stages=tracker.snapshot(), completed_at=_now())
             return
 
-        if universe == "stage2":
+        if explicit_symbols:
+            # An explicitly requested recalculate must always refetch.
+            step_payload = {**payload, "symbols": symbols, "force": True}
+        elif universe == "stage2":
             # Scope the fundamentals step to just the stage2 symbols.
             step_payload = {**payload, "symbols": symbols}
         else:

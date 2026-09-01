@@ -69,6 +69,14 @@ DIRECTION_WEIGHTS = {
 LONG_MIN = 20
 SHORT_MAX = -20
 
+# Fundamentals currently emits long/neutral only. A bearish direction score buckets to
+# Neutral rather than Short: shorting is a Stage 4 setup, and the fundamentals universe is
+# Stage 2 (basing/advancing), where a short is not actionable. The bearish scoring machinery
+# below (compute_short_confidence / SHORT_MAX) is deliberately kept intact and still
+# persisted in the rationale, so the Stage 4 scanner can turn shorts on via
+# ``side(score, allow_short=True)`` without recomputing anything.
+EMIT_SHORT_SIDE = False
+
 # Overall = fundamental + technical blend (renormalised when one side is missing).
 OVERALL_FUND_WEIGHT = 0.60
 OVERALL_TECH_WEIGHT = 0.40
@@ -233,11 +241,20 @@ def direction_score(eps_beat_pct: float | None, opm_expansion_pp: float | None,
     return int(round(100.0 * num / wsum))
 
 
-def side(score: int | None) -> str | None:
-    """long / short / neutral from a signed score (None when score is None)."""
+def side(score: int | None, allow_short: bool = EMIT_SHORT_SIDE) -> str | None:
+    """long / neutral from a signed score (None when score is None).
+
+    Bearish scores bucket to ``neutral`` unless ``allow_short`` is set — fundamentals runs
+    over the Stage 2 universe, where a short isn't an actionable setup. The Stage 4 scanner
+    passes ``allow_short=True`` to get the full long/short/neutral split.
+    """
     if score is None:
         return None
-    return "long" if score > LONG_MIN else "short" if score < SHORT_MAX else "neutral"
+    if score > LONG_MIN:
+        return "long"
+    if allow_short and score < SHORT_MAX:
+        return "short"
+    return "neutral"
 
 
 def compute_short_confidence(
