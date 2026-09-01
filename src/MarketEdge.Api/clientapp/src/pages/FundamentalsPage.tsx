@@ -111,7 +111,7 @@ function RatingCell({ r }: { r: FundamentalIdeaRow }) {
 type IdeaSide = 'long' | 'neutral';
 
 // --- Confidence breakdown modal ----------------------------------------------
-interface RationaleMetric { metric: string; phat: number; n: number; days: number | null; recency: number; confidence: number; }
+interface RationaleMetric { metric: string; phat: number; n: number; days: number | null; recency?: number; confidence: number; }
 interface Rationale {
   n: number;
   weights: Record<string, number>;
@@ -154,14 +154,16 @@ function ConfidenceBreakdown({ row, side, onClose }: { row: FundamentalIdeaRow; 
           <button onClick={onClose} className="btn btn-sm btn-outline" style={{ marginLeft: 'auto' }}><X size={14} /></button>
         </div>
         <p className="cell-muted" style={{ fontSize: '0.82rem', marginTop: 0 }}>
-          Each metric's raw value is normalised to a 0–1 strength (p̂), then decayed by a
-          recency factor (30 / (30 + days)) so a fresh result/rating scores at full strength
-          and fades as it ages. Ratio metrics that can explode from a near-zero base (EPS beat,
+          Each metric's raw value is normalised to a 0–1 strength (p̂), which is the score —
+          there is no age decay, because a result's strength is a property of the reported
+          numbers, not of how long ago they were filed. Ratio metrics that can explode from
+          a near-zero base (EPS beat,
           EPS forecast, operating-profit expansion) use a diminishing-returns curve, so an
           extreme low-quality beat converges toward — but never tops — a clean one instead of
           dominating the blend. The <strong>EPS beat rate</strong> row is a different exception:
-          it's a true frequency (beats over the last N quarters), so it uses a Wilson lower bound
-          and doesn't age. Fundamental confidence is the weighted blend of the rows below.
+          it's a true frequency (beats over the last N quarters), so it uses a Wilson lower bound.
+          Fundamental confidence is the weighted blend of the rows below. Age is shown for
+          information only.
         </p>
 
         {!data ? (
@@ -175,7 +177,6 @@ function ConfidenceBreakdown({ row, side, onClose }: { row: FundamentalIdeaRow; 
                   <th style={{ textAlign: 'left' }}>Metric</th>
                   <th style={{ textAlign: 'right' }}>p̂</th>
                   <th style={{ textAlign: 'right' }}>age (d)</th>
-                  <th style={{ textAlign: 'right' }}>recency</th>
                   <th style={{ textAlign: 'right' }}>Confidence</th>
                   <th style={{ textAlign: 'right' }}>Weight</th>
                   <th style={{ textAlign: 'right' }}>Contribution</th>
@@ -187,7 +188,6 @@ function ConfidenceBreakdown({ row, side, onClose }: { row: FundamentalIdeaRow; 
                     <td>{METRIC_LABEL[p.metric] ?? p.metric}</td>
                     <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{p.phat.toFixed(3)}</td>
                     <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{p.days ?? '—'}</td>
-                    <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{p.recency.toFixed(3)}</td>
                     <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600, color: confColor(p.confidence) }}>{p.confidence.toFixed(2)}</td>
                     <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{(p.weight * 100).toFixed(0)}%</td>
                     <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{(p.contribution / (wsum || 1)).toFixed(2)}</td>

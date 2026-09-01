@@ -236,7 +236,6 @@ function ScoreBlock({ idea }: { idea: FundamentalIdeaRow }) {
       )}
       <div className="cell-muted" style={{ fontSize: '0.72rem', marginTop: 10 }}>
         Scored from the {fmtDate(idea.earningsDate)} result
-        {idea.daysSinceEarnings != null && <> · {idea.daysSinceEarnings}d ago</>}
       </div>
     </div>
   );
