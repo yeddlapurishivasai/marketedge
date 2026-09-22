@@ -13,7 +13,7 @@ public interface IJobService
     Task<int> TriggerStageAnalysisAsync(string market, TriggerAnalysisRequest? request);
     Task<bool> CancelRunAsync(int id);
     Task<Stage2SummaryDto?> GetLatestStage2SummaryAsync(string market);
-    Task<List<StageAnalysisResultDto>> GetStage2StocksAsync(int runId, string? classification = null, int? sectorId = null, bool fnoOnly = false, string? squeeze = null);
+    Task<List<StageAnalysisResultDto>> GetStage2StocksAsync(int runId, string? classification = null, int? sectorId = null, bool fnoOnly = false, string? squeeze = null, decimal? minMarketCap = null);
     Task<List<SectorRotationDto>> GetSectorRotationAsync(int runId);
     Task<List<Stage2HistoryDto>> GetStage2HistoryAsync(string market, int maxRuns = 10);
     Task<List<SectorRotationHistoryDto>> GetSectorRotationHistoryAsync(string market, int maxRuns = 12);
@@ -273,7 +273,7 @@ public class JobService : IJobService
         return summary;
     }
 
-    public async Task<List<StageAnalysisResultDto>> GetStage2StocksAsync(int runId, string? classification = null, int? sectorId = null, bool fnoOnly = false, string? squeeze = null)
+    public async Task<List<StageAnalysisResultDto>> GetStage2StocksAsync(int runId, string? classification = null, int? sectorId = null, bool fnoOnly = false, string? squeeze = null, decimal? minMarketCap = null)
     {
         // Determine market from the job run
         var job = await _db.JobRuns.FindAsync(runId);
@@ -315,6 +315,9 @@ public class JobService : IJobService
             _ => query
         };
 
+        if (minMarketCap.HasValue)
+            query = query.Where(r => r.MarketCap >= minMarketCap.Value);
+
         var dtos = await query
             .OrderByDescending(r => r.RSScore)
             .ThenByDescending(r => r.MomentumScore)
@@ -322,6 +325,7 @@ public class JobService : IJobService
             .ToListAsync();
         await PopulateRsRatingsAsync(job.Market, dtos);
         await PopulateFnoFlagsAsync(job.Market, dtos);
+        await PopulateFundamentalScoresAsync(job.Market, dtos);
         return dtos;
     }
 
@@ -535,6 +539,32 @@ public class JobService : IJobService
 
         var set = fnoSymbols.ToHashSet();
         foreach (var d in dtos) d.IsFno = set.Contains(d.Symbol);
+    }
+
+    private async Task PopulateFundamentalScoresAsync(string market, List<StageAnalysisResultDto> dtos)
+    {
+        if (dtos.Count == 0) return;
+        var symbols = dtos.Select(d => d.Symbol).Distinct().ToList();
+
+        var ideas = market == "india"
+            ? await _db.IndianFundamentalIdeas
+                .Where(i => !i.IsStale && symbols.Contains(i.Ticker))
+                .ToListAsync<FundamentalIdeaBase>()
+            : await _db.USFundamentalIdeas
+                .Where(i => !i.IsStale && symbols.Contains(i.Ticker))
+                .ToListAsync<FundamentalIdeaBase>();
+
+        var scores = ideas
+            .GroupBy(i => i.Ticker)
+            .ToDictionary(
+                g => g.Key,
+                g => g.OrderByDescending(i => i.EarningsDate)
+                    .ThenByDescending(i => i.UpdatedAt)
+                    .First()
+                    .FundamentalConfidence);
+
+        foreach (var dto in dtos)
+            if (scores.TryGetValue(dto.Symbol, out var score)) dto.FundamentalScore = score;
     }
 
     private static StageAnalysisResultDto MapResult(StageAnalysisResultBase r)
