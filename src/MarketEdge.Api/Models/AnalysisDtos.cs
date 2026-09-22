@@ -100,6 +100,8 @@ public class StageAnalysisResultDto
     public decimal? SqueezeMomentum { get; set; }
     /// <summary>UTC timestamp of the last daily squeeze refresh (updated by every scanner run).</summary>
     public DateTime? SqueezeUpdatedAt { get; set; }
+    /// <summary>Latest non-stale fundamental confidence score for the symbol.</summary>
+    public decimal? FundamentalScore { get; set; }
     /// <summary>True when the symbol is in the market's F&amp;O (derivatives) universe.</summary>
     public bool IsFno { get; set; }
 }

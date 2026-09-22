@@ -338,6 +338,7 @@ export default function AnalysisPage() {
   const [stocks, setStocks] = useState<StageAnalysisResult[]>([]);
   const [classFilter, setClassFilter] = useState('');
   const [squeezeFilter, setSqueezeFilter] = useState('');
+  const [minMarketCapFilter, setMinMarketCapFilter] = useState('0');
   const [stocksLoading, setStocksLoading] = useState(false);
   const [rotationHistory, setRotationHistory] = useState<SectorRotationHistory[]>([]);
   const [timelineIdx, setTimelineIdx] = useState(0);
@@ -426,26 +427,31 @@ export default function AnalysisPage() {
     setTriggering(false);
   };
 
-  const loadStocks = useCallback(async (classification?: string, fnoOnly?: boolean, squeeze?: string) => {
+  const loadStocks = useCallback(async (classification?: string, fnoOnly?: boolean, squeeze?: string, minMarketCap?: number) => {
     if (!latestRunId) return;
     setStocksLoading(true);
     try {
       const data = await fetchStage2Stocks(m, latestRunId, {
         classification: classification || undefined,
         fnoOnly,
-        squeeze: squeeze || undefined
+        squeeze: squeeze || undefined,
+        minMarketCap
       });
       setStocks(data);
     } catch { /* ignore */ }
     setStocksLoading(false);
   }, [m, latestRunId]);
 
-  // The squeeze filter is only offered on the F&O tab, so it is ignored elsewhere.
   useEffect(() => {
     if ((tab === 'stocks' || tab === 'fno') && latestRunId) {
-      loadStocks(classFilter, tab === 'fno', tab === 'fno' ? squeezeFilter : '');
+      const displayValue = Number(minMarketCapFilter);
+      const scale = m === 'india' ? 10_000_000 : 1_000_000;
+      const minMarketCap = Number.isFinite(displayValue) && displayValue > 0
+        ? displayValue * scale
+        : undefined;
+      loadStocks(classFilter, tab === 'fno', squeezeFilter, minMarketCap);
     }
-  }, [tab, classFilter, squeezeFilter, latestRunId, loadStocks]);
+  }, [tab, classFilter, squeezeFilter, minMarketCapFilter, latestRunId, loadStocks, m]);
 
   // Timeline animation
   useEffect(() => {
@@ -961,17 +967,28 @@ export default function AnalysisPage() {
                   <option value="reentry">Re-Entries</option>
                   <option value="removed">Removed</option>
                 </select>
-                {tab === 'fno' && (
-                  <select
+                <select
+                  className="select-input"
+                  value={squeezeFilter}
+                  onChange={e => setSqueezeFilter(e.target.value)}
+                >
+                  <option value="">Any squeeze state</option>
+                  <option value="on">In squeeze</option>
+                  <option value="fired">Squeeze fired</option>
+                </select>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.8rem' }}>
+                  <span className="cell-muted">Min cap ({m === 'india' ? '₹ Cr' : '$M'}):</span>
+                  <input
                     className="select-input"
-                    value={squeezeFilter}
-                    onChange={e => setSqueezeFilter(e.target.value)}
-                  >
-                    <option value="">Any squeeze state</option>
-                    <option value="on">In squeeze</option>
-                    <option value="fired">Squeeze fired</option>
-                  </select>
-                )}
+                    type="number"
+                    min="0"
+                    step="5000"
+                    value={minMarketCapFilter}
+                    onChange={e => setMinMarketCapFilter(e.target.value)}
+                    aria-label={`Minimum market cap in ${m === 'india' ? 'crore rupees' : 'millions of dollars'}`}
+                    style={{ width: 120 }}
+                  />
+                </label>
                 {tab === 'fno' && (
                   <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
                     Showing only stocks in the F&amp;O (derivatives) universe
@@ -994,6 +1011,7 @@ export default function AnalysisPage() {
                         <SortableHeader label="Mkt Cap" sortKey="marketCap" sort={stocksSort.sort} onSort={stocksSort.toggle} />
                         <SortableHeader label="RS" sortKey="rsRating" sort={stocksSort.sort} onSort={stocksSort.toggle} />
                         <SortableHeader label="Momentum" sortKey="momentumScore" sort={stocksSort.sort} onSort={stocksSort.toggle} />
+                        <SortableHeader label="Fund Score" sortKey="fundamentalScore" sort={stocksSort.sort} onSort={stocksSort.toggle} />
                         <SortableHeader label="Quadrant" sortKey="quadrant" sort={stocksSort.sort} onSort={stocksSort.toggle} />
                         <SortableHeader label="A/D" sortKey="adClassification" sort={stocksSort.sort} onSort={stocksSort.toggle} />
                         <SortableHeader label="Class" sortKey="classification" sort={stocksSort.sort} onSort={stocksSort.toggle} />
@@ -1019,6 +1037,7 @@ export default function AnalysisPage() {
                           <td style={{ color: (s.momentumScore ?? 0) > 0 ? 'var(--success)' : 'var(--danger)' }}>
                             {s.momentumScore?.toFixed(2)}
                           </td>
+                          <td>{s.fundamentalScore != null ? s.fundamentalScore.toFixed(1) : '-'}</td>
                           <td><span className={`quadrant-badge q-${s.quadrant}`}>{s.quadrant}</span></td>
                           <td><span className={`ad-badge ad-${s.adClassification}`}>{s.adClassification}</span></td>
                           <td><span className={`class-badge class-${s.classification}`}>{s.classification}</span></td>
