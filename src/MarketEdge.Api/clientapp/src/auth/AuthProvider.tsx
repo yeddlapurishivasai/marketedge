@@ -13,7 +13,7 @@ import {
   type MsalAuthenticationResult,
 } from '@azure/msal-react';
 import { fetchAuthConfig, buildMsalConfig } from './authConfig';
-import { setTokenProvider } from '../api';
+import { setTokenProvider, setUnauthorizedHandler } from '../api';
 
 export interface AuthState {
   /** True when Azure Entra auth is active; false when disabled via config. */
@@ -54,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (!cfg.enabled) {
         setTokenProvider(null);
+        setUnauthorizedHandler(null);
         if (!cancelled) setState({ status: 'disabled' });
         return;
       }
@@ -74,8 +75,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       });
 
+      let redirecting = false;
+      const redirectToLogin = async (account?: AccountInfo) => {
+        if (redirecting) return;
+        redirecting = true;
+        await pca.loginRedirect({
+          scopes: cfg.scopes,
+          prompt: 'login',
+          loginHint: account?.username,
+        });
+      };
+
+      setUnauthorizedHandler(async () => {
+        const account = pca.getActiveAccount() ?? pca.getAllAccounts()[0];
+        await redirectToLogin(account);
+      });
+
       // Every API request runs through this to get a fresh access token.
-      setTokenProvider(async () => {
+      const getAccessToken = async () => {
         const account = pca.getActiveAccount() ?? pca.getAllAccounts()[0];
         if (!account) return null;
         try {
@@ -83,11 +100,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return result.accessToken;
         } catch (err) {
           if (err instanceof InteractionRequiredAuthError) {
-            await pca.acquireTokenRedirect({ scopes: cfg.scopes, account });
+            await redirectToLogin(account);
           }
           return null;
         }
-      });
+      };
+      setTokenProvider(getAccessToken);
+
+      const account = pca.getActiveAccount() ?? pca.getAllAccounts()[0];
+      if (account) {
+        const token = await getAccessToken();
+        if (!token) return;
+
+        const response = await fetch('/api/auth/me', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (response.status === 401) {
+          await redirectToLogin(account);
+          return;
+        }
+      }
 
       if (!cancelled) setState({ status: 'ready', pca, scopes: cfg.scopes });
     })();
