@@ -1,6 +1,8 @@
 type TokenProvider = () => Promise<string | null>;
+type UnauthorizedHandler = () => Promise<void>;
 
 let tokenProvider: TokenProvider | null = null;
+let unauthorizedHandler: UnauthorizedHandler | null = null;
 
 /**
  * Registered by the auth layer (AuthProvider). When set, every API request
@@ -9,6 +11,10 @@ let tokenProvider: TokenProvider | null = null;
  */
 export function setTokenProvider(provider: TokenProvider | null): void {
   tokenProvider = provider;
+}
+
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
+  unauthorizedHandler = handler;
 }
 
 async function authFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
@@ -20,7 +26,11 @@ async function authFetch(input: RequestInfo | URL, init: RequestInit = {}): Prom
       init = { ...init, headers };
     }
   }
-  return fetch(input, init);
+  const response = await fetch(input, init);
+  if (response.status === 401 && unauthorizedHandler) {
+    await unauthorizedHandler();
+  }
+  return response;
 }
 
 export interface Sector {
