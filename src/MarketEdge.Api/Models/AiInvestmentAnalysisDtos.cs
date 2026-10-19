@@ -23,9 +23,19 @@ public record AiInvestmentAnalysisHistoryItem(
     string SchemaVersion,
     string SkillVersion,
     string Model,
+    AiInvestmentAnalysisSummary Summary,
     AiAnalysisCostDto Cost,
     DateTime CreatedAt,
     DateTime UpdatedAt);
+
+public record AiInvestmentAnalysisSummary(
+    string? Valuation,
+    decimal? BaseReturn3mPct,
+    decimal? BaseReturn6mPct,
+    decimal? BaseReturn1yPct,
+    decimal? BaseReturn2yPct,
+    string? ShortTermAction,
+    string? LongTermAction);
 
 public record AiInvestmentAnalysisDetail(
     AiInvestmentAnalysisHistoryItem Metadata,

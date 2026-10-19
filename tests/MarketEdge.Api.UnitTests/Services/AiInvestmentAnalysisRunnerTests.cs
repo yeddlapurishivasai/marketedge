@@ -24,7 +24,7 @@ public class AiInvestmentAnalysisRunnerTests
                     It.IsAny<string>(), It.IsAny<string>(), true,
                     It.IsAny<int>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new FoundryResponse(
-                    "{\"schemaVersion\":\"marketedge.ai-analysis.v1\",\"enrichment\":{\"earningsCall\":{\"status\":\"available\"},\"corporateFilings\":{\"status\":\"available\"}}}",
+                    ValidAnalysisJson(),
                     new AiInferenceUsage(300, 30)));
             var options = Options.Create(new AzureAiFoundryOptions
             {
@@ -89,6 +89,7 @@ public class AiInvestmentAnalysisRunnerTests
         var metadata = new AiInvestmentAnalysisHistoryItem(
             1, value.Market, value.Ticker, value.WeekNumber,
             value.SchemaVersion, value.SkillVersion, value.Model,
+            new AiInvestmentAnalysisSummary("fairly_valued", -10, 10, 20, 30, "hold", "accumulate"),
             value.Cost, DateTime.UtcNow, DateTime.UtcNow);
         return new AiInvestmentAnalysisDetail(
             metadata,
@@ -97,4 +98,41 @@ public class AiInvestmentAnalysisRunnerTests
             System.Text.Json.JsonSerializer.SerializeToElement(new { }),
             System.Text.Json.JsonSerializer.SerializeToElement(new { }));
     }
+
+    private static string ValidAnalysisJson() => System.Text.Json.JsonSerializer.Serialize(new
+    {
+        schemaVersion = "marketedge.ai-analysis.v1",
+        enrichment = new
+        {
+            earningsCall = new { status = "available" },
+            corporateFilings = new { status = "available" }
+        },
+        valuation = new
+        {
+            assessment = "fairly_valued",
+            intrinsicValueLow = 90,
+            intrinsicValueHigh = 120
+        },
+        priceScenarios = new[]
+        {
+            Scenario("3m", 80m, 110m, 130m),
+            Scenario("6m", 75m, 120m, 150m),
+            Scenario("1y", 70m, 130m, 170m),
+            Scenario("2y", 60m, 150m, 200m)
+        }
+    });
+
+    private static object Scenario(string horizon, decimal bear, decimal @base, decimal bull) => new
+    {
+        horizon,
+        referencePrice = 100m,
+        method = "P/E",
+        calculation = "projected EPS x assumed P/E",
+        revenueAssumption = "10% growth",
+        epsAssumption = "normalized EPS growth",
+        valuationMultiple = "20x P/E",
+        bear = new { target = bear, returnPct = bear - 100m, assumptions = new[] { "slower growth" } },
+        @base = new { target = @base, returnPct = @base - 100m, assumptions = new[] { "base growth" } },
+        bull = new { target = bull, returnPct = bull - 100m, assumptions = new[] { "faster growth" } }
+    };
 }

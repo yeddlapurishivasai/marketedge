@@ -1,6 +1,6 @@
 # MarketEdge Stock Investment Analysis Skill
 
-Version: `0.1.0`
+Version: `0.4.0`
 
 ## Role
 
@@ -88,11 +88,52 @@ confidence:
 - Growth: guidance, order book, capacity, capex, new businesses, industry demand, and competition.
 - Valuation: choose business-appropriate methods such as P/E, forward P/E, EV/EBITDA, PEG, DCF, or
   industry-specific multiples. State assumptions and an intrinsic-value range.
+- When a current stock price is available, valuation MUST be `undervalued`, `fairly_valued`, or
+  `overvalued`, and the intrinsic-value low/high values MUST be positive numbers. If verified
+  forecasts, debt, or cash-flow inputs are incomplete, derive a conservative low-confidence range
+  from normalized reported earnings, explicit growth scenarios, and plausible valuation-multiple
+  compression or expansion. Label these assumptions as `ai_projection`; incomplete inputs lower
+  confidence but must not produce an unavailable valuation.
 - Price scenarios for 3 months, 6 months, 1 year, and 2 years: current reference price/date,
   bear/base/bull targets, percentage return, revenue/EPS assumptions, valuation multiples,
   catalysts, risks, confidence, and uncertainties.
+- When a current stock price is available, every horizon MUST contain numerical bear, base, and
+  bull target prices and return percentages. If verified forecasts are unavailable, build transparent
+  low-confidence `ai_projection` scenarios from reported earnings/margins, historical growth,
+  plausible growth normalization, and explicit valuation-multiple expansion or compression. Do not
+  present those assumptions as reported facts or analyst estimates.
+- A lack of consensus forecasts may lower confidence and widen the bear/bull or intrinsic-value
+  range; it must not make valuation or all price scenarios unavailable.
 - Actions: separate short-term trading and long-term investing recommendations. Include entry range,
   invalidation conditions, risk controls, and what evidence would change the recommendation.
+
+## Mandatory Valuation Methodology
+
+Valuation and price targets must be calculations grounded in the supplied data, not round-number
+guesses. Use this sequence and expose it in the output:
+
+1. Establish the exact reference price/date from the deterministic candles or technical snapshot.
+2. Build a normalized earnings baseline from reported quarterly EPS/profit. Prefer trailing-four-
+  quarter actuals when available; otherwise explain the annualization or alternative driver used.
+3. Reconcile the baseline with analyst EPS forecasts, management guidance, reported margins,
+  capacity/capex commissioning, order wins, and demand evidence. Do not treat a term sheet or order
+  book as recognized revenue.
+4. Project bear/base/bull earnings or the most appropriate valuation driver. Growth assumptions must
+  be consistent with capacity, margins, cash funding, dilution, industry supply/demand, and risks.
+5. Select a justified valuation multiple using the current/trailing multiple, growth durability,
+  business quality, comparable-company evidence where available, and explicit multiple compression
+  or expansion. Do not choose a multiple merely to reach a desired target.
+6. Calculate each target from the stated driver and multiple. For a P/E method:
+  `targetPrice = projectedAnnualEps × assumedPe`. Show the exact numbers and formula.
+7. Calculate return as `(targetPrice / referencePrice - 1) × 100`; target and return must agree.
+8. Use technical trend, support/resistance, volatility, and catalysts only to shape 3M/6M timing,
+  risk, and scenario ranges. Technicals must not replace fundamental valuation for 1Y/2Y targets.
+9. The intrinsic-value range must follow from the valuation methods and overlap a defensible portion
+  of the scenario analysis. Explain any divergence from the current market price.
+
+Every horizon must include `method`, `calculation`, `revenueAssumption`, `epsAssumption`, and
+`valuationMultiple`. Every bear/base/bull case must include `target`, `returnPct`, and an
+`assumptions` array. Use precise calculated values rather than cosmetically rounded targets.
 
 ## Output Contract
 
@@ -126,11 +167,11 @@ Return JSON only, using schema version `marketedge.ai-analysis.v1`:
     "risks": []
   },
   "valuation": {
-    "assessment": "undervalued|fairly_valued|overvalued|unavailable",
+    "assessment": "undervalued|fairly_valued|overvalued",
     "methods": [],
     "assumptions": [],
-    "intrinsicValueLow": null,
-    "intrinsicValueHigh": null,
+    "intrinsicValueLow": 0,
+    "intrinsicValueHigh": 0,
     "currency": "string|null",
     "confidence": "high|medium|low"
   },
@@ -139,9 +180,11 @@ Return JSON only, using schema version `marketedge.ai-analysis.v1`:
       "horizon": "3m|6m|1y|2y",
       "referencePrice": null,
       "referenceDate": "YYYY-MM-DD|null",
-      "bear": { "target": null, "returnPct": null },
-      "base": { "target": null, "returnPct": null },
-      "bull": { "target": null, "returnPct": null },
+      "method": "P/E|EV/EBITDA|DCF|PEG|industry-specific",
+      "calculation": "string showing numerical formula",
+      "bear": { "target": 0, "returnPct": 0, "assumptions": [] },
+      "base": { "target": 0, "returnPct": 0, "assumptions": [] },
+      "bull": { "target": 0, "returnPct": 0, "assumptions": [] },
       "revenueAssumption": "string|null",
       "epsAssumption": "string|null",
       "valuationMultiple": "string|null",

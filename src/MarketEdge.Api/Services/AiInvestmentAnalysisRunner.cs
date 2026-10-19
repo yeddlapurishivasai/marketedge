@@ -16,7 +16,7 @@ public interface IAiInvestmentAnalysisRunner
 public class AiInvestmentAnalysisRunner : IAiInvestmentAnalysisRunner
 {
     private const string SchemaVersion = "marketedge.ai-analysis.v1";
-    private const string SkillVersion = "0.1.0";
+    private const string SkillVersion = "0.4.0";
     private readonly IAzureAiFoundryClient _foundry;
     private readonly IAiAnalysisCostCalculator _costCalculator;
     private readonly IAiInvestmentAnalysisStore _store;
@@ -74,6 +74,8 @@ public class AiInvestmentAnalysisRunner : IAiInvestmentAnalysisRunner
             _options.AnalysisMaxOutputTokens,
             cancellationToken);
         var analysisJson = NormalizeJson(analysis.OutputText);
+        ValidateRequiredValuation(analysisJson);
+        ValidateRequiredProjections(analysisJson);
         var earningsJson = ExtractEnrichment(analysisJson, "earningsCall");
         var filingsJson = ExtractEnrichment(analysisJson, "corporateFilings");
         var cost = _costCalculator.Calculate(new[] { analysis.Usage });
@@ -114,6 +116,87 @@ public class AiInvestmentAnalysisRunner : IAiInvestmentAnalysisRunner
             && enrichment.TryGetProperty(section, out var value))
             return value.GetRawText();
         return "{\"status\":\"unavailable\",\"findings\":[],\"sources\":[]}";
+    }
+
+    private static void ValidateRequiredProjections(string analysisJson)
+    {
+        using var document = JsonDocument.Parse(analysisJson);
+        if (!document.RootElement.TryGetProperty("priceScenarios", out var scenarios)
+            || scenarios.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException("AI analysis is missing required price scenarios.");
+
+        foreach (var horizon in new[] { "3m", "6m", "1y", "2y" })
+        {
+            var scenario = scenarios.EnumerateArray().FirstOrDefault(item =>
+                item.TryGetProperty("horizon", out var value) && value.GetString() == horizon);
+            if (scenario.ValueKind == JsonValueKind.Undefined)
+                throw new InvalidOperationException($"AI analysis is missing the {horizon} price scenario.");
+            if (!TryGetPositiveNumber(scenario, "referencePrice", out var referencePrice)
+                || !HasNonEmptyString(scenario, "method")
+                || !HasNonEmptyString(scenario, "calculation")
+                || !HasNonEmptyString(scenario, "revenueAssumption")
+                || !HasNonEmptyString(scenario, "epsAssumption")
+                || !HasNonEmptyString(scenario, "valuationMultiple"))
+                throw new InvalidOperationException(
+                    $"AI analysis {horizon} scenario must include its reference price and valuation methodology.");
+
+            foreach (var caseName in new[] { "bear", "base", "bull" })
+            {
+                if (!scenario.TryGetProperty(caseName, out var priceCase)
+                    || !TryGetPositiveNumber(priceCase, "target", out var target)
+                    || !TryGetNumber(priceCase, "returnPct", out var returnPct)
+                    || !HasNonEmptyArray(priceCase, "assumptions"))
+                    throw new InvalidOperationException(
+                        $"AI analysis {horizon} {caseName} scenario must contain a target, returnPct, and assumptions.");
+
+                var calculatedReturn = (target / referencePrice - 1m) * 100m;
+                if (Math.Abs(calculatedReturn - returnPct) > 0.25m)
+                    throw new InvalidOperationException(
+                        $"AI analysis {horizon} {caseName} returnPct does not match its target and reference price.");
+            }
+        }
+    }
+
+    private static bool HasNonEmptyString(JsonElement element, string property) =>
+        element.ValueKind == JsonValueKind.Object
+        && element.TryGetProperty(property, out var value)
+        && value.ValueKind == JsonValueKind.String
+        && !string.IsNullOrWhiteSpace(value.GetString());
+
+    private static bool HasNonEmptyArray(JsonElement element, string property) =>
+        element.ValueKind == JsonValueKind.Object
+        && element.TryGetProperty(property, out var value)
+        && value.ValueKind == JsonValueKind.Array
+        && value.GetArrayLength() > 0;
+
+    private static bool TryGetNumber(JsonElement element, string property, out decimal result)
+    {
+        result = 0;
+        return element.TryGetProperty(property, out var value)
+            && value.ValueKind == JsonValueKind.Number
+            && value.TryGetDecimal(out result);
+    }
+
+    private static void ValidateRequiredValuation(string analysisJson)
+    {
+        using var document = JsonDocument.Parse(analysisJson);
+        if (!document.RootElement.TryGetProperty("valuation", out var valuation)
+            || !valuation.TryGetProperty("assessment", out var assessment)
+            || assessment.GetString() is not ("undervalued" or "fairly_valued" or "overvalued")
+            || !TryGetPositiveNumber(valuation, "intrinsicValueLow", out var low)
+            || !TryGetPositiveNumber(valuation, "intrinsicValueHigh", out var high)
+            || low > high)
+            throw new InvalidOperationException(
+                "AI analysis must contain a concrete valuation and a valid positive intrinsic-value range.");
+    }
+
+    private static bool TryGetPositiveNumber(JsonElement element, string property, out decimal result)
+    {
+        result = 0;
+        return element.TryGetProperty(property, out var value)
+            && value.ValueKind == JsonValueKind.Number
+            && value.TryGetDecimal(out result)
+            && result > 0;
     }
 
     private static string GetIsoWeekNumber(DateTime date)

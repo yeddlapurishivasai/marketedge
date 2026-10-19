@@ -484,6 +484,15 @@ export interface AiInvestmentAnalysisHistoryItem {
   schemaVersion: string;
   skillVersion: string;
   model: string;
+  summary: {
+    valuation?: string | null;
+    baseReturn3mPct?: number | null;
+    baseReturn6mPct?: number | null;
+    baseReturn1yPct?: number | null;
+    baseReturn2yPct?: number | null;
+    shortTermAction?: string | null;
+    longTermAction?: string | null;
+  };
   cost: AiAnalysisCost;
   createdAt: string;
   updatedAt: string;

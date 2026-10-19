@@ -122,11 +122,67 @@ public class AiInvestmentAnalysisStore : IAiInvestmentAnalysisStore
     private static AiInvestmentAnalysisHistoryItem ToHistoryItem(AiStockAnalysisResult row) => new(
         row.Id, row.Market, row.Ticker, row.WeekNumber,
         row.SchemaVersion, row.SkillVersion, row.Model,
+        ParseSummary(row.AnalysisJson),
         new AiAnalysisCostDto(
             row.InputTokens, row.CachedInputTokens, row.OutputTokens,
             row.InputCostUsd, row.OutputCostUsd, row.ToolCallsCostUsd,
             row.TotalCostUsd, row.Projected1000TickersCostUsd),
         row.CreatedAt, row.UpdatedAt);
+
+    private static AiInvestmentAnalysisSummary ParseSummary(string analysisJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(analysisJson);
+            var root = document.RootElement;
+            var valuation = ReadString(root, "valuation", "assessment");
+            var shortTerm = ReadString(root, "actions", "shortTerm", "action");
+            var longTerm = ReadString(root, "actions", "longTerm", "action");
+
+            decimal? ReturnFor(string horizon)
+            {
+                if (!root.TryGetProperty("priceScenarios", out var scenarios)
+                    || scenarios.ValueKind != JsonValueKind.Array)
+                    return null;
+                foreach (var scenario in scenarios.EnumerateArray())
+                {
+                    if (scenario.TryGetProperty("horizon", out var value)
+                        && value.GetString() == horizon
+                        && scenario.TryGetProperty("base", out var baseCase)
+                        && baseCase.TryGetProperty("returnPct", out var returnPct)
+                        && returnPct.ValueKind == JsonValueKind.Number
+                        && returnPct.TryGetDecimal(out var result))
+                        return result;
+                }
+                return null;
+            }
+
+            return new AiInvestmentAnalysisSummary(
+                valuation,
+                ReturnFor("3m"),
+                ReturnFor("6m"),
+                ReturnFor("1y"),
+                ReturnFor("2y"),
+                shortTerm,
+                longTerm);
+        }
+        catch (JsonException)
+        {
+            return new AiInvestmentAnalysisSummary(null, null, null, null, null, null, null);
+        }
+    }
+
+    private static string? ReadString(JsonElement element, params string[] path)
+    {
+        var current = element;
+        foreach (var segment in path)
+        {
+            if (current.ValueKind != JsonValueKind.Object
+                || !current.TryGetProperty(segment, out current))
+                return null;
+        }
+        return current.ValueKind == JsonValueKind.String ? current.GetString() : null;
+    }
 
     private static void ValidateJson(string json)
     {

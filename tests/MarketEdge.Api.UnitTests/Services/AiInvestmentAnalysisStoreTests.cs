@@ -24,6 +24,10 @@ public class AiInvestmentAnalysisStoreTests
             "2026-W07", "2026-W06", "2026-W05", "2026-W04", "2026-W03");
         history[0].Cost.TotalCostUsd.Should().Be(99m);
         history[0].Cost.Projected1000TickersCostUsd.Should().Be(99_000m);
+        history[0].Summary.Valuation.Should().Be("fairly_valued");
+        history[0].Summary.BaseReturn1yPct.Should().Be(18.5m);
+        history[0].Summary.ShortTermAction.Should().Be("hold");
+        history[0].Summary.LongTermAction.Should().Be("accumulate");
 
         var detail = await store.GetAsync("india", "E2E", "2026-W12");
         detail.Should().NotBeNull();
@@ -45,6 +49,6 @@ public class AiInvestmentAnalysisStoreTests
         $$"{"week":{{cost}}}",
         "{\"status\":\"available\"}",
         "{\"status\":\"available\"}",
-        "{\"valuation\":\"fairly_valued\"}",
+        "{\"valuation\":{\"assessment\":\"fairly_valued\"},\"priceScenarios\":[{\"horizon\":\"1y\",\"base\":{\"returnPct\":18.5}}],\"actions\":{\"shortTerm\":{\"action\":\"hold\"},\"longTerm\":{\"action\":\"accumulate\"}}}",
         new AiAnalysisCostDto(100, 0, 20, cost, 0, 0, 999m, 1m));
 }
