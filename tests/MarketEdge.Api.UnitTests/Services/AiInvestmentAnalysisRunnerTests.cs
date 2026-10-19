@@ -110,6 +110,18 @@ public class AiInvestmentAnalysisRunnerTests
         valuation = new
         {
             assessment = "fairly_valued",
+            earningsBasis = new
+            {
+                reportedGaapEps = 4.5m,
+                consensusForwardEps = 5m,
+                consensusEstimateCount = 12,
+                normalizedEps = (decimal?)null,
+                normalizationVerified = false,
+                normalizationReconciliation = (string?)null,
+                selectedBaseEps = 5m,
+                selectedBasis = "consensus_forward",
+                selectionReason = "Current, well-covered consensus estimate"
+            },
             intrinsicValueLow = 90,
             intrinsicValueHigh = 120
         },

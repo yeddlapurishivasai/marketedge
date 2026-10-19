@@ -16,7 +16,7 @@ public interface IAiInvestmentAnalysisRunner
 public class AiInvestmentAnalysisRunner : IAiInvestmentAnalysisRunner
 {
     private const string SchemaVersion = "marketedge.ai-analysis.v1";
-    private const string SkillVersion = "0.4.0";
+    private const string SkillVersion = "0.5.0";
     private readonly IAzureAiFoundryClient _foundry;
     private readonly IAiAnalysisCostCalculator _costCalculator;
     private readonly IAiInvestmentAnalysisStore _store;
@@ -188,6 +188,45 @@ public class AiInvestmentAnalysisRunner : IAiInvestmentAnalysisRunner
             || low > high)
             throw new InvalidOperationException(
                 "AI analysis must contain a concrete valuation and a valid positive intrinsic-value range.");
+
+        if (!valuation.TryGetProperty("earningsBasis", out var basis)
+            || basis.ValueKind != JsonValueKind.Object
+            || !basis.TryGetProperty("selectedBasis", out var selectedBasisElement)
+            || !basis.TryGetProperty("selectionReason", out var selectionReasonElement)
+            || string.IsNullOrWhiteSpace(selectionReasonElement.GetString()))
+            throw new InvalidOperationException("AI valuation must disclose its earnings basis and selection reason.");
+
+        var selectedBasis = selectedBasisElement.GetString();
+        if (selectedBasis is not ("reported_gaap" or "consensus_forward"
+            or "normalized_verified" or "alternative_driver"))
+            throw new InvalidOperationException("AI valuation selected an unsupported earnings basis.");
+
+        if (selectedBasis == "alternative_driver") return;
+        if (!TryGetPositiveNumber(basis, "selectedBaseEps", out var selectedEps))
+            throw new InvalidOperationException("AI valuation must provide positive selectedBaseEps for an EPS basis.");
+
+        var sourceProperty = selectedBasis switch
+        {
+            "reported_gaap" => "reportedGaapEps",
+            "consensus_forward" => "consensusForwardEps",
+            _ => "normalizedEps"
+        };
+        if (!TryGetPositiveNumber(basis, sourceProperty, out var sourceEps)
+            || Math.Abs(sourceEps - selectedEps) > 0.01m)
+            throw new InvalidOperationException("AI valuation selectedBaseEps must match its disclosed earnings source.");
+
+        if (selectedBasis == "consensus_forward"
+            && (!basis.TryGetProperty("consensusEstimateCount", out var estimateCount)
+                || estimateCount.ValueKind != JsonValueKind.Number
+                || estimateCount.GetInt32() <= 0))
+            throw new InvalidOperationException("Consensus-based valuation must disclose analyst estimate coverage.");
+
+        if (selectedBasis == "normalized_verified"
+            && (!basis.TryGetProperty("normalizationVerified", out var verified)
+                || verified.ValueKind != JsonValueKind.True
+                || !basis.TryGetProperty("normalizationReconciliation", out var reconciliation)
+                || string.IsNullOrWhiteSpace(reconciliation.GetString())))
+            throw new InvalidOperationException("Normalized base EPS requires a verified reconciliation.");
     }
 
     private static bool TryGetPositiveNumber(JsonElement element, string property, out decimal result)

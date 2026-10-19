@@ -1,6 +1,6 @@
 # MarketEdge Stock Investment Analysis Skill
 
-Version: `0.4.0`
+Version: `0.5.0`
 
 ## Role
 
@@ -107,14 +107,37 @@ confidence:
 - Actions: separate short-term trading and long-term investing recommendations. Include entry range,
   invalidation conditions, risk controls, and what evidence would change the recommendation.
 
+## Earnings Basis Hierarchy
+
+Reported GAAP earnings are authoritative facts and must never be overwritten or relabeled as
+unreliable. Valuation may separately assess recurring earnings quality using this hierarchy:
+
+1. Preserve trailing reported GAAP EPS/profit unchanged and show its valuation as a cross-check.
+2. Prefer consensus forward EPS as the base-case driver when its fiscal period is identified, it is
+  current, and it has meaningful analyst coverage. When multiple consensus fields conflict, map
+  each to its period and prefer the matching detailed forecast with the greatest estimate count.
+3. Calculate normalized EPS only when authoritative filings provide enough information to reconcile
+  the one-off amount, tax effect, diluted share count, and affected period. Show the full
+  reconciliation from GAAP EPS to normalized EPS.
+4. If tax effect, share count, or period attribution is assumed rather than verified, normalized EPS
+  is a low-confidence sensitivity case only. It MUST NOT replace reported or well-covered consensus
+  EPS as the base case.
+5. Do not subtract a pretax gain directly from per-share earnings. Do not annualize a single quarter
+  when trailing-four-quarter actual EPS is available.
+6. Validate earnings quality with operating cash flow/free cash flow where available, but do not
+  change reported earnings merely because cash conversion differs.
+
+Expose reported, consensus, and normalized earnings separately. State which basis drives the base
+case and why. Analyst price targets are comparison evidence, not an input chosen to force agreement.
+
 ## Mandatory Valuation Methodology
 
 Valuation and price targets must be calculations grounded in the supplied data, not round-number
 guesses. Use this sequence and expose it in the output:
 
 1. Establish the exact reference price/date from the deterministic candles or technical snapshot.
-2. Build a normalized earnings baseline from reported quarterly EPS/profit. Prefer trailing-four-
-  quarter actuals when available; otherwise explain the annualization or alternative driver used.
+2. Establish reported trailing earnings, consensus forward earnings, and any verified normalized
+  earnings separately, then select the base driver using the Earnings Basis Hierarchy above.
 3. Reconcile the baseline with analyst EPS forecasts, management guidance, reported margins,
   capacity/capex commissioning, order wins, and demand evidence. Do not treat a term sheet or order
   book as recognized revenue.
@@ -168,6 +191,17 @@ Return JSON only, using schema version `marketedge.ai-analysis.v1`:
   },
   "valuation": {
     "assessment": "undervalued|fairly_valued|overvalued",
+    "earningsBasis": {
+      "reportedGaapEps": 0,
+      "consensusForwardEps": 0,
+      "consensusEstimateCount": 0,
+      "normalizedEps": null,
+      "normalizationVerified": false,
+      "normalizationReconciliation": "string|null",
+      "selectedBaseEps": null,
+      "selectedBasis": "reported_gaap|consensus_forward|normalized_verified|alternative_driver",
+      "selectionReason": "string"
+    },
     "methods": [],
     "assumptions": [],
     "intrinsicValueLow": 0,
