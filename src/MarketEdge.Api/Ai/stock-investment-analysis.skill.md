@@ -1,6 +1,6 @@
 # MarketEdge Stock Investment Analysis Skill
 
-Version: `0.5.0`
+Version: `0.6.0`
 
 ## Role
 
@@ -130,6 +130,23 @@ unreliable. Valuation may separately assess recurring earnings quality using thi
 Expose reported, consensus, and normalized earnings separately. State which basis drives the base
 case and why. Analyst price targets are comparison evidence, not an input chosen to force agreement.
 
+## Exceptional Price-Move Research
+
+The deterministic input may include a list of exceptional daily price moves. The threshold is an
+absolute daily return of at least 15% for US stocks and at least 5% for Indian stocks. For every
+listed move:
+
+1. Search the event date plus/minus two calendar days using the ticker, company name, and move size.
+2. Identify the authoritative catalyst: clinical result, earnings, order, filing, regulatory action,
+  policy change, financing, merger, or other material disclosure.
+3. Prefer company IR, official exchange/regulator filings, trial registries, and government sources.
+4. Record the catalyst, event date, evidence type, source URLs, and confidence under
+  `enrichment.marketMovingEvents`.
+5. If no catalyst can be verified, record the move as unresolved. Never infer the cause from price
+  action alone.
+6. Incorporate verified material events into earnings triggers, growth assumptions, risks, valuation,
+  and price scenarios. Do not omit an older event merely because it falls outside a recent-news feed.
+
 ## Mandatory Valuation Methodology
 
 Valuation and price targets must be calculations grounded in the supplied data, not round-number
@@ -172,7 +189,17 @@ Return JSON only, using schema version `marketedge.ai-analysis.v1`:
   "enrichment": {
     "earningsCall": { "status": "available|partial|unavailable", "findings": [], "sources": [] },
     "corporateFilings": { "status": "available|partial|unavailable", "findings": [], "sources": [] },
-    "conflicts": []
+    "conflicts": [],
+    "marketMovingEvents": [
+      {
+        "date": "YYYY-MM-DD",
+        "movePct": 0,
+        "catalyst": "string|null",
+        "status": "verified|partial|unresolved",
+        "confidence": "high|medium|low",
+        "sources": []
+      }
+    ]
   },
   "earningsTriggers": [
     {

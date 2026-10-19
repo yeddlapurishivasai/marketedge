@@ -16,7 +16,7 @@ public interface IAiInvestmentAnalysisRunner
 public class AiInvestmentAnalysisRunner : IAiInvestmentAnalysisRunner
 {
     private const string SchemaVersion = "marketedge.ai-analysis.v1";
-    private const string SkillVersion = "0.5.0";
+    private const string SkillVersion = "0.6.0";
     private readonly IAzureAiFoundryClient _foundry;
     private readonly IAiAnalysisCostCalculator _costCalculator;
     private readonly IAiInvestmentAnalysisStore _store;
@@ -47,6 +47,7 @@ public class AiInvestmentAnalysisRunner : IAiInvestmentAnalysisRunner
         var company = deterministicInput.Stock.CompanyName;
         var asOfDate = deterministicInput.GeneratedAt.ToString("O");
         var inputJson = JsonSerializer.Serialize(deterministicInput);
+        var exceptionalMoves = BuildExceptionalMoveContext(deterministicInput);
         var skill = await File.ReadAllTextAsync(_skillPath, cancellationToken);
         var finalInput = $$"""
             Market: {{market}}
@@ -58,10 +59,16 @@ public class AiInvestmentAnalysisRunner : IAiInvestmentAnalysisRunner
             DETERMINISTIC_INPUT_JSON:
             {{inputJson}}
 
+            EXCEPTIONAL_PRICE_MOVES_REQUIRING_CATALYST_RESEARCH:
+            {{exceptionalMoves}}
+
             Perform two distinct web-research passes before writing the report:
             1. Earnings-call transcripts and management commentary, including prior-quarter comparison.
             2. Corporate filings, exchange disclosures, earnings releases, and investor presentations
                from the last 365 days.
+                3. For every exceptional price move listed above, search the event date plus/minus two days
+                    and identify the authoritative catalyst. Include verified or unresolved results in
+                    enrichment.marketMovingEvents and use material catalysts in the analysis.
 
             Use the research only as evidence for the final report. Do not output a research scratchpad,
             duplicate source descriptions, or intermediate tool results. Produce only the concise final
@@ -74,6 +81,7 @@ public class AiInvestmentAnalysisRunner : IAiInvestmentAnalysisRunner
             _options.AnalysisMaxOutputTokens,
             cancellationToken);
         var analysisJson = NormalizeJson(analysis.OutputText);
+        ValidateExceptionalMoveCoverage(analysisJson, exceptionalMoves);
         ValidateRequiredValuation(analysisJson);
         ValidateRequiredProjections(analysisJson);
         var earningsJson = ExtractEnrichment(analysisJson, "earningsCall");
@@ -108,6 +116,101 @@ public class AiInvestmentAnalysisRunner : IAiInvestmentAnalysisRunner
         using var document = JsonDocument.Parse(value);
         return document.RootElement.GetRawText();
     }
+
+    internal static string BuildExceptionalMoveContext(AiStockAnalysisDto input)
+    {
+        var dateIndex = input.CandleColumns.ToList().FindIndex(column => column == "date");
+        var closeIndex = input.CandleColumns.ToList().FindIndex(column => column == "close");
+        if (dateIndex < 0 || closeIndex < 0) return "No candle date/close columns were available.";
+
+        var threshold = input.Market == "us" ? 15m : 5m;
+        var moves = new List<(string Date, decimal PreviousClose, decimal Close, decimal MovePct)>();
+        decimal? previousClose = null;
+        foreach (var row in input.DailyCandles)
+        {
+            if (row.Count <= Math.Max(dateIndex, closeIndex)
+                || !TryDecimal(row[closeIndex], out var close)
+                || close <= 0)
+                continue;
+
+            if (previousClose > 0)
+            {
+                var movePct = (close / previousClose.Value - 1m) * 100m;
+                if (Math.Abs(movePct) >= threshold)
+                    moves.Add((FormatDate(row[dateIndex]), previousClose.Value, close, movePct));
+            }
+            previousClose = close;
+        }
+
+        var selected = moves.OrderBy(move => move.Date).ToList();
+        if (selected.Count == 0)
+            return $"Threshold: absolute daily return >= {threshold:0.##}%. No qualifying moves.";
+
+        var lines = selected.Select(move =>
+            $"- {move.Date}: {move.PreviousClose:0.####} -> {move.Close:0.####} ({move.MovePct:+0.##;-0.##;0}%)");
+        return $"Threshold: absolute daily return >= {threshold:0.##}%.\n{string.Join("\n", lines)}";
+    }
+
+    private static void ValidateExceptionalMoveCoverage(string analysisJson, string exceptionalMoves)
+    {
+        var requiredDates = exceptionalMoves.Split('\n')
+            .Where(line => line.StartsWith("- ", StringComparison.Ordinal) && line.Length >= 12)
+            .Select(line => line.Substring(2, 10))
+            .Distinct()
+            .ToList();
+        if (requiredDates.Count == 0) return;
+
+        using var document = JsonDocument.Parse(analysisJson);
+        if (!document.RootElement.TryGetProperty("enrichment", out var enrichment)
+            || !enrichment.TryGetProperty("marketMovingEvents", out var events)
+            || events.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException(
+                "AI analysis is missing required exceptional price-move research.");
+
+        var coveredDates = events.EnumerateArray()
+            .Where(item => item.TryGetProperty("date", out _))
+            .Select(item => item.GetProperty("date").GetString())
+            .Where(date => !string.IsNullOrWhiteSpace(date))
+            .ToHashSet(StringComparer.Ordinal);
+        var missing = requiredDates.Where(date => !coveredDates.Contains(date)).ToList();
+        if (missing.Count > 0)
+            throw new InvalidOperationException(
+                $"AI analysis did not research exceptional price moves on: {string.Join(", ", missing)}.");
+    }
+
+    private static bool TryDecimal(object? value, out decimal result)
+    {
+        result = 0;
+        return value switch
+        {
+            decimal number => Assign(number, out result),
+            double number => Assign((decimal)number, out result),
+            float number => Assign((decimal)number, out result),
+            int number => Assign(number, out result),
+            long number => Assign(number, out result),
+            JsonElement element when element.ValueKind == JsonValueKind.Number
+                => element.TryGetDecimal(out result),
+            string text => decimal.TryParse(text,
+                System.Globalization.NumberStyles.Number,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out result),
+            _ => false
+        };
+    }
+
+    private static bool Assign(decimal value, out decimal result)
+    {
+        result = value;
+        return true;
+    }
+
+    private static string FormatDate(object? value) => value switch
+    {
+        DateOnly date => date.ToString("yyyy-MM-dd"),
+        DateTime date => date.ToString("yyyy-MM-dd"),
+        JsonElement element when element.ValueKind == JsonValueKind.String => element.GetString() ?? "unknown",
+        _ => Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"
+    };
 
     private static string ExtractEnrichment(string analysisJson, string section)
     {

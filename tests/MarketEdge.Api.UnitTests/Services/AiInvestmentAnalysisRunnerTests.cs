@@ -9,8 +9,13 @@ namespace MarketEdge.Api.UnitTests.Services;
 
 public class AiInvestmentAnalysisRunnerTests
 {
-    [Fact]
-    public async Task RunAsync_UsesWebResearchInternallyAndPersistsOnlyFinalReportUsage()
+    [Theory]
+    [InlineData("us", 110, 132)]
+    [InlineData("india", 104, 109.2)]
+    public async Task RunAsync_UsesWebResearchInternallyAndPersistsOnlyFinalReportUsage(
+        string market,
+        double middleClose,
+        double finalClose)
     {
         var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(Path.Combine(root, "Ai"));
@@ -19,10 +24,12 @@ public class AiInvestmentAnalysisRunnerTests
             "Return the marketedge.ai-analysis.v1 JSON report.");
         try
         {
+            string? submittedInput = null;
             var foundry = new Mock<IAzureAiFoundryClient>();
             foundry.Setup(client => client.CreateResponseAsync(
                     It.IsAny<string>(), It.IsAny<string>(), true,
                     It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                .Callback<string, string, bool, int, CancellationToken>((_, input, _, _, _) => submittedInput = input)
                 .ReturnsAsync(new FoundryResponse(
                     ValidAnalysisJson(),
                     new AiInferenceUsage(300, 30)));
@@ -45,7 +52,8 @@ public class AiInvestmentAnalysisRunnerTests
             var runner = new AiInvestmentAnalysisRunner(
                 foundry.Object, costCalculator, store.Object, options, environment.Object);
 
-            var result = await runner.RunAsync("us", "TSM", Input());
+            var result = await runner.RunAsync(
+                market, "TSM", Input(market, (decimal)middleClose, (decimal)finalClose));
 
             foundry.Verify(client => client.CreateResponseAsync(
                 It.IsAny<string>(), It.IsAny<string>(), true,
@@ -58,6 +66,8 @@ public class AiInvestmentAnalysisRunnerTests
             saved.EarningsCallJson.Should().Contain("available");
             saved.CorporateFilingsJson.Should().Contain("available");
             result.Metadata.Model.Should().Be("test-model");
+            submittedInput.Should().Contain("- 2026-01-03:");
+            submittedInput.Should().NotContain("- 2026-01-02:");
         }
         finally
         {
@@ -65,9 +75,9 @@ public class AiInvestmentAnalysisRunnerTests
         }
     }
 
-    private static AiStockAnalysisDto Input() => new(
+    private static AiStockAnalysisDto Input(string market, decimal middleClose, decimal finalClose) => new(
         DateTime.UtcNow,
-        "us",
+        market,
         new AiStockMetadataDto(
             1, "TSM", "Taiwan Semiconductor", 1, "Semiconductors", "Technology",
             false, false, DateTime.UtcNow, "NYSE", true, false, 250,
@@ -79,8 +89,13 @@ public class AiInvestmentAnalysisRunnerTests
         Array.Empty<AiEpsForecastDto>(),
         null,
         null,
-        Array.Empty<string>(),
-        Array.Empty<IReadOnlyList<object?>>(),
+        new[] { "date", "close" },
+        new IReadOnlyList<object?>[]
+        {
+            new object?[] { new DateOnly(2026, 1, 1), 100m },
+            new object?[] { new DateOnly(2026, 1, 2), middleClose },
+            new object?[] { new DateOnly(2026, 1, 3), finalClose }
+        },
         Array.Empty<IReadOnlyList<object?>>(),
         new AiDataAvailabilityDto(false, "Unavailable"));
 
@@ -105,7 +120,19 @@ public class AiInvestmentAnalysisRunnerTests
         enrichment = new
         {
             earningsCall = new { status = "available" },
-            corporateFilings = new { status = "available" }
+            corporateFilings = new { status = "available" },
+            marketMovingEvents = new[]
+            {
+                new
+                {
+                    date = "2026-01-03",
+                    movePct = 20m,
+                    catalyst = "Verified test catalyst",
+                    status = "verified",
+                    confidence = "high",
+                    sources = Array.Empty<object>()
+                }
+            }
         },
         valuation = new
         {
