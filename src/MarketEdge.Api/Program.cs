@@ -33,6 +33,13 @@ builder.Services.AddScoped<IIngestionService, IngestionService>();
 builder.Services.AddScoped<ILookupService, LookupService>();
 builder.Services.AddScoped<IScannerService, ScannerService>();
 builder.Services.AddScoped<IFundamentalsService, FundamentalsService>();
+builder.Services.AddScoped<IAiStockAnalysisService, AiStockAnalysisService>();
+builder.Services.Configure<AzureAiFoundryOptions>(builder.Configuration.GetSection(AzureAiFoundryOptions.SectionName));
+builder.Services.AddSingleton<IAiAnalysisCostCalculator, AiAnalysisCostCalculator>();
+builder.Services.AddScoped<IAiInvestmentAnalysisStore, AiInvestmentAnalysisStore>();
+builder.Services.AddHttpClient<IAzureAiFoundryClient, AzureAiFoundryClient>(client =>
+    client.Timeout = TimeSpan.FromMinutes(5));
+builder.Services.AddScoped<IAiInvestmentAnalysisRunner, AiInvestmentAnalysisRunner>();
 builder.Services.AddScoped<IBreakoutsService, BreakoutsService>();
 builder.Services.AddScoped<IMarketRegimeService, MarketRegimeService>();
 builder.Services.AddHostedService<ScannerScheduleService>();

@@ -465,6 +465,70 @@ export async function refreshStockData(market: Market, symbol: string): Promise<
   return res.json();
 }
 
+export interface AiAnalysisCost {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  inputCostUsd: number;
+  outputCostUsd: number;
+  toolCallsCostUsd: number;
+  totalCostUsd: number;
+  projected1000TickersCostUsd: number;
+}
+
+export interface AiInvestmentAnalysisHistoryItem {
+  id: number;
+  market: string;
+  ticker: string;
+  weekNumber: string;
+  schemaVersion: string;
+  skillVersion: string;
+  model: string;
+  cost: AiAnalysisCost;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AiInvestmentAnalysisDetail {
+  metadata: AiInvestmentAnalysisHistoryItem;
+  deterministicInput: unknown;
+  earningsCallEnrichment: unknown;
+  corporateFilingsEnrichment: unknown;
+  analysis: unknown;
+}
+
+export async function runAiStockAnalysis(
+  market: Market,
+  symbol: string,
+): Promise<AiInvestmentAnalysisDetail> {
+  const res = await authFetch(`${BASE}/${market}/ai-analysis/${encodeURIComponent(symbol)}/run`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error((await res.text()) || 'AI analysis failed');
+  return res.json();
+}
+
+export async function fetchAiAnalysisHistory(
+  market: Market,
+  maxRows = 500,
+): Promise<AiInvestmentAnalysisHistoryItem[]> {
+  const res = await authFetch(`${BASE}/${market}/ai-analysis/history?maxRows=${maxRows}`);
+  if (!res.ok) throw new Error('Failed to load AI analysis history');
+  return res.json();
+}
+
+export async function fetchAiAnalysisDetail(
+  market: Market,
+  symbol: string,
+  weekNumber: string,
+): Promise<AiInvestmentAnalysisDetail> {
+  const res = await authFetch(
+    `${BASE}/${market}/ai-analysis/${encodeURIComponent(symbol)}/history/${encodeURIComponent(weekNumber)}`,
+  );
+  if (!res.ok) throw new Error('Failed to load AI analysis report');
+  return res.json();
+}
+
 // ── Scanners (feature 011) ──
 
 export interface ScannerInfo {

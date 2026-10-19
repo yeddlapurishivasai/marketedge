@@ -39,6 +39,7 @@ public abstract class TickerTechnicalBase
     public DateOnly? RsDate { get; set; }
     public int? ScannerHits { get; set; }
     public DateOnly? LastScannerHit { get; set; }
+    public DateTime UpdatedAt { get; set; }
 }
 
 [Table("IndianTickerTechnical")] public class IndianTickerTechnical : TickerTechnicalBase { }
@@ -62,6 +63,7 @@ public abstract class AnalystSnapshotBase
     public string? LatestRatingGrade { get; set; }
     public string? LatestRatingAction { get; set; }
     public DateOnly? LatestRatingDate { get; set; }
+    public DateTime UpdatedAt { get; set; }
 }
 
 [Table("IndianAnalystSnapshot")] public class IndianAnalystSnapshot : AnalystSnapshotBase { }
@@ -79,6 +81,7 @@ public abstract class EpsForecastBase
     public int? NumEstimates { get; set; }
     public int RevisionsUp { get; set; }
     public int RevisionsDown { get; set; }
+    public DateTime UpdatedAt { get; set; }
 }
 
 [Table("IndianEpsForecasts")] public class IndianEpsForecast : EpsForecastBase { }

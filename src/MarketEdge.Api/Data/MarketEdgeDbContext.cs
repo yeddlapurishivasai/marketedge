@@ -16,6 +16,7 @@ public class MarketEdgeDbContext : DbContext
     public DbSet<JobRun> JobRuns => Set<JobRun>();
     public DbSet<IndianStageAnalysisResult> IndianStageAnalysisResults => Set<IndianStageAnalysisResult>();
     public DbSet<USStageAnalysisResult> USStageAnalysisResults => Set<USStageAnalysisResult>();
+    public DbSet<AiStockAnalysisResult> AiStockAnalysisResults => Set<AiStockAnalysisResult>();
 
     // Stock Lookup (query-only) sets
     public DbSet<IndianTicker> IndianTickers => Set<IndianTicker>();
@@ -99,6 +100,21 @@ public class MarketEdgeDbContext : DbContext
         ConfigureScannerEntities(modelBuilder);
         ConfigureFundamentalEntities(modelBuilder);
         ConfigureRegimeEntities(modelBuilder);
+        ConfigureAiAnalysisEntities(modelBuilder);
+    }
+
+    private static void ConfigureAiAnalysisEntities(ModelBuilder modelBuilder)
+    {
+        var entity = modelBuilder.Entity<AiStockAnalysisResult>();
+        foreach (var property in new[]
+        {
+            nameof(AiStockAnalysisResult.InputCostUsd),
+            nameof(AiStockAnalysisResult.OutputCostUsd),
+            nameof(AiStockAnalysisResult.ToolCallsCostUsd),
+            nameof(AiStockAnalysisResult.TotalCostUsd),
+            nameof(AiStockAnalysisResult.Projected1000TickersCostUsd)
+        })
+            entity.Property(property).HasColumnType("decimal(18,8)");
     }
 
     private static void ConfigureRegimeEntities(ModelBuilder modelBuilder)
