@@ -37,6 +37,10 @@ builder.Services.AddScoped<IAiStockAnalysisService, AiStockAnalysisService>();
 builder.Services.Configure<AzureAiFoundryOptions>(builder.Configuration.GetSection(AzureAiFoundryOptions.SectionName));
 builder.Services.AddSingleton<IAiAnalysisCostCalculator, AiAnalysisCostCalculator>();
 builder.Services.AddScoped<IAiInvestmentAnalysisStore, AiInvestmentAnalysisStore>();
+builder.Services.AddScoped<IAiAnalysisCandidateService, AiAnalysisCandidateService>();
+builder.Services.AddScoped<IAiAnalysisBatchService, AiAnalysisBatchService>();
+builder.Services.Configure<AiAnalysisScheduleOptions>(
+    builder.Configuration.GetSection(AiAnalysisScheduleOptions.SectionName));
 builder.Services.AddHttpClient<IAzureAiFoundryClient, AzureAiFoundryClient>(client =>
     client.Timeout = TimeSpan.FromMinutes(5));
 builder.Services.AddScoped<IAiInvestmentAnalysisRunner, AiInvestmentAnalysisRunner>();
@@ -46,6 +50,8 @@ builder.Services.AddHostedService<ScannerScheduleService>();
 builder.Services.AddHostedService<FundamentalsScheduleService>();
 builder.Services.AddHostedService<Stage2ScheduleService>();
 builder.Services.AddHostedService<MarketRegimeScheduleService>();
+builder.Services.AddHostedService<AiAnalysisBatchProcessor>();
+builder.Services.AddHostedService<AiAnalysisScheduleService>();
 
 // API
 builder.Services.AddControllers();

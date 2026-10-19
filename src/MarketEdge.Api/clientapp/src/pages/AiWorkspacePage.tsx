@@ -1,8 +1,11 @@
 import { useCallback, useDeferredValue, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { BrainCircuit, ChevronLeft, Eye, Loader2, RefreshCw, Search, X } from 'lucide-react';
-import type { AiInvestmentAnalysisDetail, AiInvestmentAnalysisHistoryItem, Market } from '../api';
-import { fetchAiAnalysisDetail, fetchAiAnalysisHistory } from '../api';
+import {
+  ArrowDown, ArrowUp, ArrowUpDown, BrainCircuit, ChevronLeft,
+  Eye, Loader2, Play, RefreshCw, Search, X
+} from 'lucide-react';
+import type { AiInvestmentAnalysisDetail, AiInvestmentAnalysisHistoryItem, JobRun, Market } from '../api';
+import { fetchAiAnalysisDetail, fetchAiAnalysisHistory, fetchJobRun, triggerAiAnalysisBatch } from '../api';
 
 interface AiPriceCase { target?: number | null; returnPct?: number | null }
 interface AiPriceScenario {
@@ -49,6 +52,11 @@ interface AiReport {
   }>;
   sources?: Array<{ url?: string; title?: string; publicationDate?: string; publisher?: string }>;
 }
+
+type SortKey = 'ticker' | 'weekNumber' | 'valuation' | 'baseReturn3mPct'
+  | 'baseReturn6mPct' | 'baseReturn1yPct' | 'baseReturn2yPct'
+  | 'shortTermAction' | 'longTermAction' | 'updatedAt';
+type SortDirection = 'asc' | 'desc';
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleString();
@@ -121,7 +129,7 @@ function AnalysisModal({ detail, onClose }: {
           ) : (
             <div className="ai-report-summary">
               <div className="ai-decision-grid">
-                <div><span>Valuation</span><strong>{label(valuation?.assessment)}</strong></div>
+                <div><span>Valuation</span><strong className={`ai-tone-${valuationTone(valuation?.assessment)}`}>{label(valuation?.assessment)}</strong></div>
                 <div><span>Short Term</span><strong>{label(report.actions?.shortTerm?.action)}</strong></div>
                 <div><span>Long Term</span><strong>{label(report.actions?.longTerm?.action)}</strong></div>
               </div>
@@ -155,9 +163,9 @@ function AnalysisModal({ detail, onClose }: {
                     <tbody>{scenarios.map(scenario => (
                       <tr key={scenario.horizon}>
                         <td>{scenario.horizon.toUpperCase()}</td>
-                        <td>{scenario.bear?.target ?? '—'} <span>{formatPercent(scenario.bear?.returnPct)}</span></td>
-                        <td>{scenario.base?.target ?? '—'} <span>{formatPercent(scenario.base?.returnPct)}</span></td>
-                        <td>{scenario.bull?.target ?? '—'} <span>{formatPercent(scenario.bull?.returnPct)}</span></td>
+                        <td className={`ai-tone-${predictionTone(scenario.bear?.returnPct)}`}>{scenario.bear?.target ?? '—'} <span>{formatPercent(scenario.bear?.returnPct)}</span></td>
+                        <td className={`ai-tone-${predictionTone(scenario.base?.returnPct)}`}>{scenario.base?.target ?? '—'} <span>{formatPercent(scenario.base?.returnPct)}</span></td>
+                        <td className={`ai-tone-${predictionTone(scenario.bull?.returnPct)}`}>{scenario.bull?.target ?? '—'} <span>{formatPercent(scenario.bull?.returnPct)}</span></td>
                         <td>{label(scenario.confidence)}</td>
                       </tr>
                     ))}</tbody>
@@ -227,6 +235,11 @@ export default function AiWorkspacePage() {
   const deferredQuery = useDeferredValue(query.trim().toUpperCase());
   const [selected, setSelected] = useState<AiInvestmentAnalysisDetail | null>(null);
   const [openingId, setOpeningId] = useState<number | null>(null);
+  const [batchRun, setBatchRun] = useState<JobRun | null>(null);
+  const [startingBatch, setStartingBatch] = useState(false);
+  const [batchMessage, setBatchMessage] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey>('updatedAt');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -241,6 +254,40 @@ export default function AiWorkspacePage() {
   }, [currentMarket]);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    if (!batchRun || !['queued', 'running'].includes(batchRun.status)) return;
+    const interval = setInterval(async () => {
+      try {
+        const updated = await fetchJobRun(batchRun.id);
+        setBatchRun(updated);
+        if (updated.status === 'completed') {
+          setBatchMessage(`Weekly run #${updated.id} completed.`);
+          await load();
+        } else if (updated.status === 'failed' || updated.status === 'cancelled') {
+          setBatchMessage(`Weekly run #${updated.id} ${updated.status}.`);
+        }
+      } catch { /* next poll will retry */ }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [batchRun, load]);
+
+  const runTopTwenty = async () => {
+    setStartingBatch(true);
+    setError(null);
+    try {
+      const trigger = await triggerAiAnalysisBatch(currentMarket);
+      const job = await fetchJobRun(trigger.runId);
+      setBatchRun(job);
+      setBatchMessage(trigger.alreadyExists
+        ? `Weekly run #${trigger.runId} already exists for ${trigger.weekNumber}.`
+        : `Started weekly top-20 run #${trigger.runId} for ${trigger.weekNumber}.`);
+    } catch (runError) {
+      setError(runError instanceof Error ? runError.message : 'Failed to start weekly AI analysis');
+    } finally {
+      setStartingBatch(false);
+    }
+  };
 
   const openReport = async (row: AiInvestmentAnalysisHistoryItem) => {
     setOpeningId(row.id);
@@ -257,6 +304,26 @@ export default function AiWorkspacePage() {
   const filtered = deferredQuery
     ? rows.filter(row => row.ticker.includes(deferredQuery) || row.weekNumber.includes(deferredQuery))
     : rows;
+  const sortedRows = [...filtered].sort((left, right) =>
+    compareRows(left, right, sortKey, sortDirection));
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortDirection(direction => direction === 'asc' ? 'desc' : 'asc');
+    else {
+      setSortKey(key);
+      setSortDirection(key === 'ticker' || key === 'weekNumber' ? 'asc' : 'desc');
+    }
+  };
+  const sortHeader = (key: SortKey, text: string) => {
+    const active = sortKey === key;
+    const Icon = !active ? ArrowUpDown : sortDirection === 'asc' ? ArrowUp : ArrowDown;
+    return (
+      <th aria-sort={active ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}>
+        <button className={`ai-sort-button ${active ? 'active' : ''}`} onClick={() => toggleSort(key)}>
+          {text}<Icon size={13} />
+        </button>
+      </th>
+    );
+  };
   const uniqueStocks = new Set(rows.map(row => row.ticker)).size;
   const totalCost = rows.reduce((sum, row) => sum + row.cost.totalCostUsd, 0);
 
@@ -273,6 +340,16 @@ export default function AiWorkspacePage() {
             <Search size={15} />
             <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Ticker or week" />
           </div>
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={() => void runTopTwenty()}
+            disabled={startingBatch || batchRun?.status === 'queued' || batchRun?.status === 'running'}
+          >
+            {startingBatch || batchRun?.status === 'queued' || batchRun?.status === 'running'
+              ? <Loader2 size={14} className="spin-icon" />
+              : <Play size={14} />}
+            Run Top 20
+          </button>
           <button className="btn btn-outline btn-sm" onClick={load} disabled={loading}>
             {loading ? <Loader2 size={14} className="spin-icon" /> : <RefreshCw size={14} />} Refresh
           </button>
@@ -289,6 +366,13 @@ export default function AiWorkspacePage() {
         <span><strong>${totalCost.toFixed(4)}</strong> recorded cost</span>
       </div>
 
+      {batchMessage && (
+        <div className="ai-batch-status">
+          <span>{batchMessage}</span>
+          {batchRun && <strong>{batchRun.status} · {batchRun.progress}%</strong>}
+        </div>
+      )}
+
       {error && <div className="lookup-error">{error}</div>}
       {loading && rows.length === 0 ? (
         <div className="loading"><div className="spinner" />Loading AI analyses...</div>
@@ -300,21 +384,21 @@ export default function AiWorkspacePage() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Ticker</th>
-                  <th>Week</th>
-                  <th>Valuation</th>
-                  <th>3M Base</th>
-                  <th>6M Base</th>
-                  <th>1Y Base</th>
-                  <th>2Y Base</th>
-                  <th>Short Term</th>
-                  <th>Long Term</th>
-                  <th>Updated</th>
+                  {sortHeader('ticker', 'Ticker')}
+                  {sortHeader('weekNumber', 'Week')}
+                  {sortHeader('valuation', 'Valuation')}
+                  {sortHeader('baseReturn3mPct', '3M Base')}
+                  {sortHeader('baseReturn6mPct', '6M Base')}
+                  {sortHeader('baseReturn1yPct', '1Y Base')}
+                  {sortHeader('baseReturn2yPct', '2Y Base')}
+                  {sortHeader('shortTermAction', 'Short Term')}
+                  {sortHeader('longTermAction', 'Long Term')}
+                  {sortHeader('updatedAt', 'Updated')}
                   <th aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(row => {
+                {sortedRows.map(row => {
                   const summary = row.summary ?? {};
                   return <tr key={row.id}>
                     <td>
@@ -323,11 +407,11 @@ export default function AiWorkspacePage() {
                       </button>
                     </td>
                     <td>{row.weekNumber}</td>
-                    <td><span className="ai-table-decision">{label(summary.valuation)}</span></td>
-                    <td>{formatPercent(summary.baseReturn3mPct)}</td>
-                    <td>{formatPercent(summary.baseReturn6mPct)}</td>
-                    <td>{formatPercent(summary.baseReturn1yPct)}</td>
-                    <td>{formatPercent(summary.baseReturn2yPct)}</td>
+                    <td><span className={`ai-table-decision ai-tone-${valuationTone(summary.valuation)}`}>{label(summary.valuation)}</span></td>
+                    <td><span className={`ai-prediction ai-tone-${predictionTone(summary.baseReturn3mPct)}`}>{formatPercent(summary.baseReturn3mPct)}</span></td>
+                    <td><span className={`ai-prediction ai-tone-${predictionTone(summary.baseReturn6mPct)}`}>{formatPercent(summary.baseReturn6mPct)}</span></td>
+                    <td><span className={`ai-prediction ai-tone-${predictionTone(summary.baseReturn1yPct)}`}>{formatPercent(summary.baseReturn1yPct)}</span></td>
+                    <td><span className={`ai-prediction ai-tone-${predictionTone(summary.baseReturn2yPct)}`}>{formatPercent(summary.baseReturn2yPct)}</span></td>
                     <td><span className={`ai-signal ai-signal-${summary.shortTermAction ?? 'unavailable'}`}>{label(summary.shortTermAction)}</span></td>
                     <td><span className={`ai-signal ai-signal-${summary.longTermAction ?? 'unavailable'}`}>{label(summary.longTermAction)}</span></td>
                     <td>{formatDate(row.updatedAt)}</td>
@@ -347,4 +431,38 @@ export default function AiWorkspacePage() {
       {selected && <AnalysisModal detail={selected} onClose={() => setSelected(null)} />}
     </div>
   );
+}
+
+function sortValue(row: AiInvestmentAnalysisHistoryItem, key: SortKey): string | number | null {
+  if (key === 'ticker' || key === 'weekNumber' || key === 'updatedAt') return row[key];
+  return row.summary?.[key] ?? null;
+}
+
+function compareRows(
+  left: AiInvestmentAnalysisHistoryItem,
+  right: AiInvestmentAnalysisHistoryItem,
+  key: SortKey,
+  direction: SortDirection,
+): number {
+  const leftValue = sortValue(left, key);
+  const rightValue = sortValue(right, key);
+  if (leftValue == null && rightValue == null) return 0;
+  if (leftValue == null) return 1;
+  if (rightValue == null) return -1;
+  const result = typeof leftValue === 'number' && typeof rightValue === 'number'
+    ? leftValue - rightValue
+    : String(leftValue).localeCompare(String(rightValue));
+  return direction === 'asc' ? result : -result;
+}
+
+function valuationTone(value?: string | null): string {
+  if (value === 'undervalued') return 'positive';
+  if (value === 'fairly_valued') return 'neutral';
+  if (value === 'overvalued') return 'negative';
+  return 'muted';
+}
+
+function predictionTone(value?: number | null): string {
+  if (value == null || value === 0) return 'muted';
+  return value > 0 ? 'positive' : 'negative';
 }

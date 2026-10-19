@@ -33,13 +33,24 @@ public class AiAnalysisController : ControllerBase
     }
 
     [HttpPost("{symbol}/run")]
-    public async Task<IActionResult> Run(string market, string symbol, CancellationToken cancellationToken)
+    public async Task<IActionResult> Run(
+        string market,
+        string symbol,
+        [FromQuery] bool force = false,
+        CancellationToken cancellationToken = default)
     {
         if (market is not ("india" or "us"))
             return BadRequest("Market must be 'india' or 'us'");
 
         var input = await _analysis.GetAsync(market, symbol);
         if (input == null) return NotFound();
+
+        if (!force)
+        {
+            var existing = await _store.GetAsync(
+                market, input.Stock.Symbol, AiAnalysisBatchService.GetIsoWeekNumber(DateTime.UtcNow));
+            if (existing != null) return Ok(existing);
+        }
 
         return await RunAnalysisAsync(market, input.Stock.Symbol, input, cancellationToken);
     }
@@ -54,6 +65,10 @@ public class AiAnalysisController : ControllerBase
             return BadRequest("Market must be 'india' or 'us'");
         if (!string.Equals(input.Market, market, StringComparison.OrdinalIgnoreCase))
             return BadRequest("Input market must match the route market.");
+
+        var existing = await _store.GetAsync(
+            market, input.Stock.Symbol, AiAnalysisBatchService.GetIsoWeekNumber(DateTime.UtcNow));
+        if (existing != null) return Ok(existing);
 
         return await RunAnalysisAsync(market, input.Stock.Symbol, input, cancellationToken);
     }

@@ -574,7 +574,7 @@ export function StockDetailView({ market, symbol }: { market: Market; symbol: st
             </button>
             <button className="btn btn-primary" onClick={runAnalysis} disabled={refreshing || analyzing}>
               {analyzing ? <Loader2 size={16} className="spin-icon" /> : <Sparkles size={16} />}
-              {analyzing ? 'Analyzing…' : 'AI Analysis'}
+              {analyzing ? 'Analyzing…' : 'Force AI Analysis'}
             </button>
           </div>
         </div>

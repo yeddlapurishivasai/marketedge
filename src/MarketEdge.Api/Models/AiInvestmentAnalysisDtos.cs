@@ -43,3 +43,62 @@ public record AiInvestmentAnalysisDetail(
     JsonElement EarningsCallEnrichment,
     JsonElement CorporateFilingsEnrichment,
     JsonElement Analysis);
+
+public record AiAnalysisCandidateResponse(
+    string Market,
+    int Stage2RunId,
+    string WeekNumber,
+    string AnalysisWeekNumber,
+    DateTime Stage2CompletedAt,
+    int RequestedCount,
+    decimal MinimumMarketCap,
+    int EligibleStage2Count,
+    int MarketCapEligibleCount,
+    int AvailableAfterAnalyzedExclusion,
+    int TechnicalSetupCount,
+    IReadOnlyList<AiAnalysisCandidate> Candidates);
+
+public record AiAnalysisCandidate(
+    int Rank,
+    string Symbol,
+    string CompanyName,
+    string SectorName,
+    string? Classification,
+    decimal? MarketCap,
+    decimal Score,
+    AiCandidateScoreBreakdown ScoreBreakdown,
+    AiCandidateSectorStrength SectorStrength,
+    AiCandidateTechnicalSetup TechnicalSetup,
+    IReadOnlyList<string> Reasons,
+    decimal? EarningsGrowthYoyPct,
+    decimal? EarningsGrowthQoqPct,
+    decimal? MarginExpansionYoyPct,
+    DateOnly? LastEarningsDate,
+    decimal? CapexChangePct,
+    int? RsRank,
+    decimal? RsDelta2w,
+    decimal? MomentumScore,
+    string? AdClassification,
+    bool? SqueezeFired);
+
+public record AiCandidateScoreBreakdown(
+    decimal EarningsGrowth,
+    decimal MarginExpansion,
+    decimal RecentEarnings,
+    decimal Capex,
+    decimal SectorStrength,
+    decimal TechnicalTiming,
+    decimal DataQuality);
+
+public record AiCandidateSectorStrength(
+    decimal? AverageRsScore,
+    decimal? AverageRsDelta2w,
+    decimal Stage2ParticipationPct);
+
+public record AiCandidateTechnicalSetup(
+    bool NearPivot,
+    decimal? PivotPrice,
+    decimal? PivotDistancePct,
+    bool Ema40Bounce,
+    decimal? WeeklyEma40,
+    decimal? Ema40DistancePct);

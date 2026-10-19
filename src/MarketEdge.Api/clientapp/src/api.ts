@@ -510,7 +510,7 @@ export async function runAiStockAnalysis(
   market: Market,
   symbol: string,
 ): Promise<AiInvestmentAnalysisDetail> {
-  const res = await authFetch(`${BASE}/${market}/ai-analysis/${encodeURIComponent(symbol)}/run`, {
+  const res = await authFetch(`${BASE}/${market}/ai-analysis/${encodeURIComponent(symbol)}/run?force=true`, {
     method: 'POST',
   });
   if (!res.ok) throw new Error((await res.text()) || 'AI analysis failed');
@@ -535,6 +535,18 @@ export async function fetchAiAnalysisDetail(
     `${BASE}/${market}/ai-analysis/${encodeURIComponent(symbol)}/history/${encodeURIComponent(weekNumber)}`,
   );
   if (!res.ok) throw new Error('Failed to load AI analysis report');
+  return res.json();
+}
+
+export interface AiBatchTriggerResponse {
+  runId: number;
+  weekNumber: string;
+  alreadyExists: boolean;
+}
+
+export async function triggerAiAnalysisBatch(market: Market): Promise<AiBatchTriggerResponse> {
+  const res = await authFetch(`${BASE}/${market}/ai-batch/run`, { method: 'POST' });
+  if (!res.ok) throw new Error((await res.text()) || 'Failed to start weekly AI analysis');
   return res.json();
 }
 

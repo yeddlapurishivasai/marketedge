@@ -1414,6 +1414,12 @@ body {
   color: var(--text-secondary); font-size: 0.82rem;
 }
 .ai-workspace-summary strong { color: var(--text); font-size: 1rem; }
+.ai-batch-status {
+  display: flex; justify-content: space-between; gap: 12px; align-items: center;
+  margin-bottom: 14px; padding: 9px 12px; border-block: 1px solid var(--border);
+  color: var(--text-secondary); font-size: 0.8rem;
+}
+.ai-batch-status strong { color: var(--text); text-transform: capitalize; }
 .ai-search {
   display: flex; align-items: center; gap: 7px; min-width: 190px;
   padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-xs);
@@ -1425,6 +1431,12 @@ body {
 }
 .ai-analysis-table { overflow-x: auto; }
 .ai-analysis-table .table { min-width: 1080px; }
+.ai-sort-button {
+  display: inline-flex; align-items: center; gap: 5px; padding: 0;
+  border: 0; background: transparent; color: inherit; font: inherit;
+  text-transform: inherit; letter-spacing: inherit; cursor: pointer;
+}
+.ai-sort-button:hover, .ai-sort-button.active { color: var(--primary); }
 .ai-report-modal { width: min(1000px, 92vw); }
 .ai-report-body { max-height: 78vh; overflow: auto; }
 .ai-report-tabs { margin-bottom: 14px; }
@@ -1470,6 +1482,11 @@ body {
 .ai-signal-negative, .ai-signal-sell, .ai-signal-avoid { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
 .ai-signal-hold, .ai-signal-neutral { color: var(--warning); background: color-mix(in srgb, var(--warning) 10%, transparent); }
 .ai-table-decision { font-size: 0.76rem; font-weight: 700; text-transform: capitalize; }
+.ai-prediction { font-weight: 700; font-variant-numeric: tabular-nums; }
+.ai-tone-positive { color: var(--success) !important; }
+.ai-tone-neutral { color: var(--warning) !important; }
+.ai-tone-negative { color: var(--danger) !important; }
+.ai-tone-muted { color: var(--text-muted) !important; }
 .ai-action-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
 .ai-action-columns p { margin: 8px 0 0; }
 .ai-source-list li { margin-bottom: 6px; }
