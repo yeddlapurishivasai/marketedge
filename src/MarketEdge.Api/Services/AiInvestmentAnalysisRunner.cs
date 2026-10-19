@@ -1,0 +1,362 @@
+using System.Text.Json;
+using MarketEdge.Api.Models;
+using Microsoft.Extensions.Options;
+
+namespace MarketEdge.Api.Services;
+
+public interface IAiInvestmentAnalysisRunner
+{
+    Task<AiInvestmentAnalysisDetail> RunAsync(
+        string market,
+        string symbol,
+        AiStockAnalysisDto deterministicInput,
+        CancellationToken cancellationToken = default);
+}
+
+public class AiInvestmentAnalysisRunner : IAiInvestmentAnalysisRunner
+{
+    private const string SchemaVersion = "marketedge.ai-analysis.v1";
+    private const string SkillVersion = "0.6.0";
+    private readonly IAzureAiFoundryClient _foundry;
+    private readonly IAiAnalysisCostCalculator _costCalculator;
+    private readonly IAiInvestmentAnalysisStore _store;
+    private readonly AzureAiFoundryOptions _options;
+    private readonly string _skillPath;
+
+    public AiInvestmentAnalysisRunner(
+        IAzureAiFoundryClient foundry,
+        IAiAnalysisCostCalculator costCalculator,
+        IAiInvestmentAnalysisStore store,
+        IOptions<AzureAiFoundryOptions> options,
+        IWebHostEnvironment environment)
+    {
+        _foundry = foundry;
+        _costCalculator = costCalculator;
+        _store = store;
+        _options = options.Value;
+        _skillPath = Path.Combine(environment.ContentRootPath, "Ai", "stock-investment-analysis.skill.md");
+    }
+
+    public async Task<AiInvestmentAnalysisDetail> RunAsync(
+        string market,
+        string symbol,
+        AiStockAnalysisDto deterministicInput,
+        CancellationToken cancellationToken = default)
+    {
+        var retrievedAt = DateTime.UtcNow;
+        var company = deterministicInput.Stock.CompanyName;
+        var asOfDate = deterministicInput.GeneratedAt.ToString("O");
+        var inputJson = JsonSerializer.Serialize(deterministicInput);
+        var exceptionalMoves = BuildExceptionalMoveContext(deterministicInput);
+        var skill = await File.ReadAllTextAsync(_skillPath, cancellationToken);
+        var finalInput = $$"""
+            Market: {{market}}
+            Symbol: {{symbol}}
+            Company: {{company}}
+            Deterministic data as of: {{asOfDate}}
+            Retrieval timestamp: {{retrievedAt:O}}
+
+            DETERMINISTIC_INPUT_JSON:
+            {{inputJson}}
+
+            EXCEPTIONAL_PRICE_MOVES_REQUIRING_CATALYST_RESEARCH:
+            {{exceptionalMoves}}
+
+            Perform two distinct web-research passes before writing the report:
+            1. Earnings-call transcripts and management commentary, including prior-quarter comparison.
+            2. Corporate filings, exchange disclosures, earnings releases, and investor presentations
+               from the last 365 days.
+                3. For every exceptional price move listed above, search the event date plus/minus two days
+                    and identify the authoritative catalyst. Include verified or unresolved results in
+                    enrichment.marketMovingEvents and use material catalysts in the analysis.
+
+            Use the research only as evidence for the final report. Do not output a research scratchpad,
+            duplicate source descriptions, or intermediate tool results. Produce only the concise final
+            JSON report defined by the skill, including its enrichment and sources sections.
+            """;
+        var analysis = await _foundry.CreateResponseAsync(
+            skill + ResearchInstructions,
+            finalInput,
+            enableWebSearch: true,
+            _options.AnalysisMaxOutputTokens,
+            cancellationToken);
+        var analysisJson = NormalizeJson(analysis.OutputText);
+        ValidateExceptionalMoveCoverage(analysisJson, exceptionalMoves);
+        ValidateRequiredValuation(analysisJson);
+        ValidateRequiredProjections(analysisJson);
+        var earningsJson = ExtractEnrichment(analysisJson, "earningsCall");
+        var filingsJson = ExtractEnrichment(analysisJson, "corporateFilings");
+        var cost = _costCalculator.Calculate(new[] { analysis.Usage });
+
+        return await _store.SaveAsync(new SaveAiInvestmentAnalysis(
+            market,
+            symbol,
+            GetIsoWeekNumber(retrievedAt),
+            SchemaVersion,
+            SkillVersion,
+            _options.Model,
+            inputJson,
+            earningsJson,
+            filingsJson,
+            analysisJson,
+            cost));
+    }
+
+    private static string NormalizeJson(string output)
+    {
+        var value = output.Trim();
+        if (value.StartsWith("```", StringComparison.Ordinal))
+        {
+            var firstNewline = value.IndexOf('\n');
+            var lastFence = value.LastIndexOf("```", StringComparison.Ordinal);
+            if (firstNewline >= 0 && lastFence > firstNewline)
+                value = value[(firstNewline + 1)..lastFence].Trim();
+        }
+
+        using var document = JsonDocument.Parse(value);
+        return document.RootElement.GetRawText();
+    }
+
+    internal static string BuildExceptionalMoveContext(AiStockAnalysisDto input)
+    {
+        var dateIndex = input.CandleColumns.ToList().FindIndex(column => column == "date");
+        var closeIndex = input.CandleColumns.ToList().FindIndex(column => column == "close");
+        if (dateIndex < 0 || closeIndex < 0) return "No candle date/close columns were available.";
+
+        var threshold = input.Market == "us" ? 15m : 5m;
+        var moves = new List<(string Date, decimal PreviousClose, decimal Close, decimal MovePct)>();
+        decimal? previousClose = null;
+        foreach (var row in input.DailyCandles)
+        {
+            if (row.Count <= Math.Max(dateIndex, closeIndex)
+                || !TryDecimal(row[closeIndex], out var close)
+                || close <= 0)
+                continue;
+
+            if (previousClose > 0)
+            {
+                var movePct = (close / previousClose.Value - 1m) * 100m;
+                if (Math.Abs(movePct) >= threshold)
+                    moves.Add((FormatDate(row[dateIndex]), previousClose.Value, close, movePct));
+            }
+            previousClose = close;
+        }
+
+        var selected = moves.OrderBy(move => move.Date).ToList();
+        if (selected.Count == 0)
+            return $"Threshold: absolute daily return >= {threshold:0.##}%. No qualifying moves.";
+
+        var lines = selected.Select(move =>
+            $"- {move.Date}: {move.PreviousClose:0.####} -> {move.Close:0.####} ({move.MovePct:+0.##;-0.##;0}%)");
+        return $"Threshold: absolute daily return >= {threshold:0.##}%.\n{string.Join("\n", lines)}";
+    }
+
+    private static void ValidateExceptionalMoveCoverage(string analysisJson, string exceptionalMoves)
+    {
+        var requiredDates = exceptionalMoves.Split('\n')
+            .Where(line => line.StartsWith("- ", StringComparison.Ordinal) && line.Length >= 12)
+            .Select(line => line.Substring(2, 10))
+            .Distinct()
+            .ToList();
+        if (requiredDates.Count == 0) return;
+
+        using var document = JsonDocument.Parse(analysisJson);
+        if (!document.RootElement.TryGetProperty("enrichment", out var enrichment)
+            || !enrichment.TryGetProperty("marketMovingEvents", out var events)
+            || events.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException(
+                "AI analysis is missing required exceptional price-move research.");
+
+        var coveredDates = events.EnumerateArray()
+            .Where(item => item.TryGetProperty("date", out _))
+            .Select(item => item.GetProperty("date").GetString())
+            .Where(date => !string.IsNullOrWhiteSpace(date))
+            .ToHashSet(StringComparer.Ordinal);
+        var missing = requiredDates.Where(date => !coveredDates.Contains(date)).ToList();
+        if (missing.Count > 0)
+            throw new InvalidOperationException(
+                $"AI analysis did not research exceptional price moves on: {string.Join(", ", missing)}.");
+    }
+
+    private static bool TryDecimal(object? value, out decimal result)
+    {
+        result = 0;
+        return value switch
+        {
+            decimal number => Assign(number, out result),
+            double number => Assign((decimal)number, out result),
+            float number => Assign((decimal)number, out result),
+            int number => Assign(number, out result),
+            long number => Assign(number, out result),
+            JsonElement element when element.ValueKind == JsonValueKind.Number
+                => element.TryGetDecimal(out result),
+            string text => decimal.TryParse(text,
+                System.Globalization.NumberStyles.Number,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out result),
+            _ => false
+        };
+    }
+
+    private static bool Assign(decimal value, out decimal result)
+    {
+        result = value;
+        return true;
+    }
+
+    private static string FormatDate(object? value) => value switch
+    {
+        DateOnly date => date.ToString("yyyy-MM-dd"),
+        DateTime date => date.ToString("yyyy-MM-dd"),
+        JsonElement element when element.ValueKind == JsonValueKind.String => element.GetString() ?? "unknown",
+        _ => Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"
+    };
+
+    private static string ExtractEnrichment(string analysisJson, string section)
+    {
+        using var document = JsonDocument.Parse(analysisJson);
+        if (document.RootElement.TryGetProperty("enrichment", out var enrichment)
+            && enrichment.TryGetProperty(section, out var value))
+            return value.GetRawText();
+        return "{\"status\":\"unavailable\",\"findings\":[],\"sources\":[]}";
+    }
+
+    private static void ValidateRequiredProjections(string analysisJson)
+    {
+        using var document = JsonDocument.Parse(analysisJson);
+        if (!document.RootElement.TryGetProperty("priceScenarios", out var scenarios)
+            || scenarios.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException("AI analysis is missing required price scenarios.");
+
+        foreach (var horizon in new[] { "3m", "6m", "1y", "2y" })
+        {
+            var scenario = scenarios.EnumerateArray().FirstOrDefault(item =>
+                item.TryGetProperty("horizon", out var value) && value.GetString() == horizon);
+            if (scenario.ValueKind == JsonValueKind.Undefined)
+                throw new InvalidOperationException($"AI analysis is missing the {horizon} price scenario.");
+            if (!TryGetPositiveNumber(scenario, "referencePrice", out var referencePrice)
+                || !HasNonEmptyString(scenario, "method")
+                || !HasNonEmptyString(scenario, "calculation")
+                || !HasNonEmptyString(scenario, "revenueAssumption")
+                || !HasNonEmptyString(scenario, "epsAssumption")
+                || !HasNonEmptyString(scenario, "valuationMultiple"))
+                throw new InvalidOperationException(
+                    $"AI analysis {horizon} scenario must include its reference price and valuation methodology.");
+
+            foreach (var caseName in new[] { "bear", "base", "bull" })
+            {
+                if (!scenario.TryGetProperty(caseName, out var priceCase)
+                    || !TryGetPositiveNumber(priceCase, "target", out var target)
+                    || !TryGetNumber(priceCase, "returnPct", out var returnPct)
+                    || !HasNonEmptyArray(priceCase, "assumptions"))
+                    throw new InvalidOperationException(
+                        $"AI analysis {horizon} {caseName} scenario must contain a target, returnPct, and assumptions.");
+
+                var calculatedReturn = (target / referencePrice - 1m) * 100m;
+                if (Math.Abs(calculatedReturn - returnPct) > 0.25m)
+                    throw new InvalidOperationException(
+                        $"AI analysis {horizon} {caseName} returnPct does not match its target and reference price.");
+            }
+        }
+    }
+
+    private static bool HasNonEmptyString(JsonElement element, string property) =>
+        element.ValueKind == JsonValueKind.Object
+        && element.TryGetProperty(property, out var value)
+        && value.ValueKind == JsonValueKind.String
+        && !string.IsNullOrWhiteSpace(value.GetString());
+
+    private static bool HasNonEmptyArray(JsonElement element, string property) =>
+        element.ValueKind == JsonValueKind.Object
+        && element.TryGetProperty(property, out var value)
+        && value.ValueKind == JsonValueKind.Array
+        && value.GetArrayLength() > 0;
+
+    private static bool TryGetNumber(JsonElement element, string property, out decimal result)
+    {
+        result = 0;
+        return element.TryGetProperty(property, out var value)
+            && value.ValueKind == JsonValueKind.Number
+            && value.TryGetDecimal(out result);
+    }
+
+    private static void ValidateRequiredValuation(string analysisJson)
+    {
+        using var document = JsonDocument.Parse(analysisJson);
+        if (!document.RootElement.TryGetProperty("valuation", out var valuation)
+            || !valuation.TryGetProperty("assessment", out var assessment)
+            || assessment.GetString() is not ("undervalued" or "fairly_valued" or "overvalued")
+            || !TryGetPositiveNumber(valuation, "intrinsicValueLow", out var low)
+            || !TryGetPositiveNumber(valuation, "intrinsicValueHigh", out var high)
+            || low > high)
+            throw new InvalidOperationException(
+                "AI analysis must contain a concrete valuation and a valid positive intrinsic-value range.");
+
+        if (!valuation.TryGetProperty("earningsBasis", out var basis)
+            || basis.ValueKind != JsonValueKind.Object
+            || !basis.TryGetProperty("selectedBasis", out var selectedBasisElement)
+            || !basis.TryGetProperty("selectionReason", out var selectionReasonElement)
+            || string.IsNullOrWhiteSpace(selectionReasonElement.GetString()))
+            throw new InvalidOperationException("AI valuation must disclose its earnings basis and selection reason.");
+
+        var selectedBasis = selectedBasisElement.GetString();
+        if (selectedBasis is not ("reported_gaap" or "consensus_forward"
+            or "normalized_verified" or "alternative_driver"))
+            throw new InvalidOperationException("AI valuation selected an unsupported earnings basis.");
+
+        if (selectedBasis == "alternative_driver") return;
+        if (!TryGetPositiveNumber(basis, "selectedBaseEps", out var selectedEps))
+            throw new InvalidOperationException("AI valuation must provide positive selectedBaseEps for an EPS basis.");
+
+        var sourceProperty = selectedBasis switch
+        {
+            "reported_gaap" => "reportedGaapEps",
+            "consensus_forward" => "consensusForwardEps",
+            _ => "normalizedEps"
+        };
+        if (!TryGetPositiveNumber(basis, sourceProperty, out var sourceEps)
+            || Math.Abs(sourceEps - selectedEps) > 0.01m)
+            throw new InvalidOperationException("AI valuation selectedBaseEps must match its disclosed earnings source.");
+
+        if (selectedBasis == "consensus_forward"
+            && (!basis.TryGetProperty("consensusEstimateCount", out var estimateCount)
+                || estimateCount.ValueKind != JsonValueKind.Number
+                || estimateCount.GetInt32() <= 0))
+            throw new InvalidOperationException("Consensus-based valuation must disclose analyst estimate coverage.");
+
+        if (selectedBasis == "normalized_verified"
+            && (!basis.TryGetProperty("normalizationVerified", out var verified)
+                || verified.ValueKind != JsonValueKind.True
+                || !basis.TryGetProperty("normalizationReconciliation", out var reconciliation)
+                || string.IsNullOrWhiteSpace(reconciliation.GetString())))
+            throw new InvalidOperationException("Normalized base EPS requires a verified reconciliation.");
+    }
+
+    private static bool TryGetPositiveNumber(JsonElement element, string property, out decimal result)
+    {
+        result = 0;
+        return element.TryGetProperty(property, out var value)
+            && value.ValueKind == JsonValueKind.Number
+            && value.TryGetDecimal(out result)
+            && result > 0;
+    }
+
+    private static string GetIsoWeekNumber(DateTime date)
+    {
+        var calendar = System.Globalization.CultureInfo.InvariantCulture.Calendar;
+        var week = calendar.GetWeekOfYear(
+            date, System.Globalization.CalendarWeekRule.FirstFourDayWeek, DayOfWeek.Monday);
+        var year = date.Year;
+        if (week >= 52 && date.Month == 1) year--;
+        if (week == 1 && date.Month == 12) year++;
+        return $"{year}-W{week:D2}";
+    }
+
+    private const string ResearchInstructions = """
+
+        Runtime research rule: use hosted web search for the two required research passes. Prioritize
+        company investor relations and official exchange or regulator sources. Cross-check material
+        claims where possible. The final answer must be JSON only and must not contain tool narration,
+        search logs, or duplicated evidence. Reference compact source entries by URL.
+        """;
+}

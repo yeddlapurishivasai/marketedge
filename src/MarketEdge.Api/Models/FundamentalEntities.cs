@@ -63,6 +63,8 @@ public abstract class EarningsFundamentalsBase
     public decimal? TrailingPe { get; set; }
     public decimal? ForwardPe { get; set; }
 
+    public string? ReportedSource { get; set; }
+    public DateTime? ReportedFetchedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }
 

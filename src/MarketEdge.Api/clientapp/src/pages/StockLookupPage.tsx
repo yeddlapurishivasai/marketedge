@@ -6,14 +6,14 @@ import {
 } from 'lightweight-charts';
 import type {
   Market, StockLookupDetail, LookupBar, LookupCandidate, LookupEpsForecast,
-  LookupAnalyst, RecommendationPeriod
+  LookupAnalyst, RecommendationPeriod, AiInvestmentAnalysisDetail
 } from '../api';
 import {
-  searchLookup, fetchLookupDetail, fetchLookupBars, refreshStockData
+  searchLookup, fetchLookupDetail, fetchLookupBars, refreshStockData, runAiStockAnalysis
 } from '../api';
 import { formatMarketCap, formatPrice, currencySymbol } from '../format';
 import { FundamentalsSection } from '../components/FundamentalsSection';
-import { ChevronLeft, Search, RefreshCw, Loader2, ExternalLink, X } from 'lucide-react';
+import { ChevronLeft, Search, RefreshCw, Loader2, ExternalLink, Sparkles, X } from 'lucide-react';
 import { ThemeContext } from '../theme';
 
 type Timeframe = 'daily' | 'weekly';
@@ -457,6 +457,9 @@ export function StockDetailView({ market, symbol }: { market: Market; symbol: st
   const [showPivot, setShowPivot] = useState(true);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [aiResult, setAiResult] = useState<AiInvestmentAnalysisDetail | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadBars = useCallback(async (tf: Timeframe) => {
@@ -510,6 +513,19 @@ export function StockDetailView({ market, symbol }: { market: Market; symbol: st
     setRefreshing(false);
   };
 
+  const runAnalysis = async () => {
+    if (!detail) return;
+    setAnalyzing(true);
+    setAiError(null);
+    try {
+      setAiResult(await runAiStockAnalysis(market, detail.symbol));
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : 'AI analysis failed');
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
   const t = detail?.technical;
   const a = detail?.analyst;
   const dayTone = t?.dayPct == null ? undefined : t.dayPct >= 0 ? 'up' : 'down';
@@ -548,14 +564,41 @@ export function StockDetailView({ market, symbol }: { market: Market; symbol: st
 
         <div className="analyst-refresh">
           <div>
-            <div className="section-title" style={{ margin: 0 }}>Refresh</div>
-            <p className="muted-note">Re-ingest bars, technical and fundamentals for this symbol, then recompute its score. Runs as a worker job.</p>
+            <div className="section-title" style={{ margin: 0 }}>Stock Actions</div>
+            <p className="muted-note">Refresh source data or generate this week's sourced investment analysis.</p>
           </div>
-          <button className="btn btn-primary" onClick={refresh} disabled={refreshing}>
-            {refreshing ? <Loader2 size={16} className="spin-icon" /> : <RefreshCw size={16} />} {refreshing ? 'Refreshing…' : 'Refresh'}
-          </button>
+          <div className="lookup-action-buttons">
+            <button className="btn" onClick={refresh} disabled={refreshing || analyzing}>
+              {refreshing ? <Loader2 size={16} className="spin-icon" /> : <RefreshCw size={16} />}
+              {refreshing ? 'Refreshing…' : 'Refresh'}
+            </button>
+            <button className="btn btn-primary" onClick={runAnalysis} disabled={refreshing || analyzing}>
+              {analyzing ? <Loader2 size={16} className="spin-icon" /> : <Sparkles size={16} />}
+              {analyzing ? 'Analyzing…' : 'Force AI Analysis'}
+            </button>
+          </div>
         </div>
       </div>
+
+      {aiError && <div className="lookup-error">{aiError}</div>}
+      {aiResult && (
+        <section className="card ai-analysis-card">
+          <div className="ai-analysis-head">
+            <div>
+              <h2 className="section-title">AI Investment Analysis</h2>
+              <span className="cell-muted">{aiResult.metadata.weekNumber} · {aiResult.metadata.model}</span>
+            </div>
+            <div className="ai-cost-summary">
+              <span>${aiResult.metadata.cost.totalCostUsd.toFixed(4)} / stock</span>
+              <span>${aiResult.metadata.cost.projected1000TickersCostUsd.toFixed(2)} / 1,000</span>
+            </div>
+          </div>
+          <details className="ai-analysis-json" open>
+            <summary>Analysis report</summary>
+            <pre>{JSON.stringify(aiResult.analysis, null, 2)}</pre>
+          </details>
+        </section>
+      )}
 
       {/* Chart */}
       <div className="card lookup-chart-card">

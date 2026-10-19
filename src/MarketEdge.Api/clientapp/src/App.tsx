@@ -7,7 +7,7 @@ import { ThemeContext } from './theme';
 import {
   Sun, Moon, ChevronLeft, Search, Plus, Pencil, Trash2,
   ArrowRightLeft, X, TrendingUp, LayoutGrid, BarChart3,
-  IndianRupee, DollarSign, ChevronRight, Activity, Target, Database, Radar, LineChart, Gauge
+  IndianRupee, DollarSign, ChevronRight, Activity, Target, Database, Radar, LineChart, Gauge, BrainCircuit
 } from 'lucide-react';
 import JobsPage from './pages/JobsPage';
 import AnalysisPage from './pages/AnalysisPage';
@@ -17,6 +17,7 @@ import ScannersPage from './pages/ScannersPage';
 import FundamentalsPage from './pages/FundamentalsPage';
 import BreakoutsPage from './pages/BreakoutsPage';
 import RegimePage, { RegimeBanner } from './pages/RegimePage';
+import AiWorkspacePage from './pages/AiWorkspacePage';
 import AuthMenu from './auth/AuthMenu';
 import './styles.css';
 
@@ -107,6 +108,7 @@ function App() {
             <Route path="/:market/fundamentals" element={<FundamentalsPage />} />
             <Route path="/:market/breakouts" element={<BreakoutsPage />} />
             <Route path="/:market/regime" element={<RegimePage />} />
+            <Route path="/:market/ai" element={<AiWorkspacePage />} />
             <Route path="/:market/jobs" element={<JobsPage />} />
             <Route path="/admin" element={<AdminPage />} />
           </Routes>
@@ -210,6 +212,14 @@ function MarketMenu() {
           <div className="menu-card-text">
             <h3>Market Regime</h3>
             <p>Trend &amp; breadth context for risk posture</p>
+          </div>
+          <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
+        </div>
+        <div className="menu-card" onClick={() => navigate(`/${m}/ai`)}>
+          <div className="menu-card-icon analysis"><BrainCircuit size={22} /></div>
+          <div className="menu-card-text">
+            <h3>AI Workspace</h3>
+            <p>Stock analysis and investment decisions</p>
           </div>
           <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
         </div>
