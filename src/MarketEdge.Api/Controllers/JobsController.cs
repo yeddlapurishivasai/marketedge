@@ -1,3 +1,4 @@
+using MarketEdge.Api.Authentication;
 using MarketEdge.Api.Models;
 using MarketEdge.Api.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -8,33 +9,43 @@ namespace MarketEdge.Api.Controllers;
 public class JobsController : ControllerBase
 {
     private readonly IJobService _jobService;
+    private readonly AuthOptions _auth;
 
-    public JobsController(IJobService jobService) => _jobService = jobService;
+    public JobsController(IJobService jobService, AuthOptions auth)
+    {
+        _jobService = jobService;
+        _auth = auth;
+    }
+
+    private string UserKey => OptionsIdentity.UserKey(User, _auth);
 
     // ── Job Runs (generic, all job types) ──
 
     [HttpGet("api/jobs")]
+    [ServiceFilter(typeof(OptionsExceptionFilter))]
     public async Task<IActionResult> GetRuns(
         [FromQuery] string? market = null,
         [FromQuery] string? jobType = null,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 20)
     {
-        var runs = await _jobService.GetRunsAsync(market, jobType, page, pageSize);
+        var runs = await _jobService.GetRunsAsync(market, jobType, page, pageSize, UserKey);
         return Ok(runs);
     }
 
     [HttpGet("api/jobs/{id}")]
+    [ServiceFilter(typeof(OptionsExceptionFilter))]
     public async Task<IActionResult> GetRun(int id)
     {
-        var run = await _jobService.GetRunByIdAsync(id);
+        var run = await _jobService.GetRunByIdAsync(id, UserKey);
         return run == null ? NotFound() : Ok(run);
     }
 
     [HttpPost("api/jobs/{id}/cancel")]
+    [ServiceFilter(typeof(OptionsExceptionFilter))]
     public async Task<IActionResult> CancelRun(int id)
     {
-        var cancelled = await _jobService.CancelRunAsync(id);
+        var cancelled = await _jobService.CancelRunAsync(id, UserKey);
         if (!cancelled) return NotFound("Run not found or already finished");
         return Ok(new { cancelled = true });
     }

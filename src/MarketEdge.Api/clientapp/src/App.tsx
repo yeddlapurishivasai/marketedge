@@ -18,6 +18,7 @@ import FundamentalsPage from './pages/FundamentalsPage';
 import BreakoutsPage from './pages/BreakoutsPage';
 import RegimePage, { RegimeBanner } from './pages/RegimePage';
 import AiWorkspacePage from './pages/AiWorkspacePage';
+import OptionsPage from './pages/OptionsPage';
 import AuthMenu from './auth/AuthMenu';
 import './styles.css';
 
@@ -109,6 +110,7 @@ function App() {
             <Route path="/:market/breakouts" element={<BreakoutsPage />} />
             <Route path="/:market/regime" element={<RegimePage />} />
             <Route path="/:market/ai" element={<AiWorkspacePage />} />
+            <Route path="/india/options" element={<OptionsPage />} />
             <Route path="/:market/jobs" element={<JobsPage />} />
             <Route path="/admin" element={<AdminPage />} />
           </Routes>
@@ -159,6 +161,11 @@ function MarketMenu() {
         <RegimeBanner market={m} onOpen={() => navigate(`/${m}/regime`)} />
       </div>
       <div className="menu-grid">
+        {m === 'india' && <NavLink to="/india/options" className="menu-card" style={{ textDecoration: 'none', color: 'inherit' }}>
+          <div className="menu-card-icon stocks"><Target size={22} /></div>
+          <div className="menu-card-text"><h3>Index Options</h3><p>NIFTY50 &amp; SENSEX forecasts and hedged alternatives</p></div>
+          <ChevronRight size={16} style={{ marginLeft: 'auto' }} />
+        </NavLink>}
         <div className="menu-card" onClick={() => navigate(`/${m}/sectors`)}>
           <div className="menu-card-icon sectors"><LayoutGrid size={22} /></div>
           <div className="menu-card-text">

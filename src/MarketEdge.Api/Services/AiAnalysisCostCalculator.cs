@@ -22,6 +22,7 @@ public sealed class AzureAiFoundryOptions
 public interface IAiAnalysisCostCalculator
 {
     AiAnalysisCostDto Calculate(IEnumerable<AiInferenceUsage> inferenceRounds);
+    AiAnalysisCostDto CalculateWithoutTools(IEnumerable<AiInferenceUsage> inferenceRounds);
 }
 
 public class AiAnalysisCostCalculator : IAiAnalysisCostCalculator
@@ -32,7 +33,11 @@ public class AiAnalysisCostCalculator : IAiAnalysisCostCalculator
     public AiAnalysisCostCalculator(IOptions<AzureAiFoundryOptions> options) =>
         _options = options.Value;
 
-    public AiAnalysisCostDto Calculate(IEnumerable<AiInferenceUsage> inferenceRounds)
+    public AiAnalysisCostDto Calculate(IEnumerable<AiInferenceUsage> inferenceRounds) => CalculateCore(inferenceRounds, true);
+
+    public AiAnalysisCostDto CalculateWithoutTools(IEnumerable<AiInferenceUsage> inferenceRounds) => CalculateCore(inferenceRounds, false);
+
+    private AiAnalysisCostDto CalculateCore(IEnumerable<AiInferenceUsage> inferenceRounds, bool includeTools)
     {
         var rounds = inferenceRounds.ToList();
         var inputTokens = rounds.Sum(round => round.InputTokens);
@@ -49,7 +54,7 @@ public class AiAnalysisCostCalculator : IAiAnalysisCostCalculator
         var inputCost = TokenCost(uncachedInputTokens, _options.InputUsdPerMillionTokens)
             + TokenCost(cachedInputTokens, cachedRate);
         var outputCost = TokenCost(outputTokens, _options.OutputUsdPerMillionTokens);
-        var toolCost = Money(_options.EarningsCallToolCostUsd + _options.CorporateFilingsToolCostUsd);
+        var toolCost = includeTools ? Money(_options.EarningsCallToolCostUsd + _options.CorporateFilingsToolCostUsd) : 0m;
         var totalCost = Money(inputCost + outputCost + toolCost);
 
         return new AiAnalysisCostDto(

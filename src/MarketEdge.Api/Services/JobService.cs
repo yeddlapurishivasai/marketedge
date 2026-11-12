@@ -8,10 +8,10 @@ namespace MarketEdge.Api.Services;
 
 public interface IJobService
 {
-    Task<List<JobRunDto>> GetRunsAsync(string? market = null, string? jobType = null, int page = 1, int pageSize = 20);
-    Task<JobRunDto?> GetRunByIdAsync(int id);
+    Task<List<JobRunDto>> GetRunsAsync(string? market = null, string? jobType = null, int page = 1, int pageSize = 20, string? userKey = null);
+    Task<JobRunDto?> GetRunByIdAsync(int id, string? userKey = null);
     Task<int> TriggerStageAnalysisAsync(string market, TriggerAnalysisRequest? request);
-    Task<bool> CancelRunAsync(int id);
+    Task<bool> CancelRunAsync(int id, string? userKey = null);
     Task<Stage2SummaryDto?> GetLatestStage2SummaryAsync(string market);
     Task<List<StageAnalysisResultDto>> GetStage2StocksAsync(int runId, string? classification = null, int? sectorId = null, bool fnoOnly = false, string? squeeze = null, decimal? minMarketCap = null);
     Task<List<SectorRotationDto>> GetSectorRotationAsync(int runId);
@@ -32,9 +32,13 @@ public class JobService : IJobService
         _queueClient = queueClient;
     }
 
-    public async Task<List<JobRunDto>> GetRunsAsync(string? market = null, string? jobType = null, int page = 1, int pageSize = 20)
+    private IQueryable<JobRun> VisibleRuns(string? userKey) =>
+        _db.JobRuns.Where(j => j.JobType != "options_analysis" ||
+            userKey != null && _db.OptionsForecasts.Any(f => f.JobRunId == j.Id && f.UserKey == userKey));
+
+    public async Task<List<JobRunDto>> GetRunsAsync(string? market = null, string? jobType = null, int page = 1, int pageSize = 20, string? userKey = null)
     {
-        var query = _db.JobRuns.AsQueryable();
+        var query = VisibleRuns(userKey);
         if (!string.IsNullOrEmpty(market))
             query = query.Where(j => j.Market == market);
         if (!string.IsNullOrEmpty(jobType))
@@ -48,9 +52,9 @@ public class JobService : IJobService
             .ToListAsync();
     }
 
-    public async Task<JobRunDto?> GetRunByIdAsync(int id)
+    public async Task<JobRunDto?> GetRunByIdAsync(int id, string? userKey = null)
     {
-        var job = await _db.JobRuns.FindAsync(id);
+        var job = await VisibleRuns(userKey).SingleOrDefaultAsync(j => j.Id == id);
         return job == null ? null : MapJobRun(job);
     }
 
@@ -213,9 +217,9 @@ public class JobService : IJobService
         return job.Id;
     }
 
-    public async Task<bool> CancelRunAsync(int id)
+    public async Task<bool> CancelRunAsync(int id, string? userKey = null)
     {
-        var job = await _db.JobRuns.FindAsync(id);
+        var job = await VisibleRuns(userKey).SingleOrDefaultAsync(j => j.Id == id);
         if (job == null) return false;
         if (job.Status is "completed" or "failed" or "cancelled") return false;
 

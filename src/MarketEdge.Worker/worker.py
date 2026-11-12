@@ -220,6 +220,11 @@ def process_message(message_content: str) -> None:
         run_market_regime_job(payload)
         return
 
+    if str(payload.get("jobType", "")).lower() == "options_analysis":
+        from options_runner import run_options_job
+        run_options_job(payload)
+        return
+
     market = str(payload["market"]).lower()
     run_id = int(payload["runId"])
     min_market_cap = _coerce_number(payload.get("minMarketCap"))

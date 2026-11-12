@@ -12,6 +12,7 @@ from config import Config
 from db import get_connection
 from rs_rating import compute_rs_ratings
 from worker import get_worker_status, start_queue_listener
+from options_runner import collector_status, start_options_collector
 
 app = Flask(__name__)
 app.config['QUEUE_NAME'] = Config.QUEUE_NAME
@@ -24,7 +25,7 @@ def health():
 
 @app.route('/status')
 def status():
-    return jsonify(get_worker_status())
+    return jsonify({**get_worker_status(), "optionsCollector": collector_status()})
 
 
 @app.route('/steps/compute-rs', methods=['POST'])
@@ -48,6 +49,7 @@ def compute_rs():
 
 listener_thread = threading.Thread(target=start_queue_listener, daemon=True, name='queue-listener')
 listener_thread.start()
+start_options_collector()
 
 
 if __name__ == '__main__':
