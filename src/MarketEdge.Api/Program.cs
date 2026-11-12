@@ -5,6 +5,8 @@ using MarketEdge.Api.Observability;
 using MarketEdge.Api.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
+using Microsoft.AspNetCore.DataProtection;
+using MarketEdge.Api.Controllers;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -46,6 +48,15 @@ builder.Services.AddHttpClient<IAzureAiFoundryClient, AzureAiFoundryClient>(clie
 builder.Services.AddScoped<IAiInvestmentAnalysisRunner, AiInvestmentAnalysisRunner>();
 builder.Services.AddScoped<IBreakoutsService, BreakoutsService>();
 builder.Services.AddScoped<IMarketRegimeService, MarketRegimeService>();
+builder.Services.AddSingleton(OptionsSettings.Read(builder.Configuration));
+builder.Services.AddDataProtection().SetApplicationName("MarketEdge.Options");
+builder.Services.AddSingleton<OptionsTokenCipher>();
+builder.Services.AddSingleton<OptionsLoginCorrelation>();
+builder.Services.AddHttpClient<OptionsBrokerService>(client => client.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddScoped<OptionsWorkspaceService>();
+builder.Services.AddScoped<OptionsExceptionFilter>();
+builder.Services.AddScoped<OptionsAiSelector>();
+builder.Services.AddHostedService<OptionsAiSelectionProcessor>();
 builder.Services.AddHostedService<ScannerScheduleService>();
 builder.Services.AddHostedService<FundamentalsScheduleService>();
 builder.Services.AddHostedService<Stage2ScheduleService>();

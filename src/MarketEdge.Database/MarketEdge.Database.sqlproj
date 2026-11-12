@@ -8,5 +8,9 @@
   </PropertyGroup>
   <ItemGroup>
     <None Include="Scripts\SeedData.sql" />
+    <Build Remove="Scripts\PostDeployment.sql" />
+    <Build Remove="Scripts\SeedOptionsMarketIndices.sql" />
+    <PostDeploy Include="Scripts\PostDeployment.sql" />
+    <None Include="Scripts\SeedOptionsMarketIndices.sql" />
   </ItemGroup>
 </Project>

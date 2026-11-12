@@ -14,6 +14,20 @@ public class MarketEdgeDbContext : DbContext
     public DbSet<IndianStockFundamentals> IndianStockFundamentals => Set<IndianStockFundamentals>();
     public DbSet<USStockFundamentals> USStockFundamentals => Set<USStockFundamentals>();
     public DbSet<JobRun> JobRuns => Set<JobRun>();
+    public DbSet<BrokerConnection> OptionsConnections => Set<BrokerConnection>();
+    public DbSet<OptionsMarketIndex> OptionsIndices => Set<OptionsMarketIndex>();
+    public DbSet<IndexConstituentHistory> OptionsConstituents => Set<IndexConstituentHistory>();
+    public DbSet<OptionsExchangeSession> OptionsSessions => Set<OptionsExchangeSession>();
+    public DbSet<OptionsDerivativeInstrument> OptionsInstruments => Set<OptionsDerivativeInstrument>();
+    public DbSet<OptionsSnapshotBatch> OptionsSnapshotBatches => Set<OptionsSnapshotBatch>();
+    public DbSet<OptionsQuoteSnapshot> OptionsQuotes => Set<OptionsQuoteSnapshot>();
+    public DbSet<OptionsForecastRun> OptionsForecasts => Set<OptionsForecastRun>();
+    public DbSet<OptionsValuationSnapshot> OptionsValuations => Set<OptionsValuationSnapshot>();
+    public DbSet<OptionsStrategySuggestion> OptionsStrategies => Set<OptionsStrategySuggestion>();
+    public DbSet<OptionsStrategyLeg> OptionsLegs => Set<OptionsStrategyLeg>();
+    public DbSet<OptionsAiSelection> OptionsAiSelections => Set<OptionsAiSelection>();
+    public DbSet<OptionsForecastOutcome> OptionsForecastOutcomes => Set<OptionsForecastOutcome>();
+    public DbSet<OptionsStrategyOutcome> OptionsStrategyOutcomes => Set<OptionsStrategyOutcome>();
     public DbSet<IndianStageAnalysisResult> IndianStageAnalysisResults => Set<IndianStageAnalysisResult>();
     public DbSet<USStageAnalysisResult> USStageAnalysisResults => Set<USStageAnalysisResult>();
     public DbSet<AiStockAnalysisResult> AiStockAnalysisResults => Set<AiStockAnalysisResult>();
@@ -60,6 +74,7 @@ public class MarketEdgeDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.ConfigureOptions();
         modelBuilder.Entity<IndianSector>()
             .HasMany(s => s.Stocks)
             .WithOne(st => st.Sector)
