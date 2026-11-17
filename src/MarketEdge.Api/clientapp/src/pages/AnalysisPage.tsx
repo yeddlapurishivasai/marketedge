@@ -338,6 +338,8 @@ export default function AnalysisPage() {
   const [stocks, setStocks] = useState<StageAnalysisResult[]>([]);
   const [classFilter, setClassFilter] = useState('');
   const [squeezeFilter, setSqueezeFilter] = useState('');
+  const [quadrantFilter, setQuadrantFilter] = useState('');
+  const [adClassFilter, setAdClassFilter] = useState('');
   const [minMarketCapFilter, setMinMarketCapFilter] = useState('0');
   const [stocksLoading, setStocksLoading] = useState(false);
   const [rotationHistory, setRotationHistory] = useState<SectorRotationHistory[]>([]);
@@ -350,7 +352,11 @@ export default function AnalysisPage() {
   const top25Sort = useSortableData(summary?.top25 || [], { key: 'rsRating', dir: 'desc' });
   const sectorSort = useSortableData(summary?.bySector || []);
   const rotationSort = useSortableData(rotation);
-  const stocksSort = useSortableData(stocks);
+  const filteredStocks = useMemo(() => stocks.filter(stock =>
+    (!quadrantFilter || stock.quadrant === quadrantFilter) &&
+    (!adClassFilter || stock.adClassification === adClassFilter)
+  ), [stocks, quadrantFilter, adClassFilter]);
+  const stocksSort = useSortableData(filteredStocks);
 
   const sectorIdByName = useMemo(() => {
     const map: Record<string, number> = {};
@@ -976,6 +982,29 @@ export default function AnalysisPage() {
                   <option value="on">In squeeze</option>
                   <option value="fired">Squeeze fired</option>
                 </select>
+                <select
+                  className="select-input"
+                  aria-label="Quadrant"
+                  value={quadrantFilter}
+                  onChange={e => setQuadrantFilter(e.target.value)}
+                >
+                  <option value="">All Quadrants</option>
+                  <option value="leading">Leading</option>
+                  <option value="weakening">Weakening</option>
+                  <option value="lagging">Lagging</option>
+                  <option value="improving">Improving</option>
+                </select>
+                <select
+                  className="select-input"
+                  aria-label="A/D Class"
+                  value={adClassFilter}
+                  onChange={e => setAdClassFilter(e.target.value)}
+                >
+                  <option value="">All A/D Classes</option>
+                  <option value="accumulating">Accumulating</option>
+                  <option value="neutral">Neutral</option>
+                  <option value="distributing">Distributing</option>
+                </select>
                 <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.8rem' }}>
                   <span className="cell-muted">Min cap ({m === 'india' ? '₹ Cr' : '$M'}):</span>
                   <input
@@ -1021,6 +1050,13 @@ export default function AnalysisPage() {
                       </tr>
                     </thead>
                     <tbody>
+                      {filteredStocks.length === 0 && (
+                        <tr>
+                          <td colSpan={tab === 'fno' ? 14 : 13} className="cell-muted" style={{ textAlign: 'center', padding: 24 }}>
+                            No stocks match the selected filters.
+                          </td>
+                        </tr>
+                      )}
                       {stocksSort.sorted.map(s => (
                         <tr key={s.id}>
                           <td><ChartButton symbol={s.symbol} onClick={() => setChartSymbol(s.symbol)} /></td>
@@ -1057,7 +1093,7 @@ export default function AnalysisPage() {
                     </tbody>
                   </table>
                   <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                    Showing {stocks.length} stocks
+                    Showing {filteredStocks.length} stocks
                   </div>
                 </div>
               )}
