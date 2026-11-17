@@ -1,5 +1,27 @@
 # React + TypeScript + Vite
 
+## Stage 2 stock filters
+
+On the Stage 2 page for either market, All Stocks and F&O Stocks include separate
+Quadrant (Leading, Weakening, Lagging, Improving) and A/D Class (Accumulating,
+Neutral, Distributing) dropdowns. Both default to All and combine using AND with
+each other and the existing classification, squeeze, and minimum market-cap
+filters. A/D Class describes volume accumulation/distribution, not the Stage 2
+classification or relative-strength/momentum Quadrant.
+
+These two filters apply immediately to the loaded stock list without another API
+request. Sorting and the displayed count reflect the filtered rows; an empty
+match displays an explicit message. Missing values are included under All but
+do not match a specific value. Selections are shared between the two stock tabs
+for the current page visit, but are not saved across reloads. Top 25, overview,
+sector summaries/drill-down, and rotation are unchanged.
+
+Run the focused regression checks with:
+
+```powershell
+node --test tests\analysisFilters.test.mjs
+```
+
 ## India index options workspace
 
 Open `/india/options` from the Indian Market menu. Application authentication is
