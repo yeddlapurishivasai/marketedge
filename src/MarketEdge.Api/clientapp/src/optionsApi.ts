@@ -397,6 +397,8 @@ export const createOptionsForecast = (indexCode: IndexCode, mode: ForecastMode, 
   request<{ id: number; jobRunId: number; status: string }>('/forecasts', jsonBody({ indexCode, mode, requestId }));
 export const fetchOptionsForecasts = (indexCode: IndexCode, mode: ForecastMode) =>
   request<{ items: ForecastSummary[] }>(`/forecasts?${new URLSearchParams({ indexCode, mode })}`);
+export const fetchLatestOptionsForecast = async (indexCode: IndexCode, mode: ForecastMode) =>
+  (await request<{ items: ForecastSummary[] }>(`/forecasts?${new URLSearchParams({ indexCode, mode, limit: '1' })}`)).items[0] ?? null;
 export const deleteForecast = (id: number) => request<void>(`/forecasts/${id}`, { method: 'DELETE' });
 export async function fetchOptionsForecast(id: number): Promise<ForecastDetail> {
   const detail = await request<ForecastDetail>(`/forecasts/${id}`);

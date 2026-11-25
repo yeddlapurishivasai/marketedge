@@ -14,6 +14,8 @@ public class MarketEdgeDbContext : DbContext
     public DbSet<IndianStockFundamentals> IndianStockFundamentals => Set<IndianStockFundamentals>();
     public DbSet<USStockFundamentals> USStockFundamentals => Set<USStockFundamentals>();
     public DbSet<JobRun> JobRuns => Set<JobRun>();
+    public DbSet<StrangleRun> StrangleRuns => Set<StrangleRun>();
+    public DbSet<StrangleStrategy> StrangleStrategies => Set<StrangleStrategy>();
     public DbSet<BrokerConnection> OptionsConnections => Set<BrokerConnection>();
     public DbSet<OptionsMarketIndex> OptionsIndices => Set<OptionsMarketIndex>();
     public DbSet<IndexConstituentHistory> OptionsConstituents => Set<IndexConstituentHistory>();

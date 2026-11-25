@@ -26,15 +26,28 @@ param(
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $ApiProject = Join-Path $RepoRoot "src\MarketEdge.Api"
-$PublishDir = Join-Path $ApiProject "publish"
-$ZipPath = Join-Path $env:TEMP "marketedge-api.zip"
+$deploymentId = [Guid]::NewGuid().ToString("N")
+$PublishDir = Join-Path $env:TEMP "marketedge-api-publish-$deploymentId"
+$ZipPath = Join-Path $env:TEMP "marketedge-api-$deploymentId.zip"
 
 # Build and publish
 Write-Host "Building and publishing .NET API..." -ForegroundColor Cyan
 Push-Location $ApiProject
-dotnet publish -c $Configuration -o $PublishDir
-if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed" }
-Pop-Location
+try {
+    if (-not (Test-Path (Join-Path $ApiProject "clientapp\node_modules"))) {
+        Push-Location (Join-Path $ApiProject "clientapp")
+        try {
+            npm ci
+            if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
+        } finally {
+            Pop-Location
+        }
+    }
+    dotnet publish -c $Configuration -o $PublishDir /p:SkipNpmInstall=true
+    if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed" }
+} finally {
+    Pop-Location
+}
 
 # Create zip
 Write-Host "Creating deployment package..." -ForegroundColor Cyan

@@ -105,6 +105,9 @@ class KiteClient:
         self.token = token_for(conn, user_key)
 
     def get(self, path: str, params: list[tuple[str, str]] | None = None, text=False):
+        return self._request(path, params=params, text=text)
+
+    def _request(self, path: str, params=None, text=False, *, body=None):
         global _last_request
         url = "https://api.kite.trade" + path
         if params:
@@ -112,7 +115,9 @@ class KiteClient:
         request = Request(url, headers={
             "Authorization": f"token {self.api_key}:{self.token}",
             "X-Kite-Version": "3",
-        })
+            **({"Content-Type": "application/json"} if body is not None else {}),
+        }, data=dumps(body).encode("utf-8") if body is not None else None,
+            method="POST" if body is not None else "GET")
         with _transport_lock:
             delay = 1.1 - (time.monotonic() - _last_request)
             if delay > 0:
@@ -145,6 +150,42 @@ class KiteClient:
         for start in range(0, len(instruments), 400):
             result.update(self.get("/quote", [("i", symbol) for symbol in instruments[start:start + 400]]))
         return result
+
+    def positions(self) -> dict:
+        return self.get("/portfolio/positions")
+
+    def trades(self) -> list[dict]:
+        return self.get("/trades")
+
+    def minute_bars(self, token: int, now: datetime) -> list[dict]:
+        from zoneinfo import ZoneInfo
+
+        local = now.astimezone(ZoneInfo("Asia/Kolkata"))
+        data = self.get(f"/instruments/historical/{int(token)}/minute", [
+            ("from", local.strftime("%Y-%m-%d 00:00:00")),
+            ("to", local.strftime("%Y-%m-%d %H:%M:%S")),
+        ])
+        result = []
+        for candle in data["candles"]:
+            at = datetime.fromisoformat(candle[0])
+            if at.tzinfo is None:
+                at = at.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+            if at.astimezone(local.tzinfo).date() == local.date() and at + timedelta(minutes=1) <= now:
+                result.append({"date": at.isoformat(), "open": candle[1], "high": candle[2],
+                               "low": candle[3], "close": candle[4], "volume": candle[5]})
+        return result
+
+    def basket_margin(self, legs: list[dict]) -> dict:
+        """Read-only estimate; deliberately expose no order-placement transport."""
+        if not legs:
+            raise ValueError("A margin estimate requires a nonempty basket.")
+        basket = [{
+            "exchange": leg["exchange"], "tradingsymbol": leg["tradingSymbol"],
+            "transaction_type": leg["direction"].upper(), "variety": "regular",
+            "product": leg["product"], "order_type": "MARKET",
+            "quantity": leg["quantity"],
+        } for leg in legs]
+        return self._request("/margins/basket", params=[("consider_positions", "false")], body=basket)
 
     def bars(self, token: int, now: datetime, *, completed_through: date | None = None) -> list[dict]:
         from zoneinfo import ZoneInfo

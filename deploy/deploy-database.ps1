@@ -53,16 +53,19 @@ $SeedScript = Join-Path $DbProject "Scripts\SeedData.sql"
 if (-not $SqlPassword) {
     $SqlPassword = Read-Host -Prompt "Enter SQL password for $SqlUser" -AsSecureString
 }
-$PlainPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
-    [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SqlPassword)
-)
+$passwordPointer = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SqlPassword)
+try {
+    $PlainPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPointer)
+} finally {
+    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPointer)
+}
 
 # Determine if target is Azure SQL (needs SqlAzureV12 provider)
 $isAzure = $SqlServer -match "\.database\.windows\.net"
 
 # Build dacpac
 Write-Host "Building database project..." -ForegroundColor Cyan
-$buildArgs = @("-c", $Configuration)
+$buildArgs = @("-c", $Configuration, "/p:NetCoreBuild=true", "/p:TargetFramework=netstandard2.1")
 if ($isAzure) {
     $buildArgs += "/p:DSP=Microsoft.Data.Tools.Schema.Sql.SqlAzureV12DatabaseSchemaProvider"
     Write-Host "  Target: Azure SQL Database" -ForegroundColor Yellow
@@ -70,9 +73,12 @@ if ($isAzure) {
     Write-Host "  Target: SQL Server (on-premises)" -ForegroundColor Yellow
 }
 Push-Location $DbProject
-dotnet build @buildArgs
-if ($LASTEXITCODE -ne 0) { throw "Database project build failed" }
-Pop-Location
+try {
+    dotnet build @buildArgs
+    if ($LASTEXITCODE -ne 0) { throw "Database project build failed" }
+} finally {
+    Pop-Location
+}
 
 # Find sqlpackage
 $sqlpackage = Get-Command sqlpackage -ErrorAction SilentlyContinue

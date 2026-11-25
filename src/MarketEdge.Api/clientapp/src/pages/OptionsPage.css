@@ -11,6 +11,18 @@
 .options-eyebrow { font-size: .65rem; font-weight: 700; letter-spacing: .14em; color: var(--text-secondary); }
 .options-research-badge { display: inline-flex; align-items: center; gap: 7px; color: var(--primary); background: var(--primary-light); padding: 8px 12px; border-radius: 30px; font-size: .75rem; font-weight: 600; white-space: nowrap; }
 .options-page .options-disclosure { font-size: .75rem; color: var(--text-secondary); margin-bottom: 14px; }
+.options-page .options-bias-bullish, .options-page .options-leg-buy { color: var(--success); background: var(--success-bg); }
+.options-page .options-bias-bearish, .options-page .options-leg-sell { color: var(--danger); background: var(--danger-bg); }
+.options-page .options-bias-neutral { color: var(--text-secondary); background: var(--surface-hover); }
+.options-page .options-leg-buy, .options-page .options-leg-sell { padding: 2px 6px; border-radius: 5px; }
+.options-page .options-risk-low .options-risk-label { color: var(--primary); }
+.options-page .options-risk-medium .options-risk-label { color: var(--warning); }
+.options-page .options-risk-high .options-risk-label { color: var(--danger); }
+.options-page .options-range-card.is-bullish { border-top: 3px solid var(--success); }
+.options-page .options-range-card.is-bearish { border-top: 3px solid var(--danger); }
+.options-page .options-range-card.is-neutral { border-top: 3px solid var(--primary); }
+.options-page .options-value-gain { color: var(--success); }
+.options-page .options-value-loss { color: var(--danger); }
 .options-broker { margin: 0 0 14px; }
 .options-connection-bar { display: flex; justify-content: space-between; gap: 16px; align-items: center; border: 1px solid var(--border); background: var(--surface); border-radius: 12px; padding: 13px 18px; }
 .options-connection-identity, .options-connection-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; min-width: 0; }

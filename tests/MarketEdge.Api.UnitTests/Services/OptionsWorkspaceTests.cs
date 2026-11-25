@@ -22,6 +22,28 @@ public sealed class OptionsWorkspaceTests
     private static OptionsSettings Settings() => new() { TokenEncryptionKey = Convert.ToBase64String(Enumerable.Range(0, 32).Select(x => (byte)x).ToArray()) };
 
     [Fact]
+    public async Task LatestForecast_IsAccountIndexModeScopedAndPreservesPreviousRuns()
+    {
+        using var db = DbContextFactory.Create();
+        OptionsForecastRun Row(int id, string user = "alice", string index = "NIFTY50", string mode = "daily", string status = "completed") =>
+            new() { Id = id, UserKey = user, IndexCode = index, Mode = mode, Status = status, RequestId = Guid.NewGuid() };
+        db.OptionsForecasts.AddRange(Row(1), Row(2, status: "failed"), Row(3, user: "bob"),
+            Row(4, index: "SENSEX"), Row(5, mode: "weekly"));
+        await db.SaveChangesAsync();
+        var settings = Settings();
+        var broker = new OptionsBrokerService(db, new HttpClient(), settings, new OptionsTokenCipher(settings));
+        var service = new OptionsWorkspaceService(db, new Mock<QueueClient>().Object, broker, settings);
+        var latest = JsonSerializer.SerializeToElement(await service.ListAsync("alice", "NIFTY50", "daily", default, 1), StrangleService.Json);
+        latest.GetProperty("items").GetArrayLength().Should().Be(1);
+        latest.GetProperty("items")[0].GetProperty("id").GetInt32().Should().Be(2);
+        latest.GetProperty("items")[0].GetProperty("status").GetString().Should().Be("failed");
+        (await db.OptionsForecasts.CountAsync()).Should().Be(5);
+        foreach (var invalid in new[] { 0, 101 })
+            await FluentActions.Awaiting(() => service.ListAsync("alice", "NIFTY50", "daily", default, invalid))
+                .Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Fact]
     public void Crypto_UsesSharedNonceTagCipherFormatAndUserAad()
     {
         var settings = Settings();
@@ -263,7 +285,7 @@ public sealed class OptionsWorkspaceTests
     {
         using var db = new MarketEdgeDbContext(new DbContextOptionsBuilder<MarketEdgeDbContext>()
             .UseSqlServer("Server=unused;Database=unused;Trusted_Connection=True;TrustServerCertificate=True").Options);
-        db.Model.GetEntityTypes().Count(x => x.GetSchema() == "options").Should().Be(14);
+        db.Model.GetEntityTypes().Count(x => x.GetSchema() == "options").Should().Be(16);
         db.Model.FindEntityType(typeof(OptionsDerivativeInstrument))!.FindPrimaryKey()!.Properties
             .Select(x => x.Name).Should().Equal("Exchange", "TradingSymbol");
         db.Model.FindEntityType(typeof(OptionsAiSelection))!.GetIndexes().Should()
