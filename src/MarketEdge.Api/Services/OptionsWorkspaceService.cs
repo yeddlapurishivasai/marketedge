@@ -97,13 +97,14 @@ public sealed class OptionsWorkspaceService(MarketEdgeDbContext db, QueueClient 
         return forecast;
     }
 
-    public async Task<object> ListAsync(string user, string? index, string? mode, CancellationToken ct)
+    public async Task<object> ListAsync(string user, string? index, string? mode, CancellationToken ct, int limit = 100)
     {
+        if (limit is < 1 or > 100) throw new ArgumentException("Forecast limit must be between 1 and 100.");
         if (index is not null) ValidateIndex(index);
         if (mode is not null && !Modes.Contains(mode)) throw new ArgumentException("Unsupported forecast mode.");
         var rows = await db.OptionsForecasts.AsNoTracking().Where(x => x.UserKey == user &&
             (index == null || x.IndexCode == index) && (mode == null || x.Mode == mode))
-            .OrderByDescending(x => x.Id).Take(100).ToListAsync(ct);
+            .OrderByDescending(x => x.Id).Take(limit).ToListAsync(ct);
         return new { items = rows.Select(Summary) };
     }
 

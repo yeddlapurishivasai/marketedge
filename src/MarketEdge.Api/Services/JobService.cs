@@ -33,8 +33,9 @@ public class JobService : IJobService
     }
 
     private IQueryable<JobRun> VisibleRuns(string? userKey) =>
-        _db.JobRuns.Where(j => j.JobType != "options_analysis" ||
-            userKey != null && _db.OptionsForecasts.Any(f => f.JobRunId == j.Id && f.UserKey == userKey));
+        _db.JobRuns.Where(j => j.JobType != "options_analysis" && j.JobType != "options_strangle" ||
+            userKey != null && (j.JobType == "options_analysis" && _db.OptionsForecasts.Any(f => f.JobRunId == j.Id && f.UserKey == userKey) ||
+                j.JobType == "options_strangle" && _db.StrangleRuns.Any(f => f.JobRunId == j.Id && f.UserKey == userKey)));
 
     public async Task<List<JobRunDto>> GetRunsAsync(string? market = null, string? jobType = null, int page = 1, int pageSize = 20, string? userKey = null)
     {
@@ -222,10 +223,43 @@ public class JobService : IJobService
         var job = await VisibleRuns(userKey).SingleOrDefaultAsync(j => j.Id == id);
         if (job == null) return false;
         if (job.Status is "completed" or "failed" or "cancelled") return false;
+        if (job.JobType == "options_strangle" && _db.Database.IsRelational())
+        {
+            await using var tx = await _db.Database.BeginTransactionAsync();
+            if (_db.Database.IsSqlServer())
+            {
+                var lockedJob = await _db.JobRuns.FromSqlInterpolated(
+                        $"SELECT * FROM [dbo].[JobRuns] WITH (UPDLOCK, HOLDLOCK) WHERE [Id] = {id}")
+                    .AsNoTracking().SingleAsync();
+                if (lockedJob.Status is not ("queued" or "running")) return false;
+            }
+            var completedAt = DateTime.UtcNow;
+            var changed = await VisibleRuns(userKey).Where(x => x.Id == id && (x.Status == "queued" || x.Status == "running"))
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, "cancelled")
+                    .SetProperty(x => x.ErrorMessage, "Cancelled by user").SetProperty(x => x.CompletedAt, completedAt));
+            if (changed == 0) return false;
+            await _db.StrangleRuns.Where(x => x.JobRunId == id && x.UserKey == userKey &&
+                (x.Status == "queued" || x.Status == "running"))
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, "cancelled")
+                    .SetProperty(x => x.ErrorMessage, "Cancelled by user").SetProperty(x => x.CompletedAt, completedAt));
+            await tx.CommitAsync();
+            return true;
+        }
 
         job.Status = "cancelled";
         job.ErrorMessage = "Cancelled by user";
         job.CompletedAt = DateTime.UtcNow;
+        if (job.JobType == "options_strangle")
+        {
+            var strangle = await _db.StrangleRuns.SingleOrDefaultAsync(x => x.JobRunId == id &&
+                (x.Status == "queued" || x.Status == "running"));
+            if (strangle is not null)
+            {
+                strangle.Status = "cancelled";
+                strangle.CompletedAt = job.CompletedAt;
+                strangle.ErrorMessage = "Cancelled by user";
+            }
+        }
         await _db.SaveChangesAsync();
         return true;
     }

@@ -1,0 +1,28 @@
+CREATE TABLE [options].[StrangleRuns]
+(
+    [Id] INT IDENTITY(1,1) NOT NULL,
+    [UserKey] NVARCHAR(200) NOT NULL,
+    [RequestId] UNIQUEIDENTIFIER NOT NULL,
+    [IndexCode] NVARCHAR(16) NOT NULL,
+    [Action] NVARCHAR(16) NOT NULL,
+    [StrategyId] INT NULL,
+    [JobRunId] INT NOT NULL,
+    [Status] NVARCHAR(16) NOT NULL CONSTRAINT [DF_StrangleRuns_Status] DEFAULT (N'queued'),
+    [RequestJson] NVARCHAR(MAX) NOT NULL,
+    [ResultJson] NVARCHAR(MAX) NULL,
+    [AiJson] NVARCHAR(MAX) NULL,
+    [GeneratedAt] DATETIME2 NOT NULL CONSTRAINT [DF_StrangleRuns_GeneratedAt] DEFAULT (SYSUTCDATETIME()),
+    [CompletedAt] DATETIME2 NULL,
+    [ErrorMessage] NVARCHAR(2000) NULL,
+    CONSTRAINT [PK_StrangleRuns] PRIMARY KEY ([Id]),
+    CONSTRAINT [UQ_StrangleRuns_Request] UNIQUE ([UserKey], [RequestId]),
+    CONSTRAINT [UQ_StrangleRuns_Owner] UNIQUE ([Id], [UserKey], [IndexCode]),
+    CONSTRAINT [FK_StrangleRuns_Job] FOREIGN KEY ([JobRunId]) REFERENCES [dbo].[JobRuns] ([Id]),
+    CONSTRAINT [FK_StrangleRuns_Strategy] FOREIGN KEY ([StrategyId], [UserKey], [IndexCode]) REFERENCES [options].[StrangleStrategies] ([Id], [UserKey], [IndexCode]),
+    CONSTRAINT [CK_StrangleRuns_Index] CHECK ([IndexCode] IN (N'NIFTY50', N'SENSEX')),
+    CONSTRAINT [CK_StrangleRuns_Action] CHECK (([Action] = N'entry' AND [StrategyId] IS NULL) OR [Action] = N'adjustment'),
+    CONSTRAINT [CK_StrangleRuns_Status] CHECK ([Status] IN (N'queued', N'running', N'completed', N'failed', N'cancelled', N'unavailable')),
+    CONSTRAINT [CK_StrangleRuns_Json] CHECK (ISJSON([RequestJson]) = 1 AND ([ResultJson] IS NULL OR ISJSON([ResultJson]) = 1) AND ([AiJson] IS NULL OR ISJSON([AiJson]) = 1)),
+    INDEX [IX_StrangleRuns_History] NONCLUSTERED ([UserKey], [IndexCode], [GeneratedAt] DESC),
+    INDEX [IX_StrangleRuns_UserHistory] NONCLUSTERED ([UserKey], [GeneratedAt])
+);

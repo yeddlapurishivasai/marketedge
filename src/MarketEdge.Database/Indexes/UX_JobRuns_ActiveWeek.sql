@@ -5,4 +5,4 @@
 -- Options runs use account/index/mode concurrency in their own schema, not ISO weeks.
 CREATE UNIQUE NONCLUSTERED INDEX [UX_JobRuns_ActiveWeek]
     ON [dbo].[JobRuns] ([JobType], [Market], [WeekNumber])
-    WHERE [Status] IN ('queued', 'running') AND [JobType] <> N'options_analysis';
+    WHERE [Status] IN ('queued', 'running') AND [JobType] <> N'options_analysis' AND [JobType] <> N'options_strangle';

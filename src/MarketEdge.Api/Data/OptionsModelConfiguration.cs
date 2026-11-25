@@ -8,6 +8,18 @@ public static class OptionsModelConfiguration
 {
     public static void ConfigureOptions(this ModelBuilder builder)
     {
+        builder.Entity<StrangleRun>().HasIndex(x => new { x.UserKey, x.IndexCode, x.Action })
+            .IsUnique().HasFilter("[Status] IN (N'queued', N'running')");
+        builder.Entity<StrangleRun>().HasIndex(x => new { x.UserKey, x.GeneratedAt }).HasDatabaseName("IX_StrangleRuns_UserHistory");
+        builder.Entity<StrangleRun>().HasOne<JobRun>().WithMany().HasForeignKey(x => x.JobRunId).OnDelete(DeleteBehavior.NoAction);
+        builder.Entity<StrangleRun>().HasOne<StrangleStrategy>().WithMany()
+            .HasForeignKey(x => new { x.StrategyId, x.UserKey, x.IndexCode })
+            .HasPrincipalKey(x => new { x.Id, x.UserKey, x.IndexCode }).OnDelete(DeleteBehavior.NoAction);
+        builder.Entity<StrangleStrategy>().HasOne<StrangleRun>().WithMany()
+            .HasForeignKey(x => new { x.EntryRunId, x.UserKey, x.IndexCode })
+            .HasPrincipalKey(x => new { x.Id, x.UserKey, x.IndexCode }).OnDelete(DeleteBehavior.NoAction);
+        builder.Entity<StrangleStrategy>().HasIndex(x => new { x.UserKey, x.IndexCode, x.SessionDate })
+            .HasDatabaseName("IX_StrangleStrategies_Session");
         builder.Entity<BrokerConnection>().ToTable("BrokerConnections", "options");
         builder.Entity<OptionsMarketIndex>().ToTable("MarketIndices", "options");
         builder.Entity<IndexConstituentHistory>().ToTable("IndexConstituentHistory", "options");

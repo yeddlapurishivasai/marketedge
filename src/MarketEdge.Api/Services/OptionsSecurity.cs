@@ -14,6 +14,7 @@ public sealed class OptionsSettings
     public string KiteRedirectUrl { get; set; } = "";
     public string TokenEncryptionKey { get; set; } = "";
     public bool AiEnabled { get; set; } = true;
+    public bool StrangleAiEnabled { get; set; } = true;
     public string MetadataAdminRole { get; set; } = "Options.MetadataAdmin";
     public bool Configured => !string.IsNullOrWhiteSpace(KiteApiKey) &&
         !string.IsNullOrWhiteSpace(KiteApiSecret) && ValidRedirect(KiteRedirectUrl)

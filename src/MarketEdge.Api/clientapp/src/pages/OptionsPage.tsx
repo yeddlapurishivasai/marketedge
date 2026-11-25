@@ -1,24 +1,25 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { NavLink, useSearchParams } from 'react-router-dom';
-import { AlertCircle, ArrowRight, ChevronLeft, ExternalLink, Info, LoaderCircle, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertCircle, ArrowRight, ChevronLeft, ExternalLink, Info, LoaderCircle, RefreshCw, ShieldCheck } from 'lucide-react';
 import { fetchJobRun } from '../api';
 import type { JobRun } from '../api';
 import {
   createOptionsForecast, disconnectOptions, fetchOptionsConnection, fetchOptionsForecast,
-  fetchOptionsForecasts, fetchOptionsMetadata, startOptionsLogin,
-  deleteForecast, OptionsApiError,
+  fetchLatestOptionsForecast, fetchOptionsMetadata, startOptionsLogin, OptionsApiError,
 } from '../optionsApi';
 import type {
-  BrokerConnection, ConstituentValuation, ForecastAnalysis, ForecastDetail, ForecastMode, ForecastSummary,
+  BrokerConnection, ConstituentValuation, ForecastAnalysis, ForecastDetail, ForecastMode,
   AnalysisDimension, AnalysisIndicator, FundamentalRange, IndexCode, OptionCandidate, OptionsMetadata, RiskTier, StrategySide, WeightReference,
 } from '../optionsApi';
 import './OptionsPage.css';
+import StrangleSellingTab from './StrangleSellingTab';
 
 const MODES: { value: ForecastMode; label: string }[] = [
   { value: 'daily', label: 'Daily' }, { value: 'weekly', label: 'Weekly' },
   { value: 'monthly', label: 'Monthly' }, { value: 'expiry-intraday', label: 'Expiry Intraday' },
 ];
-const TABS = ['Analysis', 'Constituents', 'Selling Strategies', 'Buying Strategies', 'History'] as const;
+const TABS = ['Analysis', 'Constituents', 'Selling Strategies', 'Buying Strategies', 'Strangle Selling'] as const;
+const TAB_STORAGE_KEY = 'marketedge.options.tab';
 type Tab = typeof TABS[number];
 const number = (value: number | null | undefined) => value == null || !Number.isFinite(value)
   ? 'Unavailable' : value.toLocaleString('en-IN', { maximumFractionDigits: 2 });
@@ -219,13 +220,11 @@ function ForecastComposer({ indexCode, mode, dailyLabel, connected, runState, mi
   missingCalendar: boolean; changeSelection: (index: IndexCode, mode: ForecastMode) => void; generate: () => void; compact?: boolean;
 }) {
   const active = runState !== 'idle';
-  const showHelp = !compact || active || !connected;
+  const showHelp = active || !connected;
   const action = { idle: 'Get Forecast', submitting: 'Starting forecast…', running: 'Running forecast…', selecting: 'Final AI selection…' }[runState];
   return <section className={`options-composer ${compact ? 'is-compact' : ''}`} aria-label="Forecast request">
     <div className="options-composer-intro">
-      <span className="options-eyebrow">NEW ANALYSIS</span>
-      <h2>Build your market view</h2>
-      <p>One forecast with automatic final AI selection.</p>
+      <h2>Latest market view</h2>
     </div>
     <div className="options-request-controls">
       <label>Index<select value={indexCode} disabled={active} onChange={event => changeSelection(event.target.value as IndexCode, mode)}>
@@ -240,7 +239,7 @@ function ForecastComposer({ indexCode, mode, dailyLabel, connected, runState, mi
           {active ? <LoaderCircle className="options-spin" size={18} aria-hidden="true" /> : <ArrowRight size={18} aria-hidden="true" />}
           {action}
         </button>
-        {showHelp && <span id="options-action-help" role="status">{active ? 'Analysis → alternatives → final AI shortlist' : !connected ? 'Broker connection required for a new run' : 'New immutable version · AI included'}</span>}
+        {showHelp && <span id="options-action-help" role="status">{active ? 'Analysing · AI selection included' : 'Connect Zerodha to analyse'}</span>}
       </div>
     </div>
     <div className="options-composer-footer">
@@ -250,7 +249,7 @@ function ForecastComposer({ indexCode, mode, dailyLabel, connected, runState, mi
           <p>Daily: before 14:00 IST on a trading session, target today's close; otherwise the next trading session's close. Public calendars define holidays and exceptional sessions. Exact accepted targets appear on each saved version.</p>
           <p>Weekly/monthly forecasts use actual listed eligible expiries, never a silently substituted horizon. Expiry Intraday uses session-specific entry and exit cutoffs.</p>
           <OptionalInputsNotice />
-          <p>Each deliberate run creates a timestamped version. Opening history or changing tabs never requests AI. There is no separate AI rerun.</p>
+          <p>Each deliberate run replaces the displayed result. Changing tabs never requests AI.</p>
         </div>
       </InfoPopover>
     </div>
@@ -291,16 +290,19 @@ function RangeForecast({ data, targetAt, ai }: { data: ForecastAnalysis; targetA
   const reason = qualitativeRangeReason(ai?.selection?.scenarioReason);
   return <section className="options-range-hero" aria-label="Forecast price ranges">
     <div className="options-section-heading"><div><span className="options-eyebrow">INDEX PRICE · SCENARIO RANGES</span>
-      <h2>Forecast price ranges</h2></div><span className="options-status is-pending">{data.bias} bias</span></div>
+      <h2>Forecast price ranges</h2></div><span className={`options-status options-bias-${data.bias}`}>{data.bias} bias</span></div>
     <p className="options-range-target">Target: <strong>{timestamp(targetAt || data.scenarios[0]?.targetAt || data.plannedExitAt)}</strong> · captured index {number(data.spot)}</p>
+    <Facts items={[['Support', number(data.levels?.support)], ['Resistance', number(data.levels?.resistance)]]} />
     <div className="options-range-grid">{data.scenarios.map(scenario => {
       const available = scenario.low != null && scenario.high != null && Number.isFinite(scenario.low)
         && Number.isFinite(scenario.high) && scenario.low <= scenario.high;
-      return <article className={`options-range-card ${selected?.id === scenario.id ? 'is-selected' : !selected && scenario.id === 'base' ? 'is-baseline' : ''}`} key={scenario.id}>
+      const tone = data.spot != null && available
+        ? scenario.low! > data.spot ? 'is-bullish' : scenario.high! < data.spot ? 'is-bearish' : 'is-neutral' : '';
+      return <article className={`options-range-card ${tone} ${selected?.id === scenario.id ? 'is-selected' : !selected && scenario.id === 'base' ? 'is-baseline' : ''}`} key={scenario.id}>
         <h3>{scenario.label} scenario {selected?.id === scenario.id && <span className="options-status is-pending">AI selected</span>}</h3>
         <strong className="options-range-value">{available ? `${number(scenario.low)} – ${number(scenario.high)}` : 'Unavailable'}</strong>
-        <span>Index points · lower to upper bound</span>
-        <p>{scenario.probability == null ? 'Descriptive range · probability unavailable' : `${probabilityFraction(scenario.probability)} probability · ${scenario.probabilityType}`}</p>
+        <p>{scenario.probability == null || !Number.isFinite(scenario.probability) || scenario.probability < 0 || scenario.probability > 1
+          ? 'Descriptive range · probability unavailable' : `${number(scenario.probability * 100)}% · ${scenario.probabilityType}`}</p>
       </article>;
     })}</div>
     {!data.scenarios.length && <p>No supported price range was supplied in this snapshot.</p>}
@@ -468,9 +470,11 @@ function MetricCard({ metric, group, capturedAt }: { metric: AnalysisIndicator; 
       </div>
     </div>}
     {metric.influenceRole === 'directional' && !weighted && <small>Weighted influence unavailable</small>}
-    <small className="options-metric-source">{url ? <a href={url} target="_blank" rel="noopener noreferrer">{source || 'Source publication'}</a> : source || 'Source not supplied'}</small>
-    <small>{observed ? `Observed: ${timestamp(observed)}` : group.asOf ? `Category snapshot: ${timestamp(group.asOf)}`
-      : `Snapshot captured: ${timestamp(capturedAt)} · metric observation time not supplied`}</small>
+    <InfoPopover label={`${metric.label} source & observation`}>
+      <p>{url ? <a href={url} target="_blank" rel="noopener noreferrer">{source || 'Source publication'}</a> : source || 'Source not supplied'}</p>
+      <p>{observed ? `Observed: ${timestamp(observed)}` : group.asOf ? `Category snapshot: ${timestamp(group.asOf)}`
+        : `Snapshot captured: ${timestamp(capturedAt)} · metric observation time not supplied`}</p>
+    </InfoPopover>
   </article>;
 }
 function MarketMetrics({ data }: { data: ForecastAnalysis }) {
@@ -488,22 +492,30 @@ function MarketMetrics({ data }: { data: ForecastAnalysis }) {
       <span className="is-neutral">↔ Neutral</span><span className="is-context">◇ Non-directional context</span></div>
     {ageWarnings.length > 0 && <div className="options-age-warning">Recorded source-age limitations · {ageWarnings.length}
       <InfoPopover label="Source-age warnings"><Warnings items={ageWarnings} /></InfoPopover></div>}
-    {groups.map(group => <section className="options-metric-group" key={group.key} aria-label={`${group.label} individual metrics`}>
+    {groups.map(group => {
+      const visible = group.indicators.filter(metric => metric.value != null && metric.value !== '').slice(0, 3);
+      const remaining = group.indicators.filter(metric => !visible.includes(metric));
+      return <section className="options-metric-group" key={group.key} aria-label={`${group.label} individual metrics`}>
       <header className="options-section-heading"><h3>{group.label}</h3><span className="options-metric-aggregate">Category score {number(group.score)} / 100
         <InfoPopover label={`${group.label} aggregate`}><p>Scale: {group.scale}. Coverage: {group.coverage == null ? 'Unavailable' : `${number(group.coverage * 100)}%`}.
           This is a category aggregate, not a directional vote for every metric.</p>{group.reason && <p>{group.reason}</p>}</InfoPopover></span></header>
-      <div className="options-metric-grid">{group.indicators.map(metric => <MetricCard key={metric.key} metric={metric} group={group} capturedAt={data.asOf} />)}</div>
+      <div className="options-metric-grid">{visible.map(metric => <MetricCard key={metric.key} metric={metric} group={group} capturedAt={data.asOf} />)}</div>
+      {remaining.length > 0 && <details className="options-inline-details">
+        <summary>More {group.label.toLowerCase()} indicators ({remaining.length})</summary>
+        <div className="options-metric-grid">{remaining.map(metric => <MetricCard key={metric.key} metric={metric} group={group} capturedAt={data.asOf} />)}</div>
+      </details>}
       {!group.indicators.length && <small>No individual observations supplied.</small>}
-    </section>)}
+    </section>;
+    })}
   </section>;
 }
 function Analysis({ data, targetAt, ai }: { data: ForecastAnalysis; targetAt?: string | null; ai?: ForecastDetail['ai'] }) {
   return <>
     <RangeForecast data={data} targetAt={targetAt} ai={ai} />
     <SnapshotInputStatus data={data} />
-    <WeightProvenance compact weights={data.referenceData?.weights} items={data.constituents} />
+    <details className="options-inline-details"><summary>Weight sources</summary><WeightProvenance compact weights={data.referenceData?.weights} items={data.constituents} /></details>
     <MarketMetrics data={data} />
-    <MarketContext data={data} />
+    <details className="options-inline-details"><summary>Flows, crude &amp; news</summary><MarketContext data={data} /></details>
     <div className="options-evidence-toolbar">
     {!!data.directionContributions?.length && <InfoPopover label="Directional contribution evidence" showLabel>
       <p>Raw model weights and signed contributions, not probabilities or individual indicator scores. Coverage adjustment makes missing inputs visible.</p>
@@ -596,16 +608,20 @@ function Constituents({ items, weights }: { items: ConstituentValuation[]; weigh
       <tbody>{filtered.map(item => <tr key={item.symbol}>
         <th scope="row">{item.symbol}<small>{item.companyName}</small>
           <small>{number(item.weightPct)}% {weights?.sourceType === 'etf-holdings-proxy' || isEtfProxy(item.weightSource) ? 'equity-normalized ETF proxy weight' : 'captured constituent weight'}</small>
-          <small>Weight as of: {item.weightAsOf || weights?.sourceDate || 'Unavailable'}</small>
-          <small>Weight source: {item.weightSource || weights?.sourceType || 'Unavailable in original snapshot'}</small></th>
+          </th>
         <td>{item.latestQuarterEnd || 'Unavailable'}</td><td>{money(item.livePrice)}</td>
         <td>{money(item.fairLow)} / {money(item.fairBase)} / {money(item.fairHigh)}</td>
-        <td>{signed(item.lowMovePct)} / {signed(item.baseMovePct)} / {signed(item.highMovePct)}</td>
+        <td>{[item.lowMovePct, item.baseMovePct, item.highMovePct].map((move, index) =>
+          <span key={index} className={move != null && move > 0 ? 'options-value-gain' : move != null && move < 0 ? 'options-value-loss' : undefined}>
+            {signed(move)}{index < 2 ? ' / ' : ''}
+          </span>)}</td>
         <td>{item.method}<small>Valuation source: {item.valuationSource || item.method || 'Unavailable'}</small>
           {item.valuationAsOf && <small>Valuation as of: {timestamp(item.valuationAsOf)}</small>}
           {item.analystCount != null && <small>Stored analyst count: {item.analystCount} · twelve-month targets</small>}
           {item.aiModel && <small>Stored stock-AI model: {item.aiModel}</small>}
           <InfoPopover label={`Valuation ${item.symbol}`}>
+          <Facts items={[['Weight as of', item.weightAsOf || weights?.sourceDate || 'Unavailable'],
+            ['Weight source', item.weightSource || weights?.sourceType || 'Unavailable in snapshot']]} />
           <p>{item.reason || (item.fairBase == null ? 'Required valuation inputs unavailable.' : '')}</p>
           {(item.earningsGrowthYoyPct != null || item.revenueGrowthYoyPct != null) && <details className="options-inline-details">
             <summary>Latest-quarter growth inputs</summary>
@@ -718,7 +734,7 @@ function SelectedSellingPlan({ candidate, analysis }: { candidate: OptionCandida
     <IndexExitRule candidate={candidate} />
     <h5>Hedged legs · reference premiums</h5>
     <ul className="options-selected-legs">{candidate.legs.map((leg, index) => <li key={`${leg.tradingSymbol}-${index}`}>
-      <div><strong>{leg.direction.toUpperCase()} {leg.quantity} × {leg.optionType} {number(leg.strike)}</strong><strong>{money(leg.entryPrice)} ref</strong></div>
+      <div><strong className={`options-leg-${leg.direction}`}>{leg.direction.toUpperCase()} {leg.quantity} × {leg.optionType} {number(leg.strike)}</strong><strong>{money(leg.entryPrice)} ref</strong></div>
       <small>{leg.exchange}: {leg.tradingSymbol}</small>
       {leg.priceBasis === 'last-traded-reference' && <small className="options-age-warning">Last-traded reference · no executable book</small>}
     </li>)}</ul>
@@ -803,7 +819,7 @@ function AiSelection({ detail, openCandidate, side = 'selling' }: { detail: Fore
           && !!selectedScenario && item.scenarioIds.includes(selectedScenario.id)
           && (side !== 'selling' || isHedged(item)));
         const conditional = selectedScenario ? candidate?.scenarioProfitProbabilities?.[selectedScenario.id] : undefined;
-        return <article className={`options-selection ${candidate ? 'has-candidate' : 'is-no-trade'}`} key={`${side}-${tier}`}><h4>{side} <span>· {tier} risk</span></h4>
+        return <article className={`options-selection ${candidate ? 'has-candidate' : 'is-no-trade'} options-risk-${tier}`} key={`${side}-${tier}`}><h4>{side} <span className="options-risk-label">· {tier} risk</span></h4>
           {candidate ? <>
             <button type="button" className="options-strategy-link" onClick={() => openCandidate(candidate)}>{candidate.strategy.replaceAll('-', ' ')} <ArrowRight size={14} aria-hidden="true" /></button>
             <ExecutionStatus candidate={candidate} />
@@ -827,100 +843,10 @@ function AiSelection({ detail, openCandidate, side = 'selling' }: { detail: Fore
       })}
     </div>}</>}
     <InfoPopover label="Selection rules & AI usage" showLabel>
-      <p>AI only selects precomputed scenario/candidate IDs. Opening history or changing tabs never requests AI; this page has no separate paid AI rerun.</p>
+      <p>AI selects supplied ranges and candidates. Changing tabs never requests AI.</p>
       <p>AI usage: {number(ai?.inputTokens)} input / {number(ai?.outputTokens)} output tokens · cost USD {number(ai?.costUsd)}.</p>
       <Warnings items={ai?.selection?.recommendations.filter(item => item.side === side && !item.candidateId).map(item => item.reason)} />
     </InfoPopover>
-  </section>;
-}
-
-function forecastDeletionReason(item: ForecastSummary, detail?: ForecastDetail | null, job?: JobRun | null) {
-  const active = (status?: string | null) => !!status && ['pending', 'queued', 'running', 'processing', 'in_progress'].includes(status.toLowerCase());
-  if (active(item.status)) return 'Forecast is still active.';
-  if (active(item.aiStatus) || active(item.ai?.status) || active(detail?.ai?.status)) return 'AI selection is still active.';
-  if (active(item.jobStatus) || active(item.jobRunStatus) || active(job?.status)) return 'Forecast job is still active.';
-  return '';
-}
-
-function forecastAfterRemoval(items: ForecastSummary[], selectedId: number | null, removedId: number) {
-  const history = items.filter(item => item.id !== removedId);
-  return { history, selectedId: selectedId === removedId ? history[0]?.id ?? null : selectedId };
-}
-
-function ConfirmForecastDelete({ id, reason, cancel, confirm, returnFocus }: {
-  id: number; reason: string; cancel: () => void; confirm: () => void; returnFocus: HTMLButtonElement | null;
-}) {
-  const labelId = useId();
-  const cancelButton = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    cancelButton.current?.focus();
-    return () => { if (returnFocus?.isConnected) returnFocus.focus(); };
-  }, [returnFocus]);
-  return <div className="options-delete-overlay">
-    <section className="options-delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby={`${labelId}-title`} aria-describedby={`${labelId}-description`}
-      onKeyDown={event => {
-        if (event.key === 'Escape') { event.preventDefault(); cancel(); }
-        if (event.key === 'Tab') {
-          const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
-          const first = buttons[0], last = buttons[buttons.length - 1];
-          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-          else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-        }
-      }}>
-      <h3 id={`${labelId}-title`}>Delete forecast #{id}?</h3>
-      <p id={`${labelId}-description`}>This permanently removes this saved forecast from your history. This cannot be undone.</p>
-      {reason && <p role="status">{reason} Wait for it to finish before deleting.</p>}
-      <div className="options-delete-actions">
-        <button ref={cancelButton} className="btn btn-secondary" onClick={cancel}>Cancel</button>
-        <button className="btn options-delete-confirm" disabled={!!reason} onClick={() => { if (!reason) confirm(); }}>Delete permanently</button>
-      </div>
-    </section>
-  </div>;
-}
-
-function History({ items, selectedId, open, onDelete, deletingId = null, detail, job }: {
-  items: ForecastSummary[]; selectedId: number | null; open: (id: number) => void;
-  onDelete?: (id: number) => void; deletingId?: number | null; detail?: ForecastDetail | null; job?: JobRun | null;
-}) {
-  const [status, setStatus] = useState('');
-  const [targetDate, setTargetDate] = useState('');
-  const [generatedDate, setGeneratedDate] = useState('');
-  const [confirmation, setConfirmation] = useState<{ id: number; trigger: HTMLButtonElement } | null>(null);
-  const reasonFor = (item: ForecastSummary) => forecastDeletionReason(item, detail?.id === item.id ? detail : null, item.jobRunId === job?.id ? job : null);
-  const confirming = items.find(item => item.id === confirmation?.id);
-  const istDate = (value?: string | null) => timestamp(value) !== 'Unavailable'
-    ? new Date(value!.trim()).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) : '';
-  const filtered = items.filter(item => (!status || item.status === status)
-    && (!targetDate || istDate(item.targetAt) === targetDate) && (!generatedDate || istDate(item.generatedAt) === generatedDate));
-  return <section className="options-card">
-    <div className="options-section-heading"><h3>Immutable forecast history</h3><InfoPopover label="Forecast history">
-      <p>Index and mode filters above scope this list. Each explicit successful generation is a separate original prediction, never a reconstructed past forecast.</p>
-    </InfoPopover></div>
-    <div className="options-controls">
-      <label>Status<select value={status} onChange={event => setStatus(event.target.value)}><option value="">All</option>
-        {[...new Set(items.map(item => item.status))].map(value => <option key={value}>{value}</option>)}</select></label>
-      <label>Target / expiry date (IST)<input type="date" value={targetDate} onChange={event => setTargetDate(event.target.value)} /></label>
-      <label>Generated date (IST)<input type="date" value={generatedDate} onChange={event => setGeneratedDate(event.target.value)} /></label>
-    </div>
-    <div className="options-table-wrap"><table><thead><tr><th>Original version</th><th>Generated (IST)</th><th>Target (IST)</th><th>Status</th><th>Model</th><th>Actions</th></tr></thead>
-      <tbody>{filtered.map(item => <tr key={item.id} aria-current={selectedId === item.id ? 'true' : undefined}>
-        <th scope="row"><button className="btn btn-secondary" onClick={() => open(item.id)}>Open #{item.id} · {item.indexCode} · {item.mode}</button></th>
-        <td>{timestamp(item.generatedAt)}</td><td>{timestamp(item.targetAt)}</td><td>{item.status}</td><td>{item.modelVersion || 'Unavailable'}</td>
-        <td><button className="options-icon-button options-history-delete" aria-label={`${deletingId === item.id ? 'Deleting' : 'Delete'} forecast #${item.id}`}
-          title={reasonFor(item) || (deletingId != null ? 'A forecast deletion is in progress.' : 'Delete this saved forecast')}
-          disabled={!onDelete || deletingId != null || !!reasonFor(item)}
-          onClick={event => {
-            if (!onDelete || deletingId != null || reasonFor(item)) return;
-            setConfirmation({ id: item.id, trigger: event.currentTarget });
-          }}>{deletingId === item.id ? <LoaderCircle size={16} className="options-spin" aria-hidden="true" /> : <Trash2 size={16} aria-hidden="true" />}</button>
-          {reasonFor(item) && <small className="options-delete-reason">{reasonFor(item)}</small>}
-        </td>
-      </tr>)}</tbody></table></div>
-    {!filtered.length && <p>No forecasts match. Use Get Forecast explicitly to create a prospective prediction.</p>}
-    {confirming && onDelete && <ConfirmForecastDelete id={confirming.id}
-      reason={reasonFor(confirming) || (deletingId != null ? 'A forecast deletion is in progress.' : '')}
-      returnFocus={confirmation?.trigger || null} cancel={() => setConfirmation(null)}
-      confirm={() => { setConfirmation(null); onDelete(confirming.id); }} />}
   </section>;
 }
 
@@ -980,7 +906,7 @@ function Reconciliation({ detail }: { detail: ForecastDetail }) {
 }
 
 const tabId = (tab: Tab) => tab.toLowerCase().replaceAll(' ', '-');
-function WorkspaceTabs({ tab, onChange, historyCount }: { tab: Tab; onChange: (tab: Tab) => void; historyCount: number }) {
+function WorkspaceTabs({ tab, onChange }: { tab: Tab; onChange: (tab: Tab) => void }) {
   function keyboard(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
     const next = event.key === 'ArrowRight' ? (index + 1) % TABS.length : event.key === 'ArrowLeft' ? (index + TABS.length - 1) % TABS.length
       : event.key === 'Home' ? 0 : event.key === 'End' ? TABS.length - 1 : null;
@@ -993,7 +919,7 @@ function WorkspaceTabs({ tab, onChange, historyCount }: { tab: Tab; onChange: (t
     <button key={item} id={`options-tab-${tabId(item)}`} type="button" role="tab" className={`options-tab ${tab === item ? 'is-active' : ''}`}
       aria-selected={tab === item} aria-controls={`options-panel-${tabId(item)}`} tabIndex={tab === item ? 0 : -1}
       onKeyDown={event => keyboard(event, index)} onClick={() => onChange(item)}>
-      {item}{item === 'History' && <span className="options-count">{historyCount}</span>}
+      {item}
     </button>)}</nav>;
 }
 function ForecastVersionBar({ detail, clock }: { detail: ForecastDetail; clock: number }) {
@@ -1011,7 +937,8 @@ function ForecastVersionBar({ detail, clock }: { detail: ForecastDetail; clock: 
     /authentication|unauthorized|forbidden|credentials|access token|re-login|login required/i.test(item))].filter((item): item is string => !!item))];
   return <>
     <section className="options-version-bar" aria-label="Selected forecast">
-      <strong>Forecast #{detail.id} <span>{detail.indexCode} · {detail.mode}</span></strong>
+      <strong>Latest analysis <span>{detail.indexCode} · {detail.mode}</span></strong>
+      <span>{timestamp(detail.generatedAt)}</span>
       <span>Target {timestamp(detail.targetAt || analysis?.scenarios[0]?.targetAt || analysis?.plannedExitAt)}</span><span className={`options-status ${detail.status === 'failed' ? 'is-attention' : 'is-pending'}`}>{detail.status}</span>
     </section>
     {snapshot?.source === 'persisted-broker-snapshot' && <div className="options-snapshot-reference" aria-label="Snapshot source">
@@ -1024,7 +951,8 @@ function ForecastVersionBar({ detail, clock }: { detail: ForecastDetail; clock: 
       </InfoPopover>
     </div>}
     <p className="options-execution-notice">
-      {planning ? 'Planning only · NOT currently executable. Last-session observations, not official closing prints; revalidate live.'
+      {detail.status === 'failed' ? 'Latest run failed · no previous prediction substituted.'
+        : planning ? 'Planning only · NOT currently executable. Last-session observations, not official closing prints; revalidate live.'
         : unavailable ? 'No executable option snapshot · forecast price ranges remain available where supplied.'
           : historical ? 'Historical snapshot · planned exit passed. Not a fresh entry suggestion.'
           : 'Research snapshot · live quote revalidation required before considering any entry.'}
@@ -1033,20 +961,18 @@ function ForecastVersionBar({ detail, clock }: { detail: ForecastDetail; clock: 
     {critical.map(item => <p className="options-error" role="alert" key={item}>{item}</p>)}
   </>;
 }
-function ForecastViews({ tab, onTabChange, detail, history, selectedId, open, openCandidate, clock, job, onDelete, deletingId }: {
-  tab: Tab; onTabChange: (tab: Tab) => void; detail: ForecastDetail | null; history: ForecastSummary[];
-  selectedId: number | null; open: (id: number) => void; openCandidate: (candidate: OptionCandidate) => void; clock: number; job: JobRun | null;
-  onDelete?: (id: number) => void; deletingId?: number | null;
+function ForecastViews({ tab, detail, openCandidate, clock, job }: {
+  tab: Tab; detail: ForecastDetail | null;
+  openCandidate: (candidate: OptionCandidate) => void; clock: number; job: JobRun | null;
 }) {
   const data = detail?.analysis;
   return <>
-    <WorkspaceTabs tab={tab} onChange={onTabChange} historyCount={history.length} />
     {detail && <ForecastVersionBar detail={detail} clock={clock} />}
     <section className="options-panel" role="tabpanel" id={`options-panel-${tabId(tab)}`} aria-labelledby={`options-tab-${tabId(tab)}`} tabIndex={0}>
-      {tab === 'History' ? <><History items={history} selectedId={selectedId} open={open} onDelete={onDelete} deletingId={deletingId} detail={detail} job={job} />{detail && <Reconciliation detail={detail} />}</>
-        : data && detail ? <>
+      {data && detail ? <>
           {tab === 'Analysis' && <>
             <Analysis data={data} targetAt={detail.targetAt} ai={detail.ai} />
+            {detail.outcome && <details className="options-inline-details"><summary>Latest run outcome</summary><Reconciliation detail={detail} /></details>}
             <InfoPopover label="Saved version timing & pipeline evidence" showLabel>
               <Facts items={[['Generated', timestamp(detail.generatedAt)], ['Input cutoff', timestamp(detail.inputCutoffAt)],
                 ['Snapshot as of', timestamp(data.asOf)], ['Underlying quote observed', timestamp(data.spotObservedAt)],
@@ -1060,14 +986,17 @@ function ForecastViews({ tab, onTabChange, detail, history, selectedId, open, op
               {job && <><h4>Recorded pipeline progress</h4><pre>{evidenceJson(job)}</pre></>}
             </InfoPopover>
           </>}
-          {tab === 'Constituents' && <><StructuralFundamentalRange value={data.fundamentalRange} /><FundamentalInfluences data={data} /><Constituents key={detail.id} items={data.constituents} weights={data.referenceData?.weights} /></>}
-          {tab === 'Selling Strategies' && <><AiSelection side="selling" detail={detail} openCandidate={openCandidate} /><Strategies key={`${detail.id}-selling`} side="selling" candidates={data.candidates} /></>}
-          {tab === 'Buying Strategies' && <><AiSelection side="buying" detail={detail} openCandidate={openCandidate} /><Strategies key={`${detail.id}-buying`} side="buying" candidates={data.candidates} /></>}
+          {tab === 'Constituents' && <><details className="options-inline-details"><summary>Structural valuation &amp; fundamental indicators</summary><StructuralFundamentalRange value={data.fundamentalRange} /><FundamentalInfluences data={data} /></details><Constituents key={detail.id} items={data.constituents} weights={data.referenceData?.weights} /></>}
+          {(tab === 'Selling Strategies' || tab === 'Buying Strategies') && <>
+            <AiSelection side={tab === 'Selling Strategies' ? 'selling' : 'buying'} detail={detail} openCandidate={openCandidate} />
+            <details className="options-inline-details"><summary>All {tab === 'Selling Strategies' ? 'selling' : 'buying'} alternatives</summary>
+              <Strategies key={`${detail.id}-${tab}`} side={tab === 'Selling Strategies' ? 'selling' : 'buying'} candidates={data.candidates} />
+            </details>
+          </>}
         </> : <section className="options-empty">
-          <h2>{tab === 'Analysis' ? 'Your forecast price ranges will appear here' : tab === 'Constituents' ? 'No constituent snapshot selected' : `No ${tab === 'Selling Strategies' ? 'selling' : 'buying'} strategy snapshot selected`}</h2>
-          <p>{detail && ['queued', 'running'].includes(detail.status) ? 'This forecast is in progress. The saved analysis will appear automatically.'
-            : 'Select a saved forecast from History or explicitly get a new forecast. Opening this panel never starts AI.'}</p>
-          <button className="btn btn-secondary" onClick={() => onTabChange('History')}>Browse history</button>
+          <h2>{detail?.status === 'failed' ? 'Latest analysis failed' : tab === 'Analysis' ? 'Your forecast price ranges will appear here' : tab === 'Constituents' ? 'No constituent snapshot selected' : `No ${tab === 'Selling Strategies' ? 'selling' : 'buying'} strategy snapshot selected`}</h2>
+          <p>{detail && ['queued', 'running'].includes(detail.status) ? 'Analysis in progress.'
+            : 'Run Get Forecast to analyse. Only the latest result is shown.'}</p>
         </section>}
     </section>
   </>;
@@ -1077,41 +1006,32 @@ export default function OptionsPage() {
   const [search, setSearch] = useSearchParams();
   const [indexCode, setIndexCode] = useState<IndexCode>('NIFTY50');
   const [mode, setMode] = useState<ForecastMode>('daily');
-  const [tab, setTab] = useState<Tab>('Analysis');
+  const requestedTab = search.get('tab') ?? (search.has('connection') ? sessionStorage.getItem(TAB_STORAGE_KEY) : null);
+  const tab = TABS.find(item => tabId(item) === requestedTab) ?? 'Analysis';
+  const showStrangle = tab === 'Strangle Selling';
+  function setTab(next: Tab) {
+    setSearch(previous => {
+      const updated = new URLSearchParams(previous);
+      updated.set('tab', tabId(next));
+      return updated;
+    });
+  }
   const [connection, setConnection] = useState<BrokerConnection | null>(null);
   const [metadata, setMetadata] = useState<OptionsMetadata | null>(null);
-  const [history, setHistory] = useState<ForecastSummary[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [detail, setDetail] = useState<ForecastDetail | null>(null);
   const [job, setJob] = useState<JobRun | null>(null);
   const [error, setError] = useState('');
   const [connectionError, setConnectionError] = useState('');
-  const [deleteError, setDeleteError] = useState('');
-  const [deleteNotice, setDeleteNotice] = useState('');
-  const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [connectionBusy, setConnectionBusy] = useState(false);
   const [revision, setRevision] = useState(0);
   const [clock, setClock] = useState(() => Date.now());
   const pendingRequest = useRef<{ indexCode: IndexCode; mode: ForecastMode; id: string } | null>(null);
-  const deletedIds = useRef(new Set<number>());
-  const deletingRef = useRef<number | null>(null);
-  const workspace = useRef({ history, selectedId, detail, job });
   const callbackStatus = search.get('connection');
 
-  useEffect(() => { workspace.current = { history, selectedId, detail, job }; }, [history, selectedId, detail, job]);
-  const evictForecast = useCallback((id: number, notice: string) => {
-    deletedIds.current.add(id);
-    const current = workspace.current;
-    const next = forecastAfterRemoval(current.history, current.selectedId, id);
-    workspace.current = { ...current, ...next, detail: current.detail?.id === id ? null : current.detail };
-    setHistory(next.history);
-    setSelectedId(selected => selected === id ? next.selectedId : selected);
-    setDetail(selected => selected?.id === id ? null : selected);
-    if (current.selectedId === id) { setJob(null); setLoading(next.selectedId != null); setError(''); }
-    setDeleteNotice(notice);
-  }, []);
+  useEffect(() => { sessionStorage.setItem(TAB_STORAGE_KEY, tabId(tab)); }, [tab]);
 
   useEffect(() => {
     const timer = setInterval(() => setClock(Date.now()), 30_000);
@@ -1127,13 +1047,12 @@ export default function OptionsPage() {
   }, [revision]);
   useEffect(() => {
     let active = true;
-    fetchOptionsForecasts(indexCode, mode).then(value => {
+    fetchLatestOptionsForecast(indexCode, mode).then(value => {
       if (!active) return;
-      const items = value.items.filter(item => !deletedIds.current.has(item.id));
-      setHistory(items);
-      setSelectedId(current => current != null && !deletedIds.current.has(current) ? current : items[0]?.id ?? null);
+      setSelectedId(current => value ? Math.max(current ?? 0, value.id) : null);
+      if (!value) { setDetail(null); setJob(null); setLoading(false); }
     })
-      .catch(error => { if (active) setError(message(error)); });
+      .catch(error => { if (active) { setError(message(error)); setLoading(false); } });
     return () => { active = false; };
   }, [indexCode, mode, revision]);
   useEffect(() => {
@@ -1142,14 +1061,13 @@ export default function OptionsPage() {
     let timer: ReturnType<typeof setTimeout>;
     let failures = 0;
     async function poll() {
-      if (!active || deletedIds.current.has(selectedId!) || deletingRef.current === selectedId) return;
+      if (!active) return;
       try {
         const value = await fetchOptionsForecast(selectedId!);
-        if (!active || deletedIds.current.has(selectedId!) || deletingRef.current === selectedId) return;
+        if (!active) return;
         failures = 0;
         setDetail(value);
         setError('');
-        setHistory(items => items.map(item => item.id === value.id ? { ...item, ...value } : item));
         if (value.jobRunId && ['queued', 'running'].includes(value.status)) {
           try {
             const progress = await fetchJobRun(value.jobRunId);
@@ -1158,49 +1076,19 @@ export default function OptionsPage() {
         }
         if (active && isWorking(value)) timer = setTimeout(poll, 3000);
       } catch (error) {
-        if (!active || deletedIds.current.has(selectedId!) || deletingRef.current === selectedId) return;
+        if (!active) return;
         if (error instanceof OptionsApiError && error.status === 404) {
-          evictForecast(selectedId!, `Forecast #${selectedId} was deleted or is no longer available. History refreshed.`);
-          setRevision(value => value + 1);
+          setSelectedId(null); setDetail(null); setJob(null);
+          setError('Latest analysis is no longer available. Refresh to reload.');
           return;
         }
         setError(message(error));
         if (++failures < 3) timer = setTimeout(poll, 10_000);
-      } finally { if (active && !deletedIds.current.has(selectedId!)) setLoading(false); }
+      } finally { if (active) setLoading(false); }
     }
     void poll();
     return () => { active = false; clearTimeout(timer); };
-  }, [selectedId, revision, evictForecast]);
-
-  async function removeForecast(id: number) {
-    if (deletingRef.current != null) return;
-    const current = workspace.current;
-    const item = current.history.find(item => item.id === id);
-    if (!item) { setDeleteError('This forecast is no longer listed. Refresh history before deleting.'); return; }
-    const reason = forecastDeletionReason(item, current.detail?.id === id ? current.detail : null, item.jobRunId === current.job?.id ? current.job : null);
-    if (reason) { setDeleteError(`${reason} Wait for it to finish before deleting.`); return; }
-    deletingRef.current = id;
-    setDeletingId(id);
-    setDeleteError('');
-    setDeleteNotice('');
-    try {
-      await deleteForecast(id);
-      evictForecast(id, `Forecast #${id} deleted.`);
-    } catch (error) {
-      if (error instanceof OptionsApiError && error.status === 404) {
-        evictForecast(id, `Forecast #${id} was already deleted or is no longer available. History refreshed.`);
-        setRevision(value => value + 1);
-      } else {
-        const explanation = error instanceof OptionsApiError && error.status === 403
-          ? 'You do not have permission to delete this forecast.'
-          : error instanceof OptionsApiError && error.status === 409
-            ? 'This forecast, its AI selection or its job is active. Wait for it to finish before deleting.'
-            : 'Could not delete the forecast.';
-        setDeleteError(`${explanation} ${message(error)}`);
-        setRevision(value => value + 1);
-      }
-    } finally { deletingRef.current = null; setDeletingId(null); }
-  }
+  }, [selectedId, revision]);
 
   async function login() {
     setConnectionBusy(true);
@@ -1225,6 +1113,7 @@ export default function OptionsPage() {
     if (busy || !connected || (detail && isWorking(detail))) return;
     setBusy(true);
     setError('');
+    setSelectedId(null); setDetail(null); setJob(null);
     if (!pendingRequest.current || pendingRequest.current.indexCode !== indexCode || pendingRequest.current.mode !== mode) {
       pendingRequest.current = { indexCode, mode, id: crypto.randomUUID() };
     }
@@ -1238,13 +1127,9 @@ export default function OptionsPage() {
     finally { setBusy(false); }
   }
   function changeSelection(nextIndex: IndexCode, nextMode: ForecastMode) {
-    setIndexCode(nextIndex); setMode(nextMode); setSelectedId(null); setDetail(null); setJob(null); setHistory([]); setError(''); setLoading(false);
-    workspace.current = { history: [], selectedId: null, detail: null, job: null };
-    setDeleteError(''); setDeleteNotice('');
+    setIndexCode(nextIndex); setMode(nextMode); setSelectedId(null); setDetail(null); setJob(null); setError(''); setLoading(true);
   }
   function selectForecast(id: number) {
-    if (deletedIds.current.has(id)) return;
-    workspace.current = { ...workspace.current, selectedId: id, detail: null, job: null };
     setSelectedId(id); setDetail(null); setJob(null); setLoading(true);
     if (selectedId === id) setRevision(value => value + 1);
   }
@@ -1252,7 +1137,12 @@ export default function OptionsPage() {
     setTab(candidate.side === 'selling' ? 'Selling Strategies' : 'Buying Strategies');
     requestAnimationFrame(() => {
       const element = document.getElementById(`option-candidate-${candidate.id}`) as HTMLDetailsElement | null;
-      if (element) { element.open = true; element.scrollIntoView({ behavior: 'smooth', block: 'center' }); element.querySelector('summary')?.focus(); }
+      if (element) {
+        for (let parent: HTMLElement | null = element; parent; parent = parent.parentElement) {
+          if (parent instanceof HTMLDetailsElement) parent.open = true;
+        }
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' }); element.querySelector('summary')?.focus();
+      }
     });
   }
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(clock);
@@ -1273,20 +1163,25 @@ export default function OptionsPage() {
       <div><NavLink to="/india" className="back-link"><ChevronLeft size={16} /> Indian Market</NavLink><h1>Index Options</h1></div>
       <span className="options-research-badge"><ShieldCheck size={16} aria-hidden="true" /> Research only</span>
     </header>
-    <p className="options-disclosure">Hypothetical research. No orders or automatic exits. No guaranteed returns; low risk does not mean safe.</p>
+    <p className="options-disclosure">Snapshots only · no orders or automatic exits · no guaranteed returns.</p>
     <BrokerBar connection={connection} error={connectionError} callbackStatus={callbackStatus} busy={connectionBusy} clock={clock}
       login={login} disconnect={disconnect} refresh={() => {
+        setLoading(true);
         setRevision(value => value + 1);
-        if (callbackStatus) { const next = new URLSearchParams(search); next.delete('connection'); setSearch(next, { replace: true }); }
+        if (callbackStatus) { const next = new URLSearchParams(search); next.delete('connection'); next.set('tab', tabId(tab)); setSearch(next, { replace: true }); }
       }} />
+    <WorkspaceTabs tab={tab} onChange={setTab} />
+    <section className="options-panel" role="tabpanel" id="options-panel-strangle-selling" aria-labelledby="options-tab-strangle-selling" hidden={!showStrangle} tabIndex={0}>
+      <StrangleSellingTab active={showStrangle} />
+    </section>
+    <div hidden={showStrangle}>
     <ForecastComposer indexCode={indexCode} mode={mode} dailyLabel={dailyLabel} connected={connected} runState={runState}
-      missingCalendar={mode === 'daily' && !todaySession} changeSelection={changeSelection} generate={generate} compact={!!detail} />
+      missingCalendar={mode === 'daily' && !todaySession} changeSelection={changeSelection} generate={generate} compact />
     {error && <p className="options-error" role="alert">{error}</p>}
-    {deleteError && <p className="options-error" role="alert">{deleteError}</p>}
-    {deleteNotice && <p className="options-delete-notice" role="status">{deleteNotice}</p>}
     {loading && <p className="options-loading" role="status"><LoaderCircle className="options-spin" size={16} aria-hidden="true" /> Loading saved forecast…</p>}
     {detail && isWorking(detail) && <p className="options-loading" role="status"><LoaderCircle className="options-spin" size={15} aria-hidden="true" /> {runState === 'selecting' ? 'Final AI selection in progress' : 'Forecast in progress'} · updates automatically{job ? ` · ${number(job.progress)}%` : ''}</p>}
-    <ForecastViews tab={tab} onTabChange={setTab} detail={detail} history={history} selectedId={selectedId}
-      open={selectForecast} openCandidate={openCandidate} clock={clock} job={job} onDelete={removeForecast} deletingId={deletingId} />
+    <ForecastViews tab={showStrangle ? 'Analysis' : tab} detail={detail}
+      openCandidate={openCandidate} clock={clock} job={job} />
+    </div>
   </main>;
 }

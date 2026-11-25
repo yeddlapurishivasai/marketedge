@@ -26,8 +26,9 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $WorkerDir = Join-Path $RepoRoot "src\MarketEdge.Worker"
 $IngestionDir = Join-Path $RepoRoot "src\MarketEdge.Ingestion"
-$ZipPath = Join-Path $env:TEMP "marketedge-worker.zip"
-$StageDir = Join-Path $env:TEMP "marketedge-worker-stage"
+$deploymentId = [Guid]::NewGuid().ToString("N")
+$ZipPath = Join-Path $env:TEMP "marketedge-worker-$deploymentId.zip"
+$StageDir = Join-Path $env:TEMP "marketedge-worker-stage-$deploymentId"
 
 # Stage the worker tree (recursively) plus the bundled ingestion project, so the worker
 # ships its scanners/ subpackage AND the ingestion CLI it now runs out-of-process.

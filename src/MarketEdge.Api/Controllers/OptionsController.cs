@@ -70,8 +70,8 @@ public sealed class OptionsController(OptionsWorkspaceService workspace, Options
     }
 
     [HttpGet("forecasts")]
-    public async Task<IActionResult> List([FromQuery] string? indexCode, [FromQuery] string? mode, CancellationToken ct) =>
-        Ok(await workspace.ListAsync(UserKey, indexCode, mode, ct));
+    public async Task<IActionResult> List([FromQuery] string? indexCode, [FromQuery] string? mode, CancellationToken ct, [FromQuery] int limit = 100) =>
+        Ok(await workspace.ListAsync(UserKey, indexCode, mode, ct, limit));
 
     [HttpGet("forecasts/{id:int}")]
     public async Task<IActionResult> Detail(int id, CancellationToken ct)

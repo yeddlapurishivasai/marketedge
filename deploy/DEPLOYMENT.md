@@ -140,6 +140,22 @@ bundles it into `wwwroot`, so this single script covers **API + UI + Worker**.
 
 App settings/connection strings are **not** changed unless you pass `-Configure`
 (only needed on first deploy or when settings change).
+This preserves existing Azure AI Foundry endpoint, model, key and broker settings.
+For an existing environment with schema changes, publish the dacpac first and
+then run `deploy-apps.ps1` without `-Configure`; `deploy-all.ps1` always reapplies
+the base connection settings.
+
+The database script explicitly selects the SQL SDK's .NET Core build path and
+`netstandard2.1` target, including on Windows. App packages use unique temporary
+paths so simultaneous deployments do not overwrite each other's staging files.
+API publishing uses existing frontend dependencies, or `npm ci` if they are
+absent, and still rebuilds the React production assets.
+
+The strangle worker also requires explicit annualized decimal
+`MARKETEDGE_STRANGLE_RISK_FREE_RATE` and `MARKETEDGE_STRANGLE_DIVIDEND_YIELD`.
+These are pricing inputs, separate from the already configured AI model.
+Missing inputs deliberately leave IV/Greeks/X suggestions unavailable; deployment
+does not invent rates or yields. See the [options guide](../src/MarketEdge.Api/Options.md).
 
 ---
 
