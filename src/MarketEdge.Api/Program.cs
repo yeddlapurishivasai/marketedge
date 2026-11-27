@@ -31,6 +31,7 @@ builder.Services.AddSingleton(_ => new QueueClient(storageConnectionString, queu
 builder.Services.AddScoped<ISectorService, SectorService>();
 builder.Services.AddScoped<IStockService, StockService>();
 builder.Services.AddScoped<IJobService, JobService>();
+builder.Services.AddScoped<IStage4AnalysisService, Stage4AnalysisService>();
 builder.Services.AddScoped<IIngestionService, IngestionService>();
 builder.Services.AddScoped<ILookupService, LookupService>();
 builder.Services.AddScoped<IScannerService, ScannerService>();
@@ -63,6 +64,7 @@ builder.Services.AddHostedService<OptionsAiSelectionProcessor>();
 builder.Services.AddHostedService<ScannerScheduleService>();
 builder.Services.AddHostedService<FundamentalsScheduleService>();
 builder.Services.AddHostedService<Stage2ScheduleService>();
+builder.Services.AddHostedService<Stage4ScheduleService>();
 builder.Services.AddHostedService<MarketRegimeScheduleService>();
 builder.Services.AddHostedService<AiAnalysisBatchProcessor>();
 builder.Services.AddHostedService<AiAnalysisScheduleService>();

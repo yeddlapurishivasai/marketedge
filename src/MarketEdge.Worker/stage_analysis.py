@@ -75,7 +75,11 @@ def load_weekly_price_from_db(conn, market: str, symbol: str, end_date: date | N
         ],
         columns=["Date", "Open", "High", "Low", "Close", "Volume"],
     ).set_index("Date")
-    return _resample_weekly(df)
+    weekly = _resample_weekly(df)
+    daily_close = pd.to_numeric(df["Close"], errors="coerce")
+    valid_close = daily_close.notna() & np.isfinite(daily_close) & (daily_close > 0)
+    weekly.attrs["last_bar_date"] = df.index[valid_close].max().date() if valid_close.any() else None
+    return weekly
 
 
 def load_market_cap_from_db(conn, market: str, symbol: str) -> int | None:
@@ -124,7 +128,11 @@ def fetch_benchmark_weekly_from_daily(market: str, end_date: date | None = None)
     weekly = _resample_weekly(raw)
     if weekly.empty:
         raise ValueError(f"Unable to fetch benchmark data for market {market}")
-    return weekly.tail(60)
+    weekly = weekly.tail(60)
+    daily_close = pd.to_numeric(raw["Close"], errors="coerce")
+    valid_close = daily_close.notna() & np.isfinite(daily_close) & (daily_close > 0)
+    weekly.attrs["last_bar_date"] = raw.index[valid_close].max().date() if valid_close.any() else None
+    return weekly
 
 
 def week_exclusive_end(week_number: str) -> date | None:
@@ -430,7 +438,7 @@ def compute_daily_squeeze(conn, market: str, symbol: str, end_date=None) -> dict
         return dict(EMPTY_SQUEEZE)
 
 
-def calculate_stage2(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> dict | None:
+def _calculate_weekly_indicators(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> dict | None:
     if stock_data is None or stock_data.empty or len(stock_data) < 30:
         return None
 
@@ -554,26 +562,13 @@ def calculate_stage2(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> 
     else:
         ad_classification = "neutral"
 
-    sma30_rising = False
-    if len(ma30_series.dropna()) >= 5:
-        sma30_rising = bool(ma30_series.iloc[-1] > ma30_series.iloc[-5])
-
-    is_stage2 = bool(
-        ma30 is not None
-        and ma10 is not None
-        and close.iloc[-1] > ma30
-        and sma30_rising
-        and close.iloc[-1] > ma10
-        and ma10 > ma30
-        and rs_score is not None
-        and rs_score > 0
-    )
+    ma30_four_weeks_ago = float(ma30_series.iloc[-5]) if len(ma30_series.dropna()) >= 5 else None
 
     return {
         "close_price": float(close.iloc[-1]),
         "ma10": ma10,
         "ma30": ma30,
-        "is_stage2": is_stage2,
+        "ma30_four_weeks_ago": ma30_four_weeks_ago,
         "rs_score": rs_score,
         "rs_1w": rs_1w,
         "rs_2w": rs_2w,
@@ -589,6 +584,55 @@ def calculate_stage2(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> 
         "ad_ratio": ad_ratio,
         "ad_classification": ad_classification,
     }
+
+
+def calculate_stage2(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> dict | None:
+    indicators = _calculate_weekly_indicators(stock_data, benchmark_data)
+    if indicators is None:
+        return None
+    prior_ma30 = indicators.pop("ma30_four_weeks_ago")
+    close, ma10, ma30, rs = (
+        indicators["close_price"], indicators["ma10"], indicators["ma30"], indicators["rs_score"]
+    )
+    indicators["is_stage2"] = bool(
+        ma30 is not None and ma10 is not None and prior_ma30 is not None
+        and close > ma30 and ma30 > prior_ma30 and close > ma10 and ma10 > ma30
+        and rs is not None and rs > 0
+    )
+    return indicators
+
+
+def calculate_stage4(stock_data: pd.DataFrame, benchmark_data: pd.DataFrame) -> dict | None:
+    """Bearish mirror of Stage 2; incomplete/invalid evidence is not a negative result."""
+    for frame in (stock_data, benchmark_data):
+        if frame is None or frame.empty or len(frame) < 52 or "Close" not in frame.columns:
+            return None
+        if frame.index.has_duplicates:
+            return None
+        closes = pd.to_numeric(frame["Close"], errors="coerce")
+        if not np.isfinite(closes).all() or (closes <= 0).any():
+            return None
+    stock_data = stock_data.sort_index()
+    benchmark_data = benchmark_data.sort_index()
+    aligned_stock, _ = stock_data["Close"].align(benchmark_data["Close"], join="inner")
+    if len(aligned_stock) < 52 or stock_data.index[-1] != benchmark_data.index[-1]:
+        return None
+    for column in ("Open", "High", "Low", "Volume"):
+        if column in stock_data:
+            values = pd.to_numeric(stock_data[column], errors="coerce")
+            if not np.isfinite(values).all() or (values < 0).any():
+                return None
+    indicators = _calculate_weekly_indicators(stock_data, benchmark_data)
+    if indicators is None:
+        return None
+    required = ("close_price", "ma10", "ma30", "ma30_four_weeks_ago", "rs_score")
+    if any(indicators[k] is None or not math.isfinite(indicators[k]) for k in required):
+        return None
+    close, ma10, ma30, prior_ma30, rs = (indicators[k] for k in required)
+    indicators["is_stage4"] = bool(
+        close < ma30 and close < ma10 and ma10 < ma30 and ma30 < prior_ma30 and rs < 0
+    )
+    return indicators
 
 
 def classify_stocks(

@@ -3,11 +3,55 @@ using FluentAssertions;
 using MarketEdge.Api.Models;
 using MarketEdge.Api.Services;
 using Moq;
+using System.Text.Json;
 
 namespace MarketEdge.Api.UnitTests.Services;
 
 public class JobServiceTests
 {
+    [Theory]
+    [InlineData("stage4_analysis")]
+    [InlineData("stage2_analysis")]
+    public async Task GetRunsAndDetail_StripOnlyStage4FrozenUniverseArrays(string jobType)
+    {
+        using var db = DbContextFactory.Create();
+        const string parameters = """
+            {"scope":"filtered","minMarketCap":100,"maxMarketCap":1000,"sectorIds":[9],"limit":20,
+            "testSampleOnly":false,"eligibilityCapturedAt":"2026-11-14T00:00:00","retrySourceRunId":4,
+            "universeSymbols":["FIRST","SECOND"],"universeSnapshot":[
+                {"symbol":"FIRST","company_name":"First","sector_id":9},
+                {"symbol":"SECOND","company_name":"Second","sector_id":9}
+            ]}
+            """;
+        var job = new JobRun
+        {
+            JobType = jobType, Market = "india", WeekNumber = "2026-W46", Status = "completed",
+            Parameters = parameters, CreatedAt = DateTime.UtcNow
+        };
+        db.JobRuns.Add(job);
+        await db.SaveChangesAsync();
+        var service = new JobService(db, new Mock<QueueClient>().Object);
+        var listed = (await service.GetRunsAsync(jobType: jobType)).Single();
+        var detail = (await service.GetRunByIdAsync(job.Id))!;
+        foreach (var dto in new[] { listed, detail })
+        {
+            dto.Parameters.Should().ContainKeys("scope", "minMarketCap", "maxMarketCap", "sectorIds", "limit",
+                "testSampleOnly", "eligibilityCapturedAt", "retrySourceRunId");
+            if (jobType == "stage4_analysis")
+            {
+                dto.Parameters.Should().NotContainKeys("universeSymbols", "universeSnapshot");
+                dto.Parameters!["universeCount"].Should().Be(2);
+            }
+            else
+            {
+                dto.Parameters.Should().ContainKeys("universeSymbols", "universeSnapshot");
+                dto.Parameters.Should().NotContainKey("universeCount");
+                ((JsonElement)dto.Parameters!["universeSymbols"]).GetArrayLength().Should().Be(2);
+            }
+        }
+        db.JobRuns.Single().Parameters.Should().Be(parameters, "frozen retry metadata must remain persisted unchanged");
+    }
+
     [Fact]
     public async Task GetStage2StocksAsync_PopulatesLatestNonStaleFundamentalScore()
     {

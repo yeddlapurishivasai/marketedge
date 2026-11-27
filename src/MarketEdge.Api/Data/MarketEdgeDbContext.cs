@@ -32,6 +32,9 @@ public class MarketEdgeDbContext : DbContext
     public DbSet<OptionsStrategyOutcome> OptionsStrategyOutcomes => Set<OptionsStrategyOutcome>();
     public DbSet<IndianStageAnalysisResult> IndianStageAnalysisResults => Set<IndianStageAnalysisResult>();
     public DbSet<USStageAnalysisResult> USStageAnalysisResults => Set<USStageAnalysisResult>();
+    public DbSet<IndianStage4AnalysisResult> IndianStage4AnalysisResults => Set<IndianStage4AnalysisResult>();
+    public DbSet<USStage4AnalysisResult> USStage4AnalysisResults => Set<USStage4AnalysisResult>();
+    public DbSet<Stage4Schedule> Stage4Schedules => Set<Stage4Schedule>();
     public DbSet<AiStockAnalysisResult> AiStockAnalysisResults => Set<AiStockAnalysisResult>();
 
     // Stock Lookup (query-only) sets
@@ -112,12 +115,35 @@ public class MarketEdgeDbContext : DbContext
 
         ConfigureDecimalProperties<IndianStageAnalysisResult>(modelBuilder);
         ConfigureDecimalProperties<USStageAnalysisResult>(modelBuilder);
+        ConfigureStage4Entities(modelBuilder);
 
         ConfigureLookupEntities(modelBuilder);
         ConfigureScannerEntities(modelBuilder);
         ConfigureFundamentalEntities(modelBuilder);
         ConfigureRegimeEntities(modelBuilder);
         ConfigureAiAnalysisEntities(modelBuilder);
+    }
+
+    private static void ConfigureStage4Entities(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Stage4Schedule>().HasKey(s => s.Market);
+        modelBuilder.Entity<JobRun>().HasIndex(j => new { j.Market, j.WeekNumber })
+            .IsUnique().HasDatabaseName("UX_JobRuns_Stage4Active")
+            .HasFilter("[JobType] = 'stage4_analysis' AND [Status] IN ('queued', 'running')");
+        foreach (var type in new[] { typeof(IndianStage4AnalysisResult), typeof(USStage4AnalysisResult) })
+        {
+            var entity = modelBuilder.Entity(type);
+            entity.HasOne(typeof(JobRun)).WithMany().HasForeignKey(nameof(Stage4AnalysisResultBase.RunId))
+                .OnDelete(DeleteBehavior.NoAction);
+            entity.HasIndex(nameof(Stage4AnalysisResultBase.RunId), nameof(Stage4AnalysisResultBase.Symbol)).IsUnique();
+            entity.Property(nameof(Stage4AnalysisResultBase.MarketCap)).HasColumnType("decimal(22,2)");
+            entity.Property(nameof(Stage4AnalysisResultBase.ADRatio)).HasColumnType("decimal(20,8)");
+            foreach (var name in new[] { "ClosePrice", "MA10", "MA30", "MA30FourWeeksAgo" })
+                entity.Property(name).HasColumnType("decimal(18,4)");
+            foreach (var name in new[] { "RSScore", "RSDelta1w", "RSDelta2w", "RSDelta3w",
+                "MomentumScore", "ROC1w", "ROC2w", "ROC3w" })
+                entity.Property(name).HasColumnType("decimal(20,8)");
+        }
     }
 
     private static void ConfigureAiAnalysisEntities(ModelBuilder modelBuilder)

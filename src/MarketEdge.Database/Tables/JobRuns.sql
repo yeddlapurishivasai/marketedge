@@ -22,3 +22,8 @@ CREATE TABLE [dbo].[JobRuns]
     INDEX [IX_JobRuns_Status] NONCLUSTERED ([Status]),
     INDEX [IX_JobRuns_CreatedAt] NONCLUSTERED ([CreatedAt] DESC)
 )
+GO
+
+CREATE UNIQUE NONCLUSTERED INDEX [UX_JobRuns_Stage4Active]
+    ON [dbo].[JobRuns] ([Market], [WeekNumber])
+    WHERE [JobType] = 'stage4_analysis' AND [Status] IN ('queued', 'running');

@@ -7,10 +7,7 @@ import {
 } from '../api';
 import { formatMarketCap, formatPrice } from '../format';
 import { StockLookupModal } from './StockLookupPage';
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  LineChart, Line
-} from 'recharts';
+import { AnalysisOverviewCharts } from '../components/AnalysisOverviewCharts';
 import {
   ChevronLeft, Play, TrendingUp, Target, Zap, ArrowDownRight,
   ArrowUpRight, Minus, Filter, BarChart2
@@ -151,7 +148,7 @@ function ChartButton({ symbol, onClick }: { symbol: string; onClick: () => void 
 }
 
 // Custom SVG Quadrant Chart with colored backgrounds and sector labels
-function QuadrantChart({ data, currentDate }: { data: SectorRotation[]; currentDate?: string }) {
+export function QuadrantChart({ data, currentDate }: { data: SectorRotation[]; currentDate?: string }) {
   const W = 900, H = 600;
   const pad = { top: 30, right: 30, bottom: 50, left: 60 };
   const cw = W - pad.left - pad.right;
@@ -478,13 +475,13 @@ export default function AnalysisPage() {
 
   const barData = summary?.bySector.slice(0, 20).map(s => ({
     name: s.sectorName.length > 25 ? s.sectorName.slice(0, 22) + '...' : s.sectorName,
-    stage2: s.stage2Count,
+    count: s.stage2Count,
     total: s.totalCount
   })) || [];
 
   const lineData = history.map(h => ({
     date: new Date(h.runDate).toLocaleDateString(),
-    stage2: h.totalStage2
+    count: h.totalStage2
   }));
 
   return (
@@ -741,41 +738,7 @@ export default function AnalysisPage() {
 
           {/* Overview tab */}
           {tab === 'overview' && (
-            <div className="analysis-grid">
-              {/* Bar chart — Stage 2 by sector */}
-              <div className="chart-card">
-                <h3 className="chart-title">Stage 2 Stocks by Sector (Top 20)</h3>
-                <ResponsiveContainer width="100%" height={400}>
-                  <BarChart data={barData} layout="vertical" margin={{ left: 120, right: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                    <XAxis type="number" stroke="var(--text-muted)" />
-                    <YAxis dataKey="name" type="category" width={120} tick={{ fontSize: 11 }} stroke="var(--text-muted)" />
-                    <Tooltip
-                      contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 }}
-                    />
-                    <Bar dataKey="stage2" fill="var(--primary)" name="Stage 2" radius={[0, 4, 4, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* Line chart — Stage 2 over time */}
-              {lineData.length > 1 && (
-                <div className="chart-card">
-                  <h3 className="chart-title">Stage 2 Count Over Time</h3>
-                  <ResponsiveContainer width="100%" height={300}>
-                    <LineChart data={lineData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                      <XAxis dataKey="date" stroke="var(--text-muted)" tick={{ fontSize: 11 }} />
-                      <YAxis stroke="var(--text-muted)" />
-                      <Tooltip
-                        contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 }}
-                      />
-                      <Line type="monotone" dataKey="stage2" stroke="var(--primary)" strokeWidth={2} dot={{ r: 4 }} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </div>
+            <AnalysisOverviewCharts stage={2} sectors={barData} history={lineData} />
           )}
 
           {/* Top 25 tab */}

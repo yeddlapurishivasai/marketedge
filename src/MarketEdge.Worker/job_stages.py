@@ -60,6 +60,7 @@ class StageTracker:
         specs: Sequence[Sequence[Any]],
         *,
         write_progress: bool = True,
+        preserve_terminal_status: bool = False,
     ) -> None:
         """``specs`` is an ordered list of ``(key, label, weight)`` or ``(key, label)`` or
         ``(key,)`` tuples. Missing labels fall back to :func:`label_for`; missing weights
@@ -67,6 +68,7 @@ class StageTracker:
         self._conn = conn
         self._run_id = int(run_id)
         self._write_progress = write_progress
+        self._preserve_terminal_status = preserve_terminal_status
         self._stages: list[dict[str, Any]] = []
         for spec in specs:
             key = spec[0]
@@ -103,6 +105,8 @@ class StageTracker:
     # --- persistence --------------------------------------------------------- #
     def _flush(self, *, status: str = "running", **extra: Any) -> None:
         progress = self.overall() if self._write_progress else None
+        if self._preserve_terminal_status:
+            extra["active_only"] = True
         update_job_status(
             self._conn, self._run_id, status,
             progress=progress, stages=self.snapshot(), **extra,

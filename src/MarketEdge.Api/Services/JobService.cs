@@ -507,7 +507,7 @@ public class JobService : IJobService
             WeekNumber = j.WeekNumber,
             Status = j.Status,
             Progress = j.Progress,
-            Parameters = j.Parameters != null ? JsonSerializer.Deserialize<Dictionary<string, object>>(j.Parameters) : null,
+            Parameters = MapParameters(j),
             Metrics = j.Metrics != null ? JsonSerializer.Deserialize<Dictionary<string, object>>(j.Metrics) : null,
             Stages = ParseStages(j.Stages),
             ErrorMessage = j.ErrorMessage,
@@ -518,6 +518,19 @@ public class JobService : IJobService
                 ? (j.CompletedAt.Value - j.StartedAt.Value).TotalSeconds
                 : null
         };
+    }
+
+    private static Dictionary<string, object>? MapParameters(JobRun job)
+    {
+        var parameters = job.Parameters is not null
+            ? JsonSerializer.Deserialize<Dictionary<string, object>>(job.Parameters) : null;
+        if (parameters is null || job.JobType != "stage4_analysis") return parameters;
+        if (parameters.TryGetValue("universeSymbols", out var symbols) &&
+            symbols is JsonElement { ValueKind: JsonValueKind.Array } array)
+            parameters["universeCount"] = array.GetArrayLength();
+        parameters.Remove("universeSymbols");
+        parameters.Remove("universeSnapshot");
+        return parameters;
     }
 
     private static List<JobStageDto>? ParseStages(string? stages)

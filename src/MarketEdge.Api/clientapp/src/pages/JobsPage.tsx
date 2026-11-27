@@ -62,6 +62,7 @@ function formatDate(dateStr: string): string {
 }
 
 function formatJobType(type: string): string {
+  if (type === 'stage4_analysis') return 'Stage 4 Analysis';
   return type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
@@ -78,6 +79,7 @@ const JOB_TYPES = [
   { value: '', label: 'All types' },
   { value: 'data_ingestion', label: 'Data Ingestion' },
   { value: 'stage2_analysis', label: 'Stage 2 Analysis' },
+  { value: 'stage4_analysis', label: 'Stage 4 Analysis' },
   { value: 'scanner', label: 'Scanner' },
   { value: 'stock_refresh', label: 'Stock Refresh' },
 ];
@@ -404,6 +406,15 @@ export default function JobsPage() {
               )}
 
               {/* Link to results */}
+              {selectedRun.jobType === 'stage4_analysis' && (
+                <button
+                  className="btn btn-primary"
+                  style={{ marginTop: 16, width: '100%' }}
+                  onClick={() => navigate(`/${selectedRun.market}/stage4?${selectedRun.status === 'completed' ? 'runId' : 'sourceRunId'}=${selectedRun.id}`)}
+                >
+                  {selectedRun.status === 'completed' ? 'View Stage 4 Snapshot →' : 'View Stage 4 Runs / Retry →'}
+                </button>
+              )}
               {selectedRun.status === 'completed' && selectedRun.jobType === 'stage2_analysis' && (
                 <button
                   className="btn btn-primary"

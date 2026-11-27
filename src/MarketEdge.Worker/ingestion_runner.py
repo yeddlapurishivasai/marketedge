@@ -97,6 +97,8 @@ def _build_args(cli: str, step: str, market: str, payload: dict,
         if isinstance(symbols, (list, tuple)):
             symbols = ",".join(str(s) for s in symbols)
         args += ["--symbols", str(symbols)]
+    if step == "bars" and payload.get("historyDays") is not None:
+        args += ["--history-days", str(int(payload["historyDays"]))]
     # Let the step report live in-band progress straight to its JobRun row.
     if run_id is not None and progress_start is not None and progress_end is not None:
         args += ["--run-id", str(int(run_id)),
@@ -150,6 +152,8 @@ def run_bars_refresh_inline(
     limit: int | None = None,
     test_sample: bool = False,
     symbols: list[str] | None = None,
+    history_days: int | None = None,
+    timeout_seconds: int | None = None,
 ) -> tuple[bool, str]:
     """Run a full daily-bars refresh for a universe WITHOUT creating/updating a JobRun.
 
@@ -179,14 +183,19 @@ def run_bars_refresh_inline(
         payload["sectorIds"] = list(sector_ids)
     if symbols:
         payload["symbols"] = list(symbols)
+    if history_days is not None:
+        payload["historyDays"] = history_days
 
     args = _build_args(cli, "bars", market, payload)
     output: list[str] = []
     failed = False
+    timeout = min(_BARS_REFRESH_TIMEOUT, timeout_seconds) if timeout_seconds is not None else _BARS_REFRESH_TIMEOUT
+    if timeout <= 0:
+        raise ValueError("Bars refresh timeout must be positive")
     try:
         proc = subprocess.run(
             args, cwd=cli_dir, env=os.environ.copy(),
-            capture_output=True, text=True, timeout=_BARS_REFRESH_TIMEOUT,
+            capture_output=True, text=True, timeout=timeout,
         )
         if proc.stdout:
             output.append(proc.stdout)
@@ -199,7 +208,7 @@ def run_bars_refresh_inline(
         failed = True
         if exc.stdout:
             output.append(exc.stdout if isinstance(exc.stdout, str) else exc.stdout.decode(errors="replace"))
-        output.append(f"[bars refresh timed out after {_BARS_REFRESH_TIMEOUT}s]")
+        output.append(f"[bars refresh timed out after {timeout}s]")
     except Exception as exc:  # noqa: BLE001 - record launch failure, caller decides
         failed = True
         output.append(f"[bars refresh launch error] {exc}")
