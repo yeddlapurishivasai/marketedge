@@ -5,6 +5,7 @@ import {
   triggerIngestion, fetchScannerSchedule, updateScannerSchedule,
   fetchFundamentalsSchedule, updateFundamentalsSchedule,
   fetchStage2Schedule, updateStage2Schedule,
+  fetchStage4Schedule, updateStage4Schedule,
   fetchDatabaseInfo, exportDatabase, importDatabase,
 } from '../api';
 import type { DatabaseInfo, DatabaseExport } from '../api';
@@ -115,16 +116,20 @@ function IngestPanel({ market, label }: { market: Market; label: string }) {
 }
 
 function JobScheduleCard({
-  title, description, cadence,
+  title, description, cadence, showErrors = false,
   fetchFn, updateFn,
 }: {
   title: string;
   description: string;
   cadence: string;
+  showErrors?: boolean;
   fetchFn: (market: Market) => Promise<JobSchedule>;
   updateFn: (market: Market, body: { enabled: boolean; hourLocal?: number }) => Promise<JobSchedule>;
 }) {
   const [schedules, setSchedules] = useState<Record<string, JobSchedule>>({});
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState<Market | null>(null);
+  const [hourDrafts, setHourDrafts] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     try {
@@ -132,7 +137,8 @@ function JobScheduleCard({
         MARKETS.map(async ({ market }) => [market, await fetchFn(market)] as const)
       );
       setSchedules(Object.fromEntries(entries));
-    } catch { /* ignore */ }
+      setError('');
+    } catch (e) { setError(e instanceof Error ? e.message : 'Failed to load schedule'); }
   }, [fetchFn]);
 
   useEffect(() => { load(); }, [load]);
@@ -144,19 +150,30 @@ function JobScheduleCard({
   const toggle = async (market: Market) => {
     const s = schedules[market];
     if (!s) return;
+    setSaving(market);
     try {
       const updated = await updateFn(market, { enabled: !s.enabled, hourLocal: s.hourLocal });
       setSchedules(prev => ({ ...prev, [market]: updated }));
-    } catch { /* ignore */ }
+      setError('');
+    } catch (e) { setError(e instanceof Error ? e.message : 'Failed to update schedule'); }
+    finally { setSaving(null); }
   };
 
   const changeHour = async (market: Market, hourLocal: number) => {
     const s = schedules[market];
     if (!s || Number.isNaN(hourLocal)) return;
+    if (showErrors && (!Number.isInteger(hourLocal) || hourLocal < 0 || hourLocal > 23)) {
+      setError('Enter an exchange-local whole hour from 0 to 23.');
+      return;
+    }
+    setSaving(market);
     try {
       const updated = await updateFn(market, { enabled: s.enabled, hourLocal });
       setSchedules(prev => ({ ...prev, [market]: updated }));
-    } catch { /* ignore */ }
+      setHourDrafts(prev => { const next = { ...prev }; delete next[market]; return next; });
+      setError('');
+    } catch (e) { setError(e instanceof Error ? e.message : 'Failed to update schedule'); }
+    finally { setSaving(null); }
   };
 
   return (
@@ -168,6 +185,10 @@ function JobScheduleCard({
         <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
           {description}
         </p>
+        {showErrors && error && <p role="alert" style={{ color: 'var(--danger)' }}>
+          {error} <button className="btn btn-outline btn-sm" onClick={load}>Retry</button>
+        </p>}
+        {showErrors && !error && !Object.keys(schedules).length && <p role="status">Loading schedule settings…</p>}
         {MARKETS.map(({ market, label }) => {
           const s = schedules[market];
           return (
@@ -183,9 +204,16 @@ function JobScheduleCard({
                 {cadence} at
                 <input
                   type="number" min={0} max={23}
-                  value={s?.hourLocal ?? 20}
-                  disabled={!s}
-                  onChange={e => changeHour(market, parseInt(e.target.value, 10))}
+                  aria-label={showErrors ? `${label} Stage 4 exchange-local hour` : undefined}
+                  value={showErrors ? hourDrafts[market] ?? s?.hourLocal ?? 20 : s?.hourLocal ?? 20}
+                  disabled={!s || (showErrors && saving !== null)}
+                  onChange={e => showErrors
+                    ? setHourDrafts(prev => ({ ...prev, [market]: e.target.value }))
+                    : changeHour(market, parseInt(e.target.value, 10))}
+                  onBlur={showErrors ? e => {
+                    if (e.target.value === '') setError('Enter an exchange-local whole hour from 0 to 23.');
+                    else if (Number(e.target.value) !== s?.hourLocal) void changeHour(market, Number(e.target.value));
+                  } : undefined}
                   style={{ width: 52, padding: '2px 6px' }}
                 />
                 <span className="cell-muted">local</span>
@@ -196,10 +224,10 @@ function JobScheduleCard({
               <button
                 className={`btn btn-sm ${s?.enabled ? 'btn-primary' : 'btn-outline'}`}
                 style={{ marginLeft: 'auto' }}
-                disabled={!s}
+                disabled={!s || (showErrors && saving !== null)}
                 onClick={() => toggle(market)}
               >
-                {s?.enabled ? 'Enabled' : 'Disabled'}
+                {showErrors && !s ? 'Loading…' : showErrors && saving === market ? 'Saving…' : s?.enabled ? 'Enabled' : 'Disabled'}
               </button>
             </div>
           );
@@ -326,6 +354,15 @@ export default function AdminPage() {
         description="When enabled, a full stage 2 analysis runs once per weekend, on Saturday, after the chosen exchange-local hour, refreshing the week's stage2 classification while markets are closed. Enabled by default."
         fetchFn={fetchStage2Schedule}
         updateFn={updateStage2Schedule}
+      />
+
+      <JobScheduleCard
+        title="Weekend Stage 4 Analysis · F&O only"
+        cadence="Saturday"
+        description="Independent India and US schedules, enabled by default at Saturday 20:00 exchange-local time (Asia/Kolkata / America/New_York). Each run evaluates the latest closed week for the full eligible F&O scope. Hours save when you leave the field. Changing this does not change Stage 2 schedules."
+        fetchFn={fetchStage4Schedule}
+        updateFn={updateStage4Schedule}
+        showErrors
       />
 
       <DatabaseSnapshotCard />

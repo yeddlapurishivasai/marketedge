@@ -38,6 +38,7 @@ def get_stocks(
     sector_ids: list[int] | None = None,
     limit: int | None = None,
     test_sample_only: bool = False,
+    fno_only: bool = False,
 ) -> list[dict[str, Any]]:
     market_key = market.lower()
     if market_key not in MARKET_TABLES:
@@ -48,6 +49,9 @@ def get_stocks(
     top_clause = f"TOP {limit}" if limit else ""
     where_clauses = []
     params: list[Any] = []
+
+    if fno_only:
+        where_clauses.append("st.IsFno = 1")
 
     if test_sample_only:
         where_clauses.append("st.IsTestSample = 1")
@@ -96,6 +100,7 @@ def update_job_status(
     error: str | None = None,
     started_at: datetime | None = None,
     completed_at: datetime | None = None,
+    active_only: bool = False,
 ) -> None:
     assignments = ["Status = ?"]
     values: list[Any] = [status]
@@ -126,6 +131,8 @@ def update_job_status(
 
     values.append(run_id)
     query = f"UPDATE dbo.JobRuns SET {', '.join(assignments)} WHERE Id = ?"
+    if active_only:
+        query += " AND Status IN ('queued', 'running')"
 
     cursor = conn.cursor()
     cursor.execute(query, values)

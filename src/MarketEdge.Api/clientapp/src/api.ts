@@ -346,6 +346,158 @@ export async function fetchRotationHistory(market: Market, maxRuns = 12): Promis
   return res.json();
 }
 
+// ── Stage 4 Analysis (closed-week, F&O-only snapshots) ──
+
+export type Stage4Scope = 'full' | 'filtered' | 'sample';
+export type Stage4Classification = 'new' | 'reentry' | 'continuing' | 'removed';
+
+export interface TriggerStage4Request {
+  minMarketCap?: number;
+  maxMarketCap?: number;
+  sectorIds?: number[];
+  limit?: number;
+  testSampleOnly?: boolean;
+  weekNumber?: string;
+  retrySourceRunId?: number;
+}
+
+export interface Stage4Result {
+  id: number;
+  runId: number;
+  weekNumber: string;
+  symbol: string;
+  companyName: string;
+  sectorId: number;
+  sectorName: string;
+  closePrice?: number | null;
+  ma10?: number | null;
+  ma30?: number | null;
+  ma30FourWeeksAgo?: number | null;
+  marketCap?: number | null;
+  isStage4: boolean | null;
+  analysisStatus: 'evaluated' | 'insufficient' | 'stale' | 'error';
+  errorMessage?: string | null;
+  priceAsOfDate?: string | null;
+  eligibilityCapturedAt?: string | null;
+  classification?: Stage4Classification | null;
+  weeksInStage4?: number | null;
+  rsScore?: number | null;
+  rsDelta1w?: number | null;
+  rsDelta2w?: number | null;
+  rsDelta3w?: number | null;
+  momentumScore?: number | null;
+  roc1w?: number | null;
+  roc2w?: number | null;
+  roc3w?: number | null;
+  quadrant?: string | null;
+  adRatio?: number | null;
+  adClassification?: string | null;
+}
+
+export interface SectorStage4Count {
+  sectorId: number;
+  sectorName: string;
+  stage4Count: number;
+  totalCount: number;
+}
+
+export interface Stage4Summary {
+  runId: number;
+  weekNumber: string;
+  scope: Stage4Scope;
+  totalStocks: number;
+  evaluatedStocks: number;
+  skippedStocks: number;
+  errorStocks: number;
+  stage4Count: number;
+  newAdditions: number;
+  reEntries: number;
+  continuing: number;
+  removed: number;
+  bySector: SectorStage4Count[];
+  top25: Stage4Result[];
+  warnings: string[];
+  metrics?: Record<string, unknown>;
+}
+
+export interface Stage4History {
+  runId: number;
+  weekNumber: string;
+  runDate: string;
+  totalStage4: number;
+  bySector: SectorStage4Count[];
+  scope?: Stage4Scope;
+}
+
+function stage4Result(row: Stage4Result & { mA10?: number | null; mA30?: number | null; mA30FourWeeksAgo?: number | null }): Stage4Result {
+  // .NET's default camel casing preserves the A in MA10 / MA30.
+  return {
+    ...row,
+    ma10: row.ma10 !== undefined ? row.ma10 : row.mA10,
+    ma30: row.ma30 !== undefined ? row.ma30 : row.mA30,
+    ma30FourWeeksAgo: row.ma30FourWeeksAgo !== undefined ? row.ma30FourWeeksAgo : row.mA30FourWeeksAgo,
+  };
+}
+
+async function stage4Response<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    const text = await res.text();
+    let message = text;
+    try {
+      const problem = JSON.parse(text);
+      message = problem.detail || problem.error || problem.message || problem.title || text;
+    } catch { /* Plain-text API errors are also supported. */ }
+    throw new Error(message || `Stage 4 request failed (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function triggerStage4(market: Market, request: TriggerStage4Request = {}): Promise<{ runId: number }> {
+  return stage4Response(await authFetch(`${BASE}/${market}/stage4/trigger`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  }));
+}
+
+export async function fetchStage4Summary(market: Market, runId?: number): Promise<Stage4Summary | null> {
+  const res = await authFetch(`${BASE}/${market}/stage4/summary${runId == null ? '' : `?runId=${runId}`}`);
+  if (res.status === 204 || (runId == null && res.status === 404)) return null;
+  const summary = await stage4Response<Stage4Summary | null>(res);
+  return summary ? { ...summary, top25: summary.top25.map(stage4Result) } : null;
+}
+
+export async function fetchStage4Stocks(market: Market, runId: number, params?: {
+  classification?: Stage4Classification | 'all'; sectorId?: number; minMarketCap?: number;
+}): Promise<Stage4Result[]> {
+  const sp = new URLSearchParams();
+  if (params?.classification) sp.set('classification', params.classification);
+  if (params?.sectorId != null) sp.set('sectorId', String(params.sectorId));
+  if (params?.minMarketCap != null) sp.set('minMarketCap', String(params.minMarketCap));
+  const rows = await stage4Response<Stage4Result[]>(await authFetch(`${BASE}/${market}/stage4/runs/${runId}/stocks?${sp}`));
+  return rows.map(stage4Result);
+}
+
+export async function fetchStage4History(market: Market, runId?: number): Promise<Stage4History[]> {
+  return stage4Response(await authFetch(`${BASE}/${market}/stage4/history${runId == null ? '' : `?runId=${runId}`}`));
+}
+
+export async function fetchStage4Rotation(market: Market, runId: number): Promise<SectorRotation[]> {
+  return stage4Response(await authFetch(`${BASE}/${market}/stage4/runs/${runId}/sector-rotation`));
+}
+
+export async function fetchStage4Schedule(market: Market): Promise<JobSchedule> {
+  return stage4Response(await authFetch(`${BASE}/${market}/stage4/schedule`));
+}
+
+export async function updateStage4Schedule(market: Market, body: { enabled: boolean; hourLocal?: number }): Promise<JobSchedule> {
+  return stage4Response(await authFetch(`${BASE}/${market}/stage4/schedule`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }));
+}
+
 // ── Stock Lookup ──
 
 export interface LookupCandidate {

@@ -319,9 +319,13 @@ def cmd_ingest_bars(args) -> int:
         all_symbols = [benchmark, *symbols]
 
         logger.info("Fetching daily bars for %s symbols (incl. benchmark)...", len(all_symbols))
-        frames = fetch.fetch_daily_bars(all_symbols, args.market)
+        history_days = getattr(args, "history_days", None)
+        if history_days is not None:
+            frames = fetch.fetch_daily_bars(all_symbols, args.market, period="2y")
+        else:
+            frames = fetch.fetch_daily_bars(all_symbols, args.market)
 
-        cutoff = date.today() - timedelta(days=Config.DAILY_LOOKBACK_DAYS)
+        cutoff = date.today() - timedelta(days=history_days or Config.DAILY_LOOKBACK_DAYS)
         total_rows = 0
         pending: list[tuple] = []
         ingested_tickers = 0
@@ -342,7 +346,8 @@ def cmd_ingest_bars(args) -> int:
 
         reporter.update(len(all_symbols))
 
-        pruned = db.prune_old_bars(conn, args.market, cutoff)
+        # A scoped extended-history request must not prune unrelated symbols.
+        pruned = db.prune_old_bars(conn, args.market, cutoff) if history_days is None else 0
         db.refresh_bars_available(conn, args.market)
 
         logger.info(
@@ -1467,6 +1472,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     bars = ingest_sub.add_parser("bars", help="Ingest daily OHLCV bars.")
     _add_universe_args(bars, allow_missing=True)
+    bars.add_argument(
+        "--history-days", type=int, choices=[760], default=None,
+        help="Fetch two years of bars for weekly Stage 4 without changing default retention.",
+    )
     _add_progress_args(bars)
     bars.set_defaults(func=cmd_ingest_bars)
 

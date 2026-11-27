@@ -230,6 +230,11 @@ def process_message(message_content: str) -> None:
         run_strangle_job(payload)
         return
 
+    if str(payload.get("jobType", "")).lower() == "stage4_analysis":
+        from stage4_runner import run_stage4_job
+        run_stage4_job(payload)
+        return
+
     market = str(payload["market"]).lower()
     run_id = int(payload["runId"])
     min_market_cap = _coerce_number(payload.get("minMarketCap"))

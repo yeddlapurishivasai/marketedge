@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import JobsPage from './pages/JobsPage';
 import AnalysisPage from './pages/AnalysisPage';
+import Stage4AnalysisPage from './pages/Stage4AnalysisPage';
 import AdminPage from './pages/AdminPage';
 import StockLookupPage, { StockLookupModal } from './pages/StockLookupPage';
 import ScannersPage from './pages/ScannersPage';
@@ -105,6 +106,7 @@ function App() {
             <Route path="/:market/lookup" element={<StockLookupPage />} />
             <Route path="/:market/lookup/:symbol" element={<StockLookupPage />} />
             <Route path="/:market/analysis" element={<AnalysisPage />} />
+            <Route path="/:market/stage4" element={<Stage4AnalysisPage />} />
             <Route path="/:market/scanners" element={<ScannersPage />} />
             <Route path="/:market/fundamentals" element={<FundamentalsPage />} />
             <Route path="/:market/breakouts" element={<BreakoutsPage />} />
@@ -190,6 +192,14 @@ function MarketMenu() {
           </div>
           <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
         </div>
+        <NavLink to={`/${m}/stage4`} className="menu-card" style={{ textDecoration: 'none', color: 'inherit' }}>
+          <div className="menu-card-icon analysis"><BarChart3 size={22} /></div>
+          <div className="menu-card-text">
+            <h3>Stage 4 Analysis</h3>
+            <p>Closed-week weakness · F&amp;O only</p>
+          </div>
+          <ChevronRight size={16} style={{ color: 'var(--text-muted)', marginLeft: 'auto' }} />
+        </NavLink>
         <div className="menu-card" onClick={() => navigate(`/${m}/scanners`)}>
           <div className="menu-card-icon analysis"><Radar size={22} /></div>
           <div className="menu-card-text">

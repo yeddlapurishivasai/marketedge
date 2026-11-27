@@ -56,7 +56,7 @@ def _normalize_frame(raw: pd.DataFrame, yf_symbol: str) -> pd.DataFrame:
     return frame
 
 
-def fetch_daily_bars(symbols: list[str], market: str) -> dict[str, pd.DataFrame]:
+def fetch_daily_bars(symbols: list[str], market: str, *, period: str | None = None) -> dict[str, pd.DataFrame]:
     """Fetch daily OHLCV for ``symbols`` (catalog symbols) in throttled batches.
 
     Returns a dict mapping the ORIGINAL catalog symbol to a DataFrame indexed by date
@@ -81,7 +81,7 @@ def fetch_daily_bars(symbols: list[str], market: str) -> dict[str, pd.DataFrame]
                 )
                 raw = yf.download(
                     tickers=yf_symbols,
-                    period=Config.DAILY_LOOKBACK_PERIOD,
+                    period=period or Config.DAILY_LOOKBACK_PERIOD,
                     interval=Config.DAILY_INTERVAL,
                     group_by="ticker",
                     auto_adjust=False,
